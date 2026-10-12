@@ -3244,29 +3244,30 @@ impl IronCore {
         else {
             return;
         };
+        // Dedupe and bound the announcement BEFORE taking the routing write
+        // lock: malformed entries and duplicates are dropped, and parsing
+        // stops once the largest budget any peer can earn is reached, so lock
+        // hold time is independent of how many hints the caller sent. The
+        // exact per-peer (reliability-derived) and global budgets are applied
+        // by `LocalCell::update_peer_hints`.
+        let max_hints = crate::routing::LocalCell::max_peer_hint_budget();
+        let mut seen_hints: std::collections::HashSet<[u8; 8]> = std::collections::HashSet::new();
+        let mut parsed_hints: Vec<[u8; 8]> = hints
+            .into_iter()
+            .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
+            .filter(|hint| seen_hints.insert(*hint))
+            .take(max_hints)
+            .collect();
+        // The peer's own direct hint is always kept: it is exempt from the
+        // budgets, and an announcement must not make a connected peer
+        // unroutable by omitting the hint derived from its key.
+        let direct_hint = crate::identity::keys::routing_hint_from_public_key(&peer_id);
+        if !parsed_hints.contains(&direct_hint) {
+            parsed_hints.push(direct_hint);
+        }
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
             engine.record_message_activity(&hex::encode(peer_id));
-            // No static count cap: the stored list is bounded by the number of
-            // DISTINCT well-formed 8-byte hints (duplicates and malformed
-            // entries are dropped), and the caller's own allocation already
-            // bounds the work. The direct hint below is appended last and is
-            // never displaced.
-            let mut seen_hints: std::collections::HashSet<[u8; 8]> =
-                std::collections::HashSet::new();
-            let parsed_hints: Vec<[u8; 8]> = hints
-                .into_iter()
-                .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
-                .filter(|hint| seen_hints.insert(*hint))
-                .collect();
-            // The peer's own direct hint is always kept: `update_peer_hints`
-            // replaces the list, and an announcement must not make a connected
-            // peer unroutable by omitting the hint derived from its key.
-            let mut parsed_hints = parsed_hints;
-            let direct_hint = crate::identity::keys::routing_hint_from_public_key(&peer_id);
-            if !parsed_hints.contains(&direct_hint) {
-                parsed_hints.push(direct_hint);
-            }
             // LocalCell intentionally updates only peers already known to
             // the local topology; an announcement cannot create a peer.
             engine

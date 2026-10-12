@@ -8,7 +8,7 @@
 //! - Peer reliability scores based on relay success
 //! - Gateway detection for Layer 2 gossip propagation
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use web_time::SystemTime;
 
 /// 32-byte Ed25519 public key as peer identifier
@@ -96,7 +96,22 @@ pub struct LocalCell {
     stale_timeout: u64,
     /// Maximum peers to track
     max_peers: usize,
+    /// Hint -> (peer -> announce time, unix secs). Kept consistent with every
+    /// `PeerInfo::reachable_hints` on update, evict, expire and peer removal.
+    hint_index: HashMap<[u8; 8], HashMap<PeerId, u64>>,
+    /// Number of indexed non-direct (announced) hint entries.
+    announced_total: usize,
+    /// Seconds an announced hint lives without a re-announce.
+    hint_ttl: u64,
 }
+
+/// Hint budget floor: every peer, however new, may announce this many hints.
+const HINT_BUDGET_FLOOR: usize = 8;
+/// Extra hints a fully trusted peer (reliability 1.0) earns above the floor.
+const HINT_BUDGET_TRUST_SPAN: usize = 120;
+/// Average announced hints per tracked peer; scales the global budget with
+/// the routing table size.
+const HINT_BUDGET_PER_PEER_AVG: usize = 64;
 
 impl LocalCell {
     /// Create a new local cell with default timeouts
@@ -107,6 +122,9 @@ impl LocalCell {
             active_timeout: 300, // 5 minutes
             stale_timeout: 1800, // 30 minutes
             max_peers: 1000,
+            hint_index: HashMap::new(),
+            announced_total: 0,
+            hint_ttl: 1800,
         }
     }
 
@@ -118,6 +136,9 @@ impl LocalCell {
             active_timeout,
             stale_timeout,
             max_peers: 1000,
+            hint_index: HashMap::new(),
+            announced_total: 0,
+            hint_ttl: stale_timeout,
         }
     }
 
@@ -163,9 +184,147 @@ impl LocalCell {
     }
 
     /// Update reachable hints for a peer (from their PeerAnnouncement)
+    ///
+    /// Bounded: the announced list is deduped and trimmed to the peer's
+    /// reliability-derived budget before any state changes, then the global
+    /// budget (scaled by routing table size) is enforced by evicting the
+    /// lowest-reliability, oldest hints. The peer's direct hint is exempt.
     pub fn update_peer_hints(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>) {
+        self.update_peer_hints_at(peer_id, hints, current_timestamp());
+    }
+
+    /// Per-peer hint budget: a small floor that scales with reliability.
+    pub fn peer_hint_budget(reliability: f64) -> usize {
+        HINT_BUDGET_FLOOR + (reliability.clamp(0.0, 1.0) * HINT_BUDGET_TRUST_SPAN as f64) as usize
+    }
+
+    /// Largest per-peer budget any peer can earn (reliability 1.0). Callers
+    /// use it to bound work before taking a lock.
+    pub fn max_peer_hint_budget() -> usize {
+        Self::peer_hint_budget(1.0)
+    }
+
+    /// Global announced-hint budget, derived from the routing table size.
+    pub fn global_hint_budget(&self) -> usize {
+        self.peers.len().max(1) * HINT_BUDGET_PER_PEER_AVG
+    }
+
+    /// Number of indexed (hint, peer) entries.
+    pub fn indexed_hint_count(&self) -> usize {
+        self.hint_index.values().map(|m| m.len()).sum()
+    }
+
+    fn update_peer_hints_at(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>, now: u64) {
+        let Some(peer) = self.peers.get_mut(peer_id) else {
+            return;
+        };
+        let direct = crate::identity::keys::routing_hint_from_public_key(peer_id);
+        let budget = Self::peer_hint_budget(peer.reliability_score);
+        // Dedupe and trim first; nothing below runs per announced duplicate.
+        let mut seen: HashSet<[u8; 8]> = HashSet::new();
+        let mut keep_direct = peer.reachable_hints.contains(&direct);
+        let mut kept: Vec<[u8; 8]> = Vec::new();
+        for hint in hints {
+            if hint == direct {
+                keep_direct = true;
+            } else if kept.len() < budget && seen.insert(hint) {
+                kept.push(hint);
+            }
+        }
+        let old = std::mem::take(&mut peer.reachable_hints);
+        for hint in &old {
+            if *hint != direct && !seen.contains(hint) {
+                self.index_remove(peer_id, hint);
+            }
+        }
+        for hint in &kept {
+            self.index_insert(peer_id, hint, now);
+        }
+        if keep_direct {
+            kept.push(direct);
+            self.index_insert(peer_id, &direct, now);
+        }
         if let Some(peer) = self.peers.get_mut(peer_id) {
-            peer.reachable_hints = hints;
+            peer.reachable_hints = kept;
+        }
+        self.enforce_global_hint_budget();
+    }
+
+    fn index_insert(&mut self, peer_id: &PeerId, hint: &[u8; 8], now: u64) {
+        let prev = self
+            .hint_index
+            .entry(*hint)
+            .or_default()
+            .insert(*peer_id, now);
+        if prev.is_none() && *hint != crate::identity::keys::routing_hint_from_public_key(peer_id) {
+            self.announced_total += 1;
+        }
+    }
+
+    fn index_remove(&mut self, peer_id: &PeerId, hint: &[u8; 8]) {
+        if let Some(holders) = self.hint_index.get_mut(hint) {
+            if holders.remove(peer_id).is_some()
+                && *hint != crate::identity::keys::routing_hint_from_public_key(peer_id)
+            {
+                self.announced_total = self.announced_total.saturating_sub(1);
+            }
+            if holders.is_empty() {
+                self.hint_index.remove(hint);
+            }
+        }
+    }
+
+    /// Drop announced hints (never direct hints) over the global budget,
+    /// lowest-reliability first, then oldest announcement first.
+    fn enforce_global_hint_budget(&mut self) {
+        let budget = self.global_hint_budget();
+        if self.announced_total <= budget {
+            return;
+        }
+        let excess = self.announced_total - budget;
+        let mut ranked: Vec<(f64, u64, PeerId, [u8; 8])> = Vec::new();
+        for (hint, holders) in &self.hint_index {
+            for (peer_id, at) in holders {
+                if *hint == crate::identity::keys::routing_hint_from_public_key(peer_id) {
+                    continue;
+                }
+                let score = self.peers.get(peer_id).map_or(0.0, |p| p.reliability_score);
+                ranked.push((score, *at, *peer_id, *hint));
+            }
+        }
+        ranked.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.3.cmp(&b.3))
+        });
+        for (_, _, peer_id, hint) in ranked.into_iter().take(excess) {
+            self.index_remove(&peer_id, &hint);
+            if let Some(peer) = self.peers.get_mut(&peer_id) {
+                peer.reachable_hints.retain(|h| *h != hint);
+            }
+        }
+    }
+
+    /// Remove announced hints not re-announced within the TTL. Direct hints
+    /// never expire.
+    pub fn expire_hints(&mut self, now: u64) {
+        let ttl = self.hint_ttl;
+        let mut expired: Vec<(PeerId, [u8; 8])> = Vec::new();
+        for (hint, holders) in &self.hint_index {
+            for (peer_id, at) in holders {
+                if now.saturating_sub(*at) > ttl
+                    && *hint != crate::identity::keys::routing_hint_from_public_key(peer_id)
+                {
+                    expired.push((*peer_id, *hint));
+                }
+            }
+        }
+        for (peer_id, hint) in expired {
+            self.index_remove(&peer_id, &hint);
+            if let Some(peer) = self.peers.get_mut(&peer_id) {
+                peer.reachable_hints.retain(|h| *h != hint);
+            }
         }
     }
 
@@ -213,12 +372,17 @@ impl LocalCell {
     /// list is "already sorted by reliability in LocalCell". Sort by the shared
     /// reliability policy (score, then peer_id), never HashMap order.
     pub fn peers_for_hint(&self, hint: &[u8; 8]) -> Vec<&PeerInfo> {
-        let mut peers: Vec<&PeerInfo> = self
-            .peers
-            .values()
-            .filter(|peer| {
-                matches!(peer.status, PeerStatus::Active { .. })
-                    && peer.reachable_hints.contains(hint)
+        let Some(holders) = self.hint_index.get(hint) else {
+            return Vec::new();
+        };
+        let now = current_timestamp();
+        let mut peers: Vec<&PeerInfo> = holders
+            .iter()
+            .filter_map(|(peer_id, at)| {
+                let peer = self.peers.get(peer_id)?;
+                let fresh = now.saturating_sub(*at) <= self.hint_ttl
+                    || *hint == crate::identity::keys::routing_hint_from_public_key(peer_id);
+                (fresh && matches!(peer.status, PeerStatus::Active { .. })).then_some(peer)
             })
             .collect();
         Self::sort_by_reliability(&mut peers);
@@ -255,6 +419,8 @@ impl LocalCell {
     /// Run periodic cleanup: promote/demote peer statuses based on timeouts
     pub fn tick(&mut self, now: u64) -> Vec<PeerEvent> {
         let mut events = Vec::new();
+
+        self.expire_hints(now);
 
         let peers_to_update: Vec<PeerId> = self.peers.keys().copied().collect();
 
@@ -296,14 +462,7 @@ impl LocalCell {
     pub fn summarize(&self) -> CellSummary {
         let gateway_count = self.peers.values().filter(|p| p.is_gateway).count() as u32;
 
-        let mut all_hints = Vec::new();
-        for peer in self.peers.values() {
-            for hint in &peer.reachable_hints {
-                if !all_hints.contains(hint) {
-                    all_hints.push(*hint);
-                }
-            }
-        }
+        let all_hints: Vec<[u8; 8]> = self.hint_index.keys().copied().collect();
 
         let avg_reliability = if self.peers.is_empty() {
             0.0
@@ -355,7 +514,11 @@ impl LocalCell {
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 
-        self.peers.remove(&peer_to_evict);
+        if let Some(removed) = self.peers.remove(&peer_to_evict) {
+            for hint in &removed.reachable_hints {
+                self.index_remove(&peer_to_evict, hint);
+            }
+        }
     }
 
     pub fn local_id(&self) -> PeerId {
@@ -385,6 +548,176 @@ mod tests {
         let mut hint = [0u8; 8];
         hint[..4].copy_from_slice(&n.to_le_bytes());
         hint
+    }
+
+    fn hint_test_cell(peers: u8) -> LocalCell {
+        let mut cell = LocalCell::new(make_peer_id(250));
+        for n in 1..=peers {
+            cell.peer_seen(make_peer_id(n), TransportType::TCP);
+        }
+        cell
+    }
+
+    fn flood(from: u32, count: u32) -> Vec<[u8; 8]> {
+        (from..from + count).map(make_hint).collect()
+    }
+
+    /// reachable_hints and the index describe exactly the same set, and the
+    /// announced counter matches the non-direct entries.
+    fn assert_index_consistent(cell: &LocalCell) {
+        let mut announced = 0usize;
+        for (hint, holders) in &cell.hint_index {
+            assert!(!holders.is_empty(), "empty holder set left in index");
+            for peer_id in holders.keys() {
+                let peer = cell.peers.get(peer_id).expect("indexed peer must exist");
+                assert!(peer.reachable_hints.contains(hint));
+                if *hint != crate::identity::keys::routing_hint_from_public_key(peer_id) {
+                    announced += 1;
+                }
+            }
+        }
+        assert_eq!(announced, cell.announced_total);
+        let listed: usize = cell.peers.values().map(|p| p.reachable_hints.len()).sum();
+        assert_eq!(listed, cell.indexed_hint_count());
+    }
+
+    #[test]
+    fn hint_flood_stays_within_peer_and_global_budget() {
+        let mut cell = hint_test_cell(1);
+        let peer = make_peer_id(1);
+        cell.update_peer_hints(&peer, flood(0, 100_000));
+        let budget = LocalCell::peer_hint_budget(cell.get_peer(&peer).unwrap().reliability_score);
+        assert!(cell.get_peer(&peer).unwrap().reachable_hints.len() <= budget);
+        assert!(cell.announced_total <= cell.global_hint_budget());
+        assert_eq!(cell.indexed_hint_count(), budget);
+        assert_index_consistent(&cell);
+        // Lookup is index-bound: a flooded-out hint has no holders.
+        assert!(cell.peers_for_hint(&make_hint(99_999)).is_empty());
+        assert_eq!(cell.peers_for_hint(&make_hint(0)).len(), 1);
+    }
+
+    #[test]
+    fn many_peers_flooding_stay_within_global_budget() {
+        let mut cell = hint_test_cell(10);
+        for n in 1..=10u8 {
+            cell.update_peer_hints(&make_peer_id(n), flood(n as u32 * 1000, 5_000));
+        }
+        assert!(cell.announced_total <= cell.global_hint_budget());
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn budget_scales_with_reliability_and_has_a_floor() {
+        assert_eq!(LocalCell::peer_hint_budget(0.0), HINT_BUDGET_FLOOR);
+        assert!(LocalCell::peer_hint_budget(0.5) > LocalCell::peer_hint_budget(0.0));
+        assert_eq!(
+            LocalCell::peer_hint_budget(1.0),
+            LocalCell::max_peer_hint_budget()
+        );
+        assert_eq!(LocalCell::peer_hint_budget(f64::NAN), HINT_BUDGET_FLOOR);
+    }
+
+    #[test]
+    fn global_eviction_takes_lowest_reliability_first() {
+        let mut cell = hint_test_cell(2);
+        let (low, high) = (make_peer_id(1), make_peer_id(2));
+        for _ in 0..6 {
+            cell.update_reliability(&high, true);
+        }
+        let high_budget = LocalCell::max_peer_hint_budget();
+        let low_budget = LocalCell::peer_hint_budget(0.5);
+        assert!(high_budget + low_budget > cell.global_hint_budget());
+        cell.update_peer_hints_at(&low, flood(0, low_budget as u32), 100);
+        cell.update_peer_hints_at(&high, flood(10_000, high_budget as u32), 200);
+        let excess = high_budget + low_budget - cell.global_hint_budget();
+        assert_eq!(cell.announced_total, cell.global_hint_budget());
+        assert_eq!(
+            cell.get_peer(&high).unwrap().reachable_hints.len(),
+            high_budget
+        );
+        assert_eq!(
+            cell.get_peer(&low).unwrap().reachable_hints.len(),
+            low_budget - excess
+        );
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn global_eviction_takes_oldest_first_at_equal_reliability() {
+        let mut cell = hint_test_cell(2);
+        let (old, new) = (make_peer_id(1), make_peer_id(2));
+        let budget = LocalCell::peer_hint_budget(0.5);
+        assert!(2 * budget > cell.global_hint_budget());
+        cell.update_peer_hints_at(&old, flood(0, budget as u32), 100);
+        cell.update_peer_hints_at(&new, flood(10_000, budget as u32), 200);
+        let excess = 2 * budget - cell.global_hint_budget();
+        assert_eq!(cell.get_peer(&new).unwrap().reachable_hints.len(), budget);
+        assert_eq!(
+            cell.get_peer(&old).unwrap().reachable_hints.len(),
+            budget - excess
+        );
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn announced_hints_expire_after_ttl_and_reannounce_refreshes() {
+        let mut cell = hint_test_cell(1);
+        let peer = make_peer_id(1);
+        let ttl = cell.hint_ttl;
+        cell.update_peer_hints_at(&peer, vec![make_hint(1)], 1_000);
+        cell.update_peer_hints_at(&peer, vec![make_hint(1), make_hint(2)], 2_000);
+        // make_hint(1) was refreshed at 2_000; neither is expired yet.
+        cell.expire_hints(1_000 + ttl + 1);
+        assert_eq!(cell.indexed_hint_count(), 2);
+        cell.expire_hints(2_000 + ttl + 1);
+        assert_eq!(cell.indexed_hint_count(), 0);
+        assert!(cell.get_peer(&peer).unwrap().reachable_hints.is_empty());
+        assert_index_consistent(&cell);
+        // Lookup also ignores an expired hint before the next tick.
+        let stale_at = current_timestamp() - ttl - 1;
+        cell.update_peer_hints_at(&peer, vec![make_hint(3)], stale_at);
+        assert!(cell.peers_for_hint(&make_hint(3)).is_empty());
+    }
+
+    #[test]
+    fn direct_hint_survives_flood_expiry_and_reannounce_without_it() {
+        let mut cell = hint_test_cell(1);
+        let peer = make_peer_id(1);
+        let direct = crate::identity::keys::routing_hint_from_public_key(&peer);
+        cell.update_peer_hints_at(&peer, vec![direct], 100);
+        cell.update_peer_hints_at(&peer, flood(0, 100_000), 200);
+        assert!(cell
+            .get_peer(&peer)
+            .unwrap()
+            .reachable_hints
+            .contains(&direct));
+        cell.update_peer_hints_at(&peer, vec![make_hint(7)], 300);
+        cell.expire_hints(300 + cell.hint_ttl + 1);
+        assert!(cell
+            .get_peer(&peer)
+            .unwrap()
+            .reachable_hints
+            .contains(&direct));
+        assert_eq!(cell.peers_for_hint(&direct).len(), 1);
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn index_stays_consistent_after_peer_removal() {
+        let mut cell = hint_test_cell(3);
+        cell.max_peers = 3;
+        for n in 1..=3u8 {
+            cell.update_peer_hints(&make_peer_id(n), flood(n as u32 * 100, 20));
+        }
+        cell.update_reliability(&make_peer_id(1), false);
+        cell.update_reliability(&make_peer_id(2), true);
+        cell.update_reliability(&make_peer_id(3), true);
+        // A fourth peer forces eviction of the lowest-reliability peer (1).
+        cell.peer_seen(make_peer_id(4), TransportType::TCP);
+        assert!(cell.get_peer(&make_peer_id(1)).is_none());
+        assert!(cell.peers_for_hint(&make_hint(100)).is_empty());
+        assert!(!cell.hint_index.contains_key(&make_hint(100)));
+        assert_index_consistent(&cell);
     }
 
     #[test]
