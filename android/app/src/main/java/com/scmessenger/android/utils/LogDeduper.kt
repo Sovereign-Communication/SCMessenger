@@ -13,30 +13,55 @@ package com.scmessenger.android.utils
  * content changed, or when [refreshIntervalMs] has elapsed regardless. The
  * first line emitted after suppression is preceded by a summary line so the
  * drop count is itself verifiable from the log.
+ *
+ * Memory is bounded dynamically, not by a count: an entry not seen for
+ * [idleEvictionMs] is dropped (it would be re-emitted on its next sighting
+ * anyway, so only an unreported suppression count is lost), and [trimMemory]
+ * drops everything when the OS signals memory pressure.
  */
 class LogDeduper(
     private val minIntervalMs: Long = 60_000L,
     private val refreshIntervalMs: Long = 300_000L,
-    private val maxTrackedKeys: Int = 64,
 ) {
-    private class State(var lastEmitMs: Long, var lastHash: Int, var suppressed: Int)
+    private class State(var lastEmitMs: Long, var lastHash: Int, var suppressed: Int, var lastSeenMs: Long)
 
     private val states = HashMap<String, State>()
+    private var lastSweepMs = Long.MIN_VALUE
 
     /** Result of [evaluate]: whether to write the line, and a summary to write before it. */
     data class Decision(val emit: Boolean, val summary: String? = null)
+
+    private val idleEvictionMs: Long get() = refreshIntervalMs * 2
+
+    /** Drops all tracked state (memory pressure, or the owning tree being released). Idempotent. */
+    @Synchronized
+    fun trimMemory() {
+        states.clear()
+        lastSweepMs = Long.MIN_VALUE
+    }
+
+    /** Number of tracked keys; for tests and diagnostics. */
+    @Synchronized
+    fun trackedKeyCount(): Int = states.size
+
+    private fun sweepIdle(nowMs: Long) {
+        if (lastSweepMs != Long.MIN_VALUE && nowMs - lastSweepMs < refreshIntervalMs) return
+        lastSweepMs = nowMs
+        states.values.removeAll { nowMs - it.lastSeenMs >= idleEvictionMs }
+    }
 
     @Synchronized
     fun evaluate(priority: Int, message: String, nowMs: Long): Decision {
         if (priority >= PRIORITY_WARN) return Decision(true)
         val key = keyFor(message) ?: return Decision(true)
+        sweepIdle(nowMs)
         val hash = message.hashCode()
         val st = states[key]
         if (st == null) {
-            if (states.size >= maxTrackedKeys) states.clear()
-            states[key] = State(nowMs, hash, 0)
+            states[key] = State(nowMs, hash, 0, nowMs)
             return Decision(true)
         }
+        st.lastSeenMs = nowMs
         val elapsed = nowMs - st.lastEmitMs
         val due = elapsed >= refreshIntervalMs || (hash != st.lastHash && elapsed >= minIntervalMs)
         if (!due) {

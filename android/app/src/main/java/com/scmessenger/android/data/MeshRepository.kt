@@ -1320,8 +1320,8 @@ open class MeshRepository(
      * TransportManager directly so restart-after-stop self-heals the same
      * way the BLE components already do.
      */
-    private fun startTransportStatusMonitor() {
-        if (transportStatusMonitor != null) return
+    private fun startTransportStatusMonitor() = synchronized(serviceLifecycleLock) {
+        if (transportStatusMonitor != null) return@synchronized
         val monitor = com.scmessenger.android.transport.TransportStatusMonitor(
             context = context,
             localPeerCounts = { transportManager?.peerCountsByKind().orEmpty() },

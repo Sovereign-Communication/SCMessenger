@@ -44,9 +44,19 @@ object TransportStatus {
 
     /** Log a state, but only when it differs from the last one logged for [kind]. */
     fun report(kind: String, state: String, detail: String) {
+        // Only the closed vocabulary is remembered, so this map cannot grow without bound.
+        if (kind !in KINDS) {
+            Timber.i(format(kind, state, null, detail))
+            return
+        }
         val signature = "$state|$detail"
         if (lastByKind.put(kind, signature) == signature) return
         Timber.i(format(kind, state, null, detail))
+    }
+
+    /** Forget every remembered state so the next [report] of each kind logs again (used on monitor stop). */
+    fun reset() {
+        lastByKind.clear()
     }
 
     /** Last state reported for [kind], or null if none yet. */

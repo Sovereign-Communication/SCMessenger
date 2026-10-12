@@ -55,4 +55,36 @@ class LogDeduperTest {
         assertNotNull(k)
         assertEquals(k, LogDeduper.keyFor("mDNS service resolved 10.0.0.7:9002"))
     }
+
+    @Test
+    fun idleKeysAreEvictedByAgeNotByCount() {
+        val d = LogDeduper(minIntervalMs = 60_000, refreshIntervalMs = 300_000)
+        // Many distinct volatile-looking mDNS keys: nothing is capped while they are fresh.
+        for (i in 0 until 200) d.evaluate(debug, "mDNS key${i}x event", 0)
+        assertTrue(d.trackedKeyCount() > 64)
+        // Past 2x refresh with no sightings, the next sweep drops them all.
+        d.evaluate(debug, "Mesh Stats: peers=1", 700_000)
+        assertEquals(1, d.trackedKeyCount())
+    }
+
+    @Test
+    fun activeKeyIsNotEvictedAndStillRateLimited() {
+        val d = LogDeduper(minIntervalMs = 60_000, refreshIntervalMs = 300_000)
+        val m = "Mesh Stats: peers=1"
+        assertTrue(d.evaluate(debug, m, 0).emit)
+        for (t in 1..11) assertFalse(d.evaluate(debug, m, t * 25_000L).emit)
+        assertEquals(1, d.trackedKeyCount())
+    }
+
+    @Test
+    fun trimMemoryDropsAllAndIsIdempotent() {
+        val d = LogDeduper()
+        d.evaluate(debug, "Mesh Stats: peers=1", 0)
+        d.trimMemory()
+        d.trimMemory()
+        assertEquals(0, d.trackedKeyCount())
+        // Tracking resumes cleanly: first sighting emits again.
+        assertTrue(d.evaluate(debug, "Mesh Stats: peers=1", 1).emit)
+        assertEquals(1, d.trackedKeyCount())
+    }
 }

@@ -73,6 +73,21 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
         it.start()
     }
 
+    /** Memory-pressure hook: drops the deduper's tracked keys. Safe to call repeatedly. */
+    fun trimMemory() {
+        deduper.trimMemory()
+    }
+
+    /**
+     * Stops the writer thread (it drains the queue first) and drops deduper state.
+     * Idempotent; the tree must not be used for logging afterwards.
+     */
+    fun release() {
+        if (writerRunning.compareAndSet(true, false)) {
+            deduper.trimMemory()
+        }
+    }
+
     override fun setIronCore(core: uniffi.api.IronCore?) {
         synchronized(this) { coreRef.set(core) }
     }
