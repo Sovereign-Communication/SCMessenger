@@ -17,7 +17,6 @@ use crate::transport::health::TransportHealthMonitor;
 use crate::transport::observation::AddressObserver;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use web_time::{Duration, Instant, SystemTime};
@@ -363,10 +362,6 @@ pub struct TransportManager {
     /// consecutive ticks they have stayed stale (review F2 grace counter).
     stale_candidates: Arc<RwLock<HashMap<[u8; 32], u32>>>,
 
-    /// Pending-dial headroom reported by the swarm layer; `usize::MAX` means
-    /// unreported (batch size is then derived from the ready set).
-    pending_dial_headroom: Arc<AtomicUsize>,
-
     /// Optional health monitor for stale connection cleanup
     health_monitor: Option<Arc<TransportHealthMonitor>>,
 
@@ -396,7 +391,6 @@ impl TransportManager {
             peer_last_seen: Arc::new(RwLock::new(HashMap::new())),
             target_peers: Arc::new(RwLock::new(HashMap::new())),
             reconnection_queue: Arc::new(RwLock::new(HashMap::new())),
-            pending_dial_headroom: Arc::new(AtomicUsize::new(usize::MAX)),
             stale_candidates: Arc::new(RwLock::new(HashMap::new())),
             health_monitor: None,
             address_observer: Arc::new(RwLock::new(AddressObserver::new())),
@@ -709,22 +703,14 @@ impl TransportManager {
         debug!("Removed target peer {:x?}", &peer_id[..8]);
     }
 
-    /// Report how many more outbound dials the swarm can start right now
-    /// (pending-dial headroom). Reconnect batches are sized from it.
-    pub fn set_pending_dial_headroom(&self, headroom: usize) {
-        self.pending_dial_headroom
-            .store(headroom, Ordering::Relaxed);
-    }
-
     /// Returns peers that are due for a reconnection attempt.
     /// The caller is responsible for actually dialing these peers and then
     /// calling `record_reconnect_success` or `record_reconnect_failure`.
     ///
     /// Rate-limited to prevent a Resume Storm (all peers reconnecting at
     /// once after app wake). The batch size is derived, not fixed: it is the
-    /// pending-dial headroom reported via `set_pending_dial_headroom`, or,
-    /// when none was reported, the ceiling of the square root of the ready
-    /// set (small sets go mostly at once, large sets spread out). Peers over
+    /// ceiling of the square root of the ready set (small sets go mostly at
+    /// once, large sets spread out). Peers over
     /// the batch are staggered across subsequent ticks. No peer is ever
     /// dropped: retries never stop.
     pub fn peers_needing_reconnect(&self) -> Vec<ReconnectionState> {
@@ -736,15 +722,7 @@ impl TransportManager {
             .map(|(id, _)| *id)
             .collect();
 
-        let reported = self.pending_dial_headroom.load(Ordering::Relaxed);
-        let batch = if reported == usize::MAX {
-            ((ready.len() as f64).sqrt().ceil() as usize).max(1)
-        } else {
-            // Zero reported headroom still lets one peer through per tick:
-            // never-give-up means a saturated swarm must not starve the
-            // queue entirely (the swarm's own limits still apply).
-            reported.max(1)
-        };
+        let batch = ((ready.len() as f64).sqrt().ceil() as usize).max(1);
 
         // If more peers are ready than the batch, stagger the excess
         if ready.len() > batch {
@@ -2019,7 +1997,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reconnect_batch_follows_headroom() {
+    fn test_reconnect_batch_is_sqrt_of_ready_set() {
         let manager = TransportManager::new();
         for n in 1..=8u8 {
             queue_target(&manager, create_peer_id(n));
@@ -2030,18 +2008,8 @@ mod tests {
                 state.next_attempt_at = SystemTime::now() - Duration::from_secs(1);
             }
         }
-        manager.set_pending_dial_headroom(5);
-        assert_eq!(manager.peers_needing_reconnect().len(), 5);
-
-        // Zero headroom still releases one peer (max(1)) and drops none.
-        {
-            let mut queue = manager.reconnection_queue.write();
-            for state in queue.values_mut() {
-                state.next_attempt_at = SystemTime::now() - Duration::from_secs(1);
-            }
-        }
-        manager.set_pending_dial_headroom(0);
-        assert_eq!(manager.peers_needing_reconnect().len(), 1);
+        // ceil(sqrt(8)) = 3 go now; the rest are staggered, none dropped.
+        assert_eq!(manager.peers_needing_reconnect().len(), 3);
         assert_eq!(manager.reconnection_queue_len(), 8);
     }
 

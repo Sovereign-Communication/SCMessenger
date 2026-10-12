@@ -1807,12 +1807,10 @@ impl MeshService {
         let previous = self.last_network.lock().replace((has_wifi, has_cellular));
         if let Some((prev_wifi, prev_cellular)) = previous {
             if prev_wifi != has_wifi {
-                self.swarm_bridge
-                    .notify_network_event(crate::transport::NetworkEvent::WifiChanged);
+                self.dispatch_network_event(crate::transport::NetworkEvent::WifiChanged);
             }
             if prev_cellular != has_cellular {
-                self.swarm_bridge
-                    .notify_network_event(crate::transport::NetworkEvent::CellularChanged);
+                self.dispatch_network_event(crate::transport::NetworkEvent::CellularChanged);
             }
         }
     }
@@ -2283,6 +2281,18 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// Fan one local network event out to both revival queues: the swarm's
+    /// dial-policy backoff (non-blocking command send) and the IronCore
+    /// reconnect queue. The core handle is cloned out so the `core` mutex is
+    /// not held while waking; nothing here awaits.
+    fn dispatch_network_event(&self, event: crate::transport::NetworkEvent) {
+        self.swarm_bridge.notify_network_event(event);
+        let core = self.core.lock().clone();
+        if let Some(core) = core {
+            core.wake_reconnects_on_network_event(event);
+        }
+    }
+
     /// WP2: record a verified platform data link in the shared routing engine.
     ///
     /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
@@ -4972,6 +4982,55 @@ mod tests {
     /// S5: a malformed key must produce an empty string, not an all-zero
     /// 60-digit number that looks like a real (matching) safety number a
     /// user could mistakenly "verify".
+    #[test]
+    fn network_change_wakes_core_reconnect_queue() {
+        use crate::transport::abstraction::{TransportEvent, TransportType};
+        use crate::transport::NetworkEvent;
+
+        let core = Arc::new(crate::IronCore::new());
+        let peer = [7u8; 32];
+        {
+            let manager = core.transport_manager_for_test();
+            let manager = manager.read();
+            manager.add_target_peer(peer, vec![1]);
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer,
+                transport: TransportType::BLE,
+                addr: vec![1],
+            });
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer,
+                transport: TransportType::BLE,
+            });
+            for _ in 0..12 {
+                manager.record_reconnect_failure(&peer);
+            }
+        }
+
+        let service = super::MeshService::new(super::MeshServiceConfig {
+            discovery_interval_ms: 5_000,
+            battery_floor_pct: 20,
+        });
+        *service.core.lock() = Some(core.clone());
+
+        // The first report only records the baseline; it is not an event.
+        service.on_network_changed(true, false);
+        assert!(core.peers_needing_reconnect().is_empty());
+
+        // A Wi-Fi to cellular handover is a genuine change: it wakes the
+        // backed-off entry, spending its one-shot credit for this source.
+        service.on_network_changed(false, true);
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::WifiChanged),
+            0,
+            "the handover must already have woken the queued peer"
+        );
+        // The wake bounds the wait to the base interval, so the peer is due
+        // long before its 12-failure backoff would have elapsed.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(core.peers_needing_reconnect().len(), 1);
+    }
+
     #[test]
     fn test_safety_number_returns_empty_string_on_malformed_keys() {
         assert_eq!(safety_number("not-hex".to_string(), "junk".to_string()), "");
