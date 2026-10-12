@@ -4120,13 +4120,48 @@ impl IronCore {
         keys.to_libp2p_keypair()
             .map_err(|_| IronCoreError::CryptoError)
     }
+    /// Best-effort message id for drop diagnostics: the Drift header carries
+    /// the id in clear, so a frame that fails later (verify/decrypt) can still
+    /// be attributed. Returns "unknown" for non-Drift or undecodable frames.
+    fn peek_envelope_message_id(envelope_data: &[u8]) -> String {
+        if envelope_data.first() == Some(&crate::drift::DRIFT_VERSION) {
+            if let Ok(env) = crate::drift::DriftEnvelope::from_bytes(envelope_data) {
+                return uuid::Uuid::from_bytes(env.message_id).to_string();
+            }
+        }
+        "unknown".to_string()
+    }
+
+    /// Process one inbound envelope. Every `Err` return is a drop: it is
+    /// logged at INFO as `[RX-DROP] msg=<id> stage=<stage> reason=<reason>`
+    /// so inbound loss is never silent.
     pub fn receive_message(&self, envelope_data: Vec<u8>) -> Result<Message, IronCoreError> {
-        // Ingress size cap before any decode: the codec rejects larger encoded
-        // messages anyway, so nothing legitimate exceeds this.
-        if envelope_data.len() > crate::message::codec::MAX_MESSAGE_SIZE {
+        let len = envelope_data.len();
+        // Validation first (main, #482): ingress size cap before any decode.
+        // The codec rejects larger encoded messages anyway, so nothing
+        // legitimate exceeds this. Logged as [RX-DROP] like every other drop.
+        if len > crate::message::codec::MAX_MESSAGE_SIZE {
             tracing::warn!("[WARN] receive_message: envelope exceeds maximum size, dropping");
+            let reason = format!(
+                "{}_len{}",
+                ironcore_error_variant(&IronCoreError::InvalidInput),
+                len
+            );
+            rx_drop_limited("unknown", "receive_message", &reason);
             return Err(IronCoreError::InvalidInput);
         }
+        let peeked_id = Self::peek_envelope_message_id(&envelope_data);
+        let result = self.receive_message_inner(envelope_data);
+        if let Err(e) = &result {
+            // Variant name only: never format the error with `{:?}`, so no
+            // payload a future variant might carry can reach the log.
+            let reason = format!("{}_len{}", ironcore_error_variant(e), len);
+            rx_drop_limited(&peeked_id, "receive_message", &reason);
+        }
+        result
+    }
+
+    fn receive_message_inner(&self, envelope_data: Vec<u8>) -> Result<Message, IronCoreError> {
         // Hoist sender public key and local identity id out of the ratchet
         // block below so they remain in scope for downstream inbox / audit
         // handling.
@@ -5520,9 +5555,126 @@ impl IronCore {
     }
 }
 
+/// Fixed variant-name map for drop diagnostics (no payloads). `Blocked` is
+/// the sender-blocked drop; `NotInitialized` is the core-unavailable drop.
+fn ironcore_error_variant(e: &IronCoreError) -> &'static str {
+    match e {
+        IronCoreError::NotInitialized => "core_not_initialized",
+        IronCoreError::AlreadyRunning => "already_running",
+        IronCoreError::StorageError => "storage_error",
+        IronCoreError::CryptoError => "crypto_error",
+        IronCoreError::NetworkError => "network_error",
+        IronCoreError::InvalidInput => "invalid_input",
+        IronCoreError::Blocked => "sender_blocked",
+        IronCoreError::ConsentRequired => "consent_required",
+        IronCoreError::Internal => "internal",
+        IronCoreError::CorruptionDetected => "corruption_detected",
+        IronCoreError::DialSelf => "dial_self",
+        IronCoreError::NoAddresses => "no_addresses",
+        IronCoreError::ConnectionLimit => "connection_limit",
+        IronCoreError::MultiaddrNotSupported => "multiaddr_not_supported",
+        IronCoreError::IoError => "io_error",
+        IronCoreError::OnionRoutingDisabled => "onion_routing_disabled",
+    }
+}
+
+/// Token bucket per drop stage: a burst of `RX_DROP_BURST` lines, refilled at
+/// one token per `RX_DROP_REFILL_SECS`. Suppressed drops are counted and
+/// reported by the next admitted line.
+const RX_DROP_BURST: f64 = 10.0;
+const RX_DROP_REFILL_SECS: f64 = 3.0;
+
+#[derive(Default)]
+struct RxDropBucket {
+    tokens: f64,
+    last: Option<std::time::Instant>,
+    suppressed: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RxDropAdmit {
+    /// Log the drop; `Some(n)` means n earlier drops were suppressed.
+    Log(Option<u64>),
+    Suppress,
+}
+
+impl RxDropBucket {
+    fn admit(&mut self, now: std::time::Instant) -> RxDropAdmit {
+        match self.last {
+            None => self.tokens = RX_DROP_BURST,
+            Some(prev) => {
+                let elapsed = now.saturating_duration_since(prev).as_secs_f64();
+                self.tokens = (self.tokens + elapsed / RX_DROP_REFILL_SECS).min(RX_DROP_BURST);
+            }
+        }
+        self.last = Some(now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            let suppressed = std::mem::take(&mut self.suppressed);
+            RxDropAdmit::Log((suppressed > 0).then_some(suppressed))
+        } else {
+            self.suppressed += 1;
+            RxDropAdmit::Suppress
+        }
+    }
+}
+
+static RX_DROP_BUCKETS: std::sync::OnceLock<
+    Mutex<std::collections::HashMap<String, RxDropBucket>>,
+> = std::sync::OnceLock::new();
+
+/// Rate-limited `[RX-DROP]` logging, one bucket per stage.
+fn rx_drop_limited(msg_id: &str, stage: &str, reason: &str) {
+    let verdict = {
+        let mut buckets = RX_DROP_BUCKETS
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+            .lock();
+        buckets
+            .entry(stage.to_string())
+            .or_default()
+            .admit(std::time::Instant::now())
+    };
+    if let RxDropAdmit::Log(suppressed) = verdict {
+        if let Some(n) = suppressed {
+            tracing::info!("[RX-DROP] suppressed={} stage={}", n, stage);
+        }
+        crate::message_events::log_rx_drop(msg_id, stage, reason);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rx_drop_bucket_limits_burst_reports_suppressed_and_refills() {
+        let t0 = std::time::Instant::now();
+        let mut b = RxDropBucket::default();
+        for _ in 0..10 {
+            assert_eq!(b.admit(t0), RxDropAdmit::Log(None));
+        }
+        assert_eq!(b.admit(t0), RxDropAdmit::Suppress);
+        assert_eq!(b.admit(t0), RxDropAdmit::Suppress);
+        let later = t0 + std::time::Duration::from_secs(3);
+        assert_eq!(b.admit(later), RxDropAdmit::Log(Some(2)));
+        assert_eq!(b.admit(later), RxDropAdmit::Suppress);
+    }
+
+    #[test]
+    fn rx_drop_variant_names_are_fixed_and_split_blocked_from_unavailable() {
+        assert_eq!(
+            ironcore_error_variant(&IronCoreError::Blocked),
+            "sender_blocked"
+        );
+        assert_eq!(
+            ironcore_error_variant(&IronCoreError::NotInitialized),
+            "core_not_initialized"
+        );
+        assert_eq!(
+            ironcore_error_variant(&IronCoreError::CryptoError),
+            "crypto_error"
+        );
+    }
 
     #[test]
     fn test_record_and_export_logs() {
