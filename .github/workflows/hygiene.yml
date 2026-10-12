@@ -18,7 +18,11 @@ jobs:
   hygiene-checks:
     name: Repository Hygiene Checks
     # Pure git/grep checks (10-15s of work). Hosted: OCI queue waits for this job reached 80 minutes.
-    runs-on: ubuntu-latest
+    # Runner selection: vars.CI_RUNNER=blacksmith with `light` in vars.CI_RUNNER_BLACKSMITH_JOBS
+    # moves this light gate job to blacksmith-2vcpu-ubuntu-2404 (trusted events only;
+    # PRs also need `pr`). Fork PRs and everything else stay ubuntu-latest. See
+    # docs/runbooks/CI_RUNNER_SELECTION.md.
+    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',light,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     
     steps:
       - name: Checkout code
