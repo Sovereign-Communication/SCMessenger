@@ -7,7 +7,23 @@ use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use web_time::{SystemTime, UNIX_EPOCH};
+
+/// Current Unix time in seconds, or None if the clock reads before the epoch.
+/// Never panics; logs once at debug level on failure.
+fn unix_now_secs() -> Option<u64> {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => Some(d.as_secs()),
+        Err(_) => {
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::debug!("system clock before UNIX_EPOCH; skipping time-based bookkeeping");
+            }
+            None
+        }
+    }
+}
 
 /// Upper bound on components of an identify-observed address we are willing
 /// to inspect (ip, transport, quic/ws suffix, p2p id fit well inside this).
@@ -114,10 +130,7 @@ impl AddressObserver {
             return;
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs();
+        let now = unix_now_secs().unwrap_or(0);
 
         self.observations
             .entry(observer)
@@ -161,13 +174,23 @@ impl AddressObserver {
 
     /// Remove observations older than max_age_secs
     pub fn expire_old_observations(&mut self, max_age_secs: u64) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs();
+        self.expire_at(unix_now_secs(), max_age_secs);
+    }
 
-        self.observations
-            .retain(|_, obs| now.saturating_sub(obs.timestamp) < max_age_secs);
+    /// Expiry against an explicit clock reading; `None` (pre-epoch or failed
+    /// clock) skips expiry for this tick.
+    fn expire_at(&mut self, now: Option<u64>, max_age_secs: u64) {
+        let Some(now) = now else {
+            // Pre-epoch or failed clock: skip expiry for this tick.
+            return;
+        };
+
+        self.observations.retain(|_, obs| {
+            // Backward clock step: clamp future-stamped entries to now so
+            // they count as fresh and still expire later.
+            obs.timestamp = obs.timestamp.min(now);
+            now.saturating_sub(obs.timestamp) < max_age_secs
+        });
 
         self.recalculate_consensus();
     }
@@ -274,10 +297,7 @@ impl ConnectionTracker {
         local_addr: Multiaddr,
         connection_id: String,
     ) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs();
+        let now = unix_now_secs().unwrap_or(0);
 
         self.connections.entry(peer_id).or_default().insert(
             connection_id.clone(),
@@ -408,6 +428,35 @@ impl ConnectionTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expire_clamps_future_stamps_after_backward_clock_step() {
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
+        for obs in observer.observations.values_mut() {
+            obs.timestamp = 5_000;
+        }
+        // Clock stepped back to 1_000: the 5_000 stamp is in the future.
+        observer.expire_at(Some(1_000), 300);
+        let remaining = observer.all_observations();
+        assert_eq!(remaining.len(), 1, "future stamp is treated as fresh");
+        assert_eq!(remaining[0].timestamp, 1_000, "timestamp clamped to now");
+        // The clamped entry still expires once time moves on.
+        observer.expire_at(Some(1_300), 300);
+        assert!(observer.all_observations().is_empty());
+    }
+
+    #[test]
+    fn pre_epoch_clock_skips_expiry_without_panic() {
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
+        for obs in observer.observations.values_mut() {
+            obs.timestamp = 0;
+        }
+        observer.expire_at(None, 1);
+        assert_eq!(observer.all_observations().len(), 1, "expiry skipped");
+        assert!(unix_now_secs().is_some());
+    }
 
     #[test]
     fn address_observer_contract() {
