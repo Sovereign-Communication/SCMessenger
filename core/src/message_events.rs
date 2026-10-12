@@ -370,15 +370,6 @@ pub fn fmt_rx_drop(msg_id: Option<&str>, stage: &str, reason: &str) -> String {
     )
 }
 
-/// `[RX-DROP] stage=<stage> kind=<kind>` (payload kind with no message id).
-pub fn fmt_rx_drop_kind(stage: &str, kind: &str) -> String {
-    format!(
-        "[RX-DROP] stage={} kind={}",
-        sanitize_log_field(stage, 32),
-        sanitize_log_field(kind, 64)
-    )
-}
-
 /// `[RX-DROP] suppressed=<n> stage=<stage>` (matches PR #512 grammar).
 pub fn fmt_rx_drop_suppressed(count: u64, stage: &str) -> String {
     format!(
@@ -663,10 +654,6 @@ b c=d";
         assert_eq!(
             fmt_rx_drop(None, "inbox", "duplicate"),
             "[RX-DROP] msg=- stage=inbox reason=duplicate"
-        );
-        assert_eq!(
-            fmt_rx_drop_kind("swarm_unhandled", "PeerExchange"),
-            "[RX-DROP] stage=swarm_unhandled kind=PeerExchange"
         );
         assert_eq!(
             fmt_rx_forwarded("peer_exchange"),

@@ -30,6 +30,7 @@ Event vocabulary used by the correlator:
   routing_peer_seen    [ROUTING] peer_seen (routing engine fed a sighting)
   transport_status     [TRANSPORT] kind/state/detail (+ peers=N periodic)
   rx_drop              [RX-DROP] receiver dropped a message (stage/reason)
+  rx_forwarded         [RX] forwarded kind=<k> (relay control msg not consumed by swarm)
   rx_drop_suppressed   [RX-DROP] suppressed=<n> stage=<s> (#512)
   rx_stall             [RX-STALL] receive-path stall (#512)
   mesh_stop            [MESH-STOP] stop sequence phases
@@ -225,9 +226,13 @@ MARKERS: List[Marker] = [
        evidence=False,
        note="per-transport availability on start/change + connected-peer counts every 5 min"),
     _m("rx_drop", "rx_drop",
-       r"\[RX-DROP\] (?:msg=(?P<msg>\S+) )?stage=(?P<stage>\S+)(?: reason=(?P<reason>\S+))?(?: kind=(?P<kind>\S+))?",
+       r"\[RX-DROP\] (?:msg=(?P<msg>\S+) )?stage=(?P<stage>\S+)(?: reason=(?P<reason>\S+))?",
        "sibling agent PR (format: [RX-DROP] msg=<id> stage=<stage> reason=<r>)",
        evidence=False, note="receiver dropped an inbound message; explains a PARTIAL"),
+    _m("rx_forwarded", "rx_forwarded",
+       r"\[RX\] forwarded kind=(?P<kind>\S+)",
+       "core/src/message_events.rs fmt_rx_forwarded; core/src/transport/swarm.rs log_rx_forwarded",
+       evidence=False, note="relay control message fell through the swarm and was forwarded, not dropped"),
     _m("rx_drop_suppressed", "rx_drop_suppressed",
        r"\[RX-DROP\] suppressed=(?P<count>\d+) stage=(?P<stage>\S+)",
        "sibling agent PR #512 (format: [RX-DROP] suppressed=<n> stage=<s>)",

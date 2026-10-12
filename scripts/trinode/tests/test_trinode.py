@@ -371,8 +371,8 @@ class TestObservabilityMarkers(unittest.TestCase):
     def test_rx_drop_without_msg_and_kind_forms(self):
         e = self._ev("windows", "[RX-DROP] msg=- stage=inbox reason=duplicate")
         self.assertEqual(e[0]["event"], "rx_drop")
-        e = self._ev("windows", "[RX-DROP] stage=swarm_unhandled kind=ping")
-        self.assertEqual((e[0]["event"], e[0]["detail"]["kind"]), ("rx_drop", "ping"))
+        e = self._ev("windows", "[RX] forwarded kind=peer_exchange")
+        self.assertEqual((e[0]["event"], e[0]["detail"]["kind"]), ("rx_forwarded", "peer_exchange"))
         e = self._ev("windows", "[RX-STALL] drain_loop idle_ms=31000 backlog=4")
         self.assertEqual(e[0]["event"], "rx_stall")
 
