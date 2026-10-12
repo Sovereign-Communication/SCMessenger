@@ -54,7 +54,8 @@ class ConversationsViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Verify loadMessages was called with any args
-        verify { mockMeshRepository.getRecentMessages(any(), any()) }
+        // Init load runs on Dispatchers.IO; wait for it to land.
+        verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
     }
 
     @Test
@@ -86,8 +87,9 @@ class ConversationsViewModelTest {
         messageUpdatesFlow.emit(testMessage)
         testDispatcher.scheduler.advanceUntilIdle()
 
-        // Then verify getRecentMessages is called again (reloading list)
-        verify(exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
+        // Then verify getRecentMessages is called again (reloading list).
+        // The reload runs on Dispatchers.IO, so wait for it to land.
+        verify(timeout = 5_000, exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
 
         // And verify state is updated
         assertEquals(1, viewModel.messages.value.size)
@@ -114,7 +116,7 @@ class ConversationsViewModelTest {
         // so the exact-count assertions below stay deterministic AND strict.
         verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
         verify(exactly = 1) { mockMeshRepository.clearConversation("peer-delete") }
-        verify(exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
+        verify(timeout = 5_000, exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
     }
 
     @Test

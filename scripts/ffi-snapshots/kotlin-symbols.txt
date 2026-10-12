@@ -56,6 +56,7 @@ data class PeelResult (
 data class PreparedMessage (
 data class Receipt (
 data class ReceivedMessage (
+data class RedeemReport (
 data class RegistrationStateInfo (
 data class RelayAdjustment (
 data class SeedLedgerEntry (
@@ -108,6 +109,7 @@ fun `contactsManager`(): ContactManager
 fun `conversation`(`peerId`: kotlin.String, `limit`: kotlin.UInt): List<MessageRecord>
 fun `count`(): kotlin.UInt
 fun `count`(): kotlin.UInt
+fun `createInviteQr`(`reachableAddrs`: List<kotlin.String>, `ttlSecs`: kotlin.ULong): kotlin.String
 fun `custodyAuditCount`(): kotlin.UInt
 fun `custodyGetRegistrationStateInfo`(`identityId`: kotlin.String): RegistrationStateInfo
 fun `custodyRegistrationTransitions`(`identityId`: kotlin.String): kotlin.String
@@ -274,6 +276,7 @@ fun `recordAbuseSignal`(`peerId`: kotlin.String, `signal`: kotlin.String)
 fun `recordConnection`(`multiaddr`: kotlin.String, `peerId`: kotlin.String)
 fun `recordFailure`(`multiaddr`: kotlin.String)
 fun `recordLog`(`line`: kotlin.String)
+fun `redeemInviteQr`(`payload`: kotlin.String): RedeemReport
 fun `registerBlockedDevice`(`peerId`: kotlin.String, `deviceId`: kotlin.String)
 fun `registerDeviceId`(`peerId`: kotlin.String, `deviceId`: kotlin.String): kotlin.Boolean {
 fun `relayJitterDelay`(`severity`: kotlin.String): kotlin.ULong
