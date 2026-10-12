@@ -342,6 +342,9 @@ pub struct AdmissionBehaviour {
     /// lookup) ran on each path. Entries leave on close, so the map is bounded
     /// by live paths; see [`AdmissionBehaviour::may_probe_stranger`].
     stranger_probed: HashMap<ConnectionId, Instant>,
+    /// Paths between `path_established` and `path_closed`. A late request on a
+    /// closed or unknown path must not re-create probe bookkeeping.
+    open_paths: HashSet<ConnectionId>,
     /// Consecutive quiet quanta while a pending cap is in force.
     quiet_quanta: u32,
     /// When the last pressure episode ran (episodes are one per quantum).
@@ -396,6 +399,7 @@ impl AdmissionBehaviour {
             validated_prev: 0,
             unvalidated_inbound: HashSet::new(),
             stranger_probed: HashMap::new(),
+            open_paths: HashSet::new(),
             quiet_quanta: 0,
             last_episode: None,
             fd_at: now,
@@ -559,6 +563,7 @@ impl AdmissionBehaviour {
         local_dialed: bool,
         now: Instant,
     ) {
+        self.open_paths.insert(id);
         let inbound = self.pending.get(&id).is_some_and(|conn| conn.inbound);
         let handshake = self
             .end_handshake(&id)
@@ -595,6 +600,7 @@ impl AdmissionBehaviour {
         self.end_handshake(id);
         self.unvalidated_inbound.remove(id);
         self.stranger_probed.remove(id);
+        self.open_paths.remove(id);
         let outcome = self.ledger.on_closed(peer, id, remaining_established);
         if outcome.was_eviction {
             self.evicted_closed.insert(*id, now);
@@ -633,6 +639,10 @@ impl AdmissionBehaviour {
     /// withholds eviction protection from a stranger. Total probe work is
     /// bounded by the live paths, which the derived total already bounds.
     pub fn may_probe_stranger(&mut self, id: &ConnectionId, now: Instant) -> bool {
+        // An unknown or closed path gets the conservative answer and no entry.
+        if !self.open_paths.contains(id) {
+            return false;
+        }
         let allowance = self.pending_allowance();
         match self.stranger_probed.get(id) {
             Some(at) if now.saturating_duration_since(*at) < allowance => false,
@@ -1318,6 +1328,8 @@ mod tests {
         let mut b = AdmissionBehaviour::new();
         let peer = PeerId::random();
         let allowance = b.pending_allowance();
+        b.path_established(peer, cid(1), &lan(9001), true, base);
+        b.path_established(peer, cid(2), &lan(9002), true, base);
         assert!(b.may_probe_stranger(&cid(1), base), "first probe runs");
         // A flood of requests inside the allowance buys no further probes.
         for ms in [1u64, 10, 100] {
@@ -1331,6 +1343,21 @@ mod tests {
         // Close drops the bookkeeping, so it is bounded by live paths.
         b.path_closed(&peer, &cid(1), 0, later);
         b.path_closed(&peer, &cid(2), 0, later);
+        assert!(b.stranger_probed.is_empty());
+    }
+
+    #[test]
+    fn a_late_request_after_close_leaves_no_probe_entry() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new();
+        let peer = PeerId::random();
+        b.path_established(peer, cid(1), &lan(9001), true, base);
+        b.path_closed(&peer, &cid(1), 0, at(base, 10));
+        assert!(!b.may_probe_stranger(&cid(1), at(base, 20)));
+        assert!(
+            !b.may_probe_stranger(&cid(99), at(base, 20)),
+            "unknown path"
+        );
         assert!(b.stranger_probed.is_empty());
     }
 
