@@ -95,7 +95,7 @@ class SubnetProbe(
 ) {
     @Volatile private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var sweepJob: Job? = null
+    private var sweepJob: Job? = null // guarded by this (start / stop are @Synchronized)
 
     // Wakes the inter-sweep wait when the scheduler resets the LAN lane.
     private val wakeSignal = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
@@ -120,6 +120,7 @@ class SubnetProbe(
      * Begin periodic scanning. Safe to call multiple times; only the first
      * call has effect.
      */
+    @Synchronized
     fun start() {
         if (isRunning) {
             Timber.d("SubnetProbe already running; start() ignored")
@@ -141,7 +142,9 @@ class SubnetProbe(
                     delay(scanIntervalMs)
                 } else {
                     val waitMs = c.nextDelayMs().coerceAtLeast(1L)
-                    kotlinx.coroutines.withTimeoutOrNull(waitMs) { wakeSignal.receive() }
+                    // receiveCatching: a channel closed by cleanup() ends the wait
+                    // instead of throwing out of the sweep job.
+                    kotlinx.coroutines.withTimeoutOrNull(waitMs) { wakeSignal.receiveCatching() }
                 }
             }
         }
@@ -150,6 +153,7 @@ class SubnetProbe(
     /**
      * Cancel all in-flight probes and stop the sweep loop.
      */
+    @Synchronized
     fun stop() {
         if (!isRunning) return
         isRunning = false

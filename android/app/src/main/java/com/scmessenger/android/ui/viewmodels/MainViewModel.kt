@@ -417,9 +417,8 @@ class MainViewModel @Inject constructor(
     }
 
     fun consumeInvite(): String? {
-        val invite = _pendingInvite.value
-        _pendingInvite.value = null
-        return invite
+        // Atomic take: two collectors consuming at once must not both get it.
+        return _pendingInvite.getAndUpdate { null }
     }
 
     fun consumeChatNav(): String? {

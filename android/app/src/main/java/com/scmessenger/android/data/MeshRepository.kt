@@ -563,6 +563,22 @@ open class MeshRepository(
     val discoveryDriver: com.scmessenger.android.transport.discovery.DiscoveryDriver
         get() = discoveryDriverLazy.value
 
+    // Serialises first creation against the final close in cleanup(): without
+    // it an event arriving after cleanup() could create a driver (and a native
+    // scheduler) that nothing ever closes.
+    private val discoveryLifecycleLock = Any()
+    private var discoveryShutdown = false
+
+    /** The driver, or null once [cleanup] released it. Never creates one after shutdown. */
+    private fun liveDiscoveryDriver(): com.scmessenger.android.transport.discovery.DiscoveryDriver? =
+        synchronized(discoveryLifecycleLock) {
+            if (discoveryShutdown) null else discoveryDriverLazy.value
+        }
+
+    // Makes "read the foreground flag + peer count + power, then push to core"
+    // one step, so two concurrent input updates cannot land out of order.
+    private val discoveryInputsLock = Any()
+
     // Foreground flag fed to the scheduler's ceiling (MainActivity onResume/onPause).
     @Volatile private var discoveryForeground = false
     private val radioStateReceiver = com.scmessenger.android.transport.discovery.RadioStateReceiver { event ->
@@ -711,13 +727,10 @@ open class MeshRepository(
     private val receiptSendMaxAttempts = 6
     @Volatile
     private var serviceStartedAtEpochSec: Long = 0L
-    @Volatile
-    private var lastRelayBootstrapDialMs: Long = 0L
-    // P1_ANDROID_013: Track consecutive full-bootstrap failures for exponential backoff
-    @Volatile
-    private var consecutiveBootstrapFailures: Int = 0
-    @Volatile
-    private var nextBootstrapAttemptMs: Long = 0L
+    // P1_ANDROID_013 + #469 T8: bootstrap spacing and exponential backoff. One
+    // synchronized gate: the loop and the discovery reset listener (any thread)
+    // both mutate it, and a reset must not be overwritten by an older round.
+    private val bootstrapGate = BootstrapGate()
     private val dialThrottleState = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Long>>()
 
     // Reinstall detection: true when SharedPreferences has identity backup but contacts.db
@@ -6762,7 +6775,7 @@ open class MeshRepository(
     /** Report a platform event to the core discovery scheduler. */
     open fun reportDiscoveryEvent(event: com.scmessenger.android.transport.discovery.DiscoveryEventKind) {
         try {
-            discoveryDriver.onEvent(event)
+            liveDiscoveryDriver()?.onEvent(event)
         } catch (e: Throwable) {
             // Never let a scheduler fault break a platform callback.
             Timber.w(e, "Discovery event %s could not be delivered", event)
@@ -6794,10 +6807,21 @@ open class MeshRepository(
     open fun updateDiscoveryInputs(foreground: Boolean? = null) {
         if (foreground != null) discoveryForeground = foreground
         try {
-            discoveryDriver.setInputs(activeSessions.size, discoveryPowerLevel(), discoveryForeground)
+            synchronized(discoveryInputsLock) {
+                liveDiscoveryDriver()?.setInputs(activeSessions.size, discoveryPowerLevel(), discoveryForeground)
+            }
         } catch (e: Throwable) {
             Timber.w(e, "Discovery inputs could not be delivered")
         }
+    }
+
+    /**
+     * Record the foreground flag synchronously. Lifecycle callbacks (onResume,
+     * onPause) call this on the main thread, in order, before any background
+     * push of the inputs, so a late-running push can never publish a stale flag.
+     */
+    fun setDiscoveryForeground(foreground: Boolean) {
+        discoveryForeground = foreground
     }
 
     private fun discoveryPowerLevel(): com.scmessenger.android.transport.discovery.DiscoveryPowerLevel {
@@ -6816,9 +6840,7 @@ open class MeshRepository(
         if (com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER in lanes) {
             // Failure history and spacing gates describe the OLD network
             // state; clear them so the woken loop can dial at once.
-            nextBootstrapAttemptMs = 0L
-            lastRelayBootstrapDialMs = 0L
-            consecutiveBootstrapFailures = 0
+            bootstrapGate.reset()
         }
         if (com.scmessenger.android.transport.discovery.DiscoveryLane.BLE in lanes) {
             bleScanner?.onDiscoveryReset()
@@ -8062,7 +8084,9 @@ open class MeshRepository(
      */
     private suspend fun awaitLedgerTick() {
         try {
-            discoveryDriver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
+            val driver = liveDiscoveryDriver()
+                ?: throw kotlinx.coroutines.CancellationException("discovery shut down")
+            driver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -11332,11 +11356,8 @@ open class MeshRepository(
         val nowMs = System.currentTimeMillis()
 
         // P1_ANDROID_013: Respect exponential backoff from consecutive failures
-        if (nowMs < nextBootstrapAttemptMs) {
-            return
-        }
-        if (nowMs - lastRelayBootstrapDialMs < 10_000L) return
-        lastRelayBootstrapDialMs = nowMs
+        val gateToken = bootstrapGate.tryBegin(nowMs)
+        if (gateToken == BootstrapGate.DENIED) return
 
         // Determine transport priority based on current network
         val transportPriority = networkDetector.getTransportPriority()
@@ -11359,7 +11380,7 @@ open class MeshRepository(
                 "Bootstrap: no proven ledger relay candidates; " +
                     "network=${networkDetector.networkType.value}, cellular=$isCellular"
             )
-            nextBootstrapAttemptMs = nowMs + 30_000L
+            bootstrapGate.holdUntil(gateToken, nowMs + 30_000L)
             return
         }
 
@@ -11426,24 +11447,18 @@ open class MeshRepository(
             // R4-L3: read the cadence from the active breaker instance, not a
             // companion constant, so the two cannot silently diverge.
             val reprobeMs = relayCircuitBreaker.halfOpenTimeoutMs
-            nextBootstrapAttemptMs = nowMs + reprobeMs
+            bootstrapGate.holdUntil(gateToken, nowMs + reprobeMs)
             Timber.i(
                 "Bootstrap: all candidates breaker/throttle-blocked; re-probing in %dms (no failure counted)",
                 reprobeMs
             )
         } else if (!anySuccess) {
-            consecutiveBootstrapFailures++
-            val backoffMs = when {
-                consecutiveBootstrapFailures <= 1 -> 10_000L
-                consecutiveBootstrapFailures <= 3 -> 30_000L
-                else -> 60_000L.coerceAtMost(1000L * (1L shl consecutiveBootstrapFailures.coerceAtMost(6)))
+            bootstrapGate.recordFailure(gateToken, nowMs)?.let { b ->
+                Timber.w("Bootstrap all-failed (consecutive=%d), next attempt in %dms",
+                    b.consecutiveFailures, b.backoffMs)
             }
-            nextBootstrapAttemptMs = nowMs + backoffMs
-            Timber.w("Bootstrap all-failed (consecutive=%d), next attempt in %dms",
-                consecutiveBootstrapFailures, backoffMs)
         } else {
-            consecutiveBootstrapFailures = 0
-            nextBootstrapAttemptMs = 0L
+            bootstrapGate.recordSuccess(gateToken)
         }
     }
 
@@ -11451,8 +11466,7 @@ open class MeshRepository(
     fun primeRelayBootstrapConnectionsLegacy() {
         val bridge = swarmBridge ?: return
         val nowMs = System.currentTimeMillis()
-        if (nowMs - lastRelayBootstrapDialMs < 10_000L) return
-        lastRelayBootstrapDialMs = nowMs
+        if (bootstrapGate.tryBegin(nowMs, honourBackoff = false) == BootstrapGate.DENIED) return
 
         val addresses = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
             .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
@@ -12165,7 +12179,10 @@ open class MeshRepository(
             stopMeshService()
             saveLedger()
             // Final release of the Rust DiscoveryCoordinator (#469 T7/T8).
-            if (discoveryDriverLazy.isInitialized()) discoveryDriverLazy.value.close()
+            synchronized(discoveryLifecycleLock) {
+                discoveryShutdown = true
+                if (discoveryDriverLazy.isInitialized()) discoveryDriverLazy.value.close()
+            }
             pendingOutboxRetryJob?.cancel()
             pendingOutboxRetryJob = null
             coverTrafficJob?.cancel()

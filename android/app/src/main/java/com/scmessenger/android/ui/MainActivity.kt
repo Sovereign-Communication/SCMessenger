@@ -357,8 +357,11 @@ class MainActivity : ComponentActivity() {
         Timber.d("MainActivity resumed")
         platformBridge.notifyForeground()
         // #469 T7: returning to the foreground resets discovery to aggressive.
+        // Flag is recorded here on the main thread so resume/pause order holds
+        // even though the push to core runs on the IO pool.
+        meshRepository.setDiscoveryForeground(true)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            meshRepository.updateDiscoveryInputs(foreground = true)
+            meshRepository.updateDiscoveryInputs()
             meshRepository.reportDiscoveryEvent(
                 com.scmessenger.android.transport.discovery.DiscoveryEventKind.APP_FOREGROUND
             )
@@ -440,8 +443,9 @@ class MainActivity : ComponentActivity() {
         Timber.d("MainActivity paused")
         platformBridge.notifyBackground()
         // Backgrounded: the scheduler's decay ceiling relaxes (#469 T8).
+        meshRepository.setDiscoveryForeground(false)
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            meshRepository.updateDiscoveryInputs(foreground = false)
+            meshRepository.updateDiscoveryInputs()
         }
     }
 

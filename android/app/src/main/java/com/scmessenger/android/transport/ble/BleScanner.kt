@@ -89,6 +89,14 @@ class BleScanner(
     @Volatile private var scanWanted = false
     private var cadencePauseRunnable: Runnable? = null
 
+    // Threading model for the cadence cycle: timers fire on [bleThread] while
+    // stopScanning() (under scanLock) and onDiscoveryReset() arrive from other
+    // threads. cadenceLock makes "is the cycle still wanted? then post the next
+    // timer" and "cancel the cycle" mutually exclusive, so a timer that was
+    // already running when stop() returned cannot re-arm itself afterwards.
+    // It is never held across a radio call or scanLock, so it cannot deadlock.
+    private val cadenceLock = Any()
+
     // Scan result caching to avoid duplicate processing
     private val recentlySeenPeers = ConcurrentHashMap<String, Long>()
     private val peerCacheTimeoutMs = 5000L  // 5 seconds
@@ -440,7 +448,7 @@ class BleScanner(
         Timber.d("Duty cycle started: ${scanWindowMs}ms scan / ${scanIntervalMs}ms interval")
     }
 
-    private fun stopDutyCycle() {
+    private fun stopDutyCycle() = synchronized(cadenceLock) {
         dutyCycleRunnable?.let { handler.removeCallbacks(it) }
         dutyCycleRunnable = null
         cadenceActive = false
@@ -450,7 +458,7 @@ class BleScanner(
 
     private fun startCadenceCycle(c: ScanCadence) {
         stopDutyCycle()
-        cadenceActive = true
+        synchronized(cadenceLock) { cadenceActive = true }
         scheduleCadenceWindowEnd(c)
         Timber.i("[DISCOVERY] transport=ble cadence cycle started (window=${scanWindowMs}ms)")
     }
@@ -463,14 +471,21 @@ class BleScanner(
             val pauseMs = c.nextDelayMs().coerceAtLeast(1L)
             Timber.i("[DISCOVERY] transport=ble scan window ended; next window in ${pauseMs}ms")
             val resume = Runnable {
-                cadencePauseRunnable = null
+                synchronized(cadenceLock) { cadencePauseRunnable = null }
                 resumeCadenceScan(c)
             }
-            cadencePauseRunnable = resume
-            handler.postDelayed(resume, pauseMs)
+            synchronized(cadenceLock) {
+                // Stopped while this window was ending: do not arm another timer.
+                if (!cadenceActive) return@Runnable
+                cadencePauseRunnable = resume
+                handler.postDelayed(resume, pauseMs)
+            }
         }
-        dutyCycleRunnable = windowEnd
-        handler.postDelayed(windowEnd, scanWindowMs)
+        synchronized(cadenceLock) {
+            if (!cadenceActive) return
+            dutyCycleRunnable = windowEnd
+            handler.postDelayed(windowEnd, scanWindowMs)
+        }
     }
 
     private fun resumeCadenceScan(c: ScanCadence) {
@@ -500,10 +515,13 @@ class BleScanner(
                 }
                 return@post
             }
-            val pending = cadencePauseRunnable
+            val pending = synchronized(cadenceLock) {
+                cadencePauseRunnable?.also {
+                    handler.removeCallbacks(it)
+                    cadencePauseRunnable = null
+                }
+            }
             if (pending != null) {
-                handler.removeCallbacks(pending)
-                cadencePauseRunnable = null
                 Timber.i("[DISCOVERY] transport=ble reset: resuming scan immediately")
                 resumeCadenceScan(c)
             }

@@ -58,8 +58,18 @@ class NetworkDetector @Inject constructor(
     /** Network capability cache */
     private val networkCapabilities = ConcurrentHashMap<Network, NetworkCapabilities>()
 
-    /** Network callback for real-time updates */
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    /**
+     * Network callback for real-time updates. Written under [lifecycleLock];
+     * read without it by the callbacks (binder threads) to drop traffic from a
+     * callback that has since been stopped or replaced.
+     */
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Serialises startMonitoring / stopMonitoring so register and unregister pair up. */
+    private val lifecycleLock = Any()
+
+    /** Guards [debounceJob]: callbacks on several binder threads reschedule it. */
+    private val debounceLock = Any()
 
     /**
      * #469 T7: receives a discovery event for every real network-state change
@@ -93,7 +103,7 @@ class NetworkDetector @Inject constructor(
 
     /** Debounce: coroutine scope for timed network state transitions */
     private val debounceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var debounceJob: Job? = null
+    private var debounceJob: Job? = null // guarded by debounceLock
 
     /** Hysteresis: minimum stable period before committing a network type change (ms) */
     private val networkStabilityMs = 500L
@@ -130,10 +140,10 @@ class NetworkDetector @Inject constructor(
      * Start monitoring network changes.
      * Registers a NetworkCallback to detect network type changes in real-time.
      */
-    fun startMonitoring() {
+    fun startMonitoring() = synchronized(lifecycleLock) {
         if (networkCallback != null) {
             Timber.d("NetworkDetector already monitoring")
-            return
+            return@synchronized
         }
 
         // Registration must never abort the caller: some OEM ConnectivityManager
@@ -143,6 +153,7 @@ class NetworkDetector @Inject constructor(
         try {
             startMonitoringInternal()
         } catch (e: Exception) {
+            networkCallback = null
             Timber.w(e, "NetworkDetector monitoring unavailable; continuing without it")
         }
     }
@@ -155,7 +166,13 @@ class NetworkDetector @Inject constructor(
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
+            // True while this callback is the registered one. ConnectivityManager
+            // can deliver a queued callback after unregister; it must not
+            // repopulate the filter or reach the sink once stopped.
+            private fun live() = networkCallback === this
+
             override fun onAvailable(network: Network) {
+                if (!live()) return
                 val caps = try {
                     connectivityManager.getNetworkCapabilities(network)
                 } catch (e: Exception) {
@@ -166,6 +183,7 @@ class NetworkDetector @Inject constructor(
             }
 
             override fun onLost(network: Network) {
+                if (!live()) return
                 networkCapabilities.remove(network)
                 Timber.d("Network lost: %s", network)
                 emitDiscoveryEvents(eventFilter.onLost(network.hashCode()))
@@ -176,6 +194,7 @@ class NetworkDetector @Inject constructor(
                 network: Network,
                 capabilities: NetworkCapabilities
             ) {
+                if (!live()) return
                 networkCapabilities[network] = capabilities
                 signatureOf(capabilities)?.let {
                     emitDiscoveryEvents(eventFilter.onCapabilitiesChanged(network.hashCode(), it))
@@ -184,8 +203,10 @@ class NetworkDetector @Inject constructor(
             }
         }
 
-        connectivityManager.registerNetworkCallback(request, callback)
+        // Publish before registering: the platform may deliver onAvailable for
+        // an existing network immediately, and live() must already hold.
         networkCallback = callback
+        connectivityManager.registerNetworkCallback(request, callback)
 
         // Detect current network with debounce
         scheduleNetworkRedetection()
@@ -196,7 +217,7 @@ class NetworkDetector @Inject constructor(
     /**
      * Stop monitoring network changes.
      */
-    fun stopMonitoring() {
+    fun stopMonitoring() = synchronized(lifecycleLock) {
         val cb = networkCallback
         networkCallback = null
         if (cb != null) {
@@ -210,8 +231,10 @@ class NetworkDetector @Inject constructor(
         // discovery or pin the repository through the lambda.
         onDiscoveryEvent = null
         eventFilter.clear()
-        debounceJob?.cancel()
-        debounceJob = null
+        synchronized(debounceLock) {
+            debounceJob?.cancel()
+            debounceJob = null
+        }
         Timber.i("NetworkDetector monitoring stopped")
     }
 
@@ -225,10 +248,12 @@ class NetworkDetector @Inject constructor(
     private fun scheduleNetworkRedetection() {
         Timber.d("Network change detected, scheduling redetection with %dms debounce", networkStabilityMs)
 
-        debounceJob?.cancel()
-        debounceJob = debounceScope.launch {
-            delay(networkStabilityMs)
-            redetectCurrentNetworkLocked()
+        synchronized(debounceLock) {
+            debounceJob?.cancel()
+            debounceJob = debounceScope.launch {
+                delay(networkStabilityMs)
+                redetectCurrentNetworkLocked()
+            }
         }
     }
 

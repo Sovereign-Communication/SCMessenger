@@ -5,6 +5,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /**
  * Platform events that may change what discovery should do (#469 T7).
@@ -89,27 +92,41 @@ class DiscoveryDriver(private val policy: DiscoveryPolicy) : DiscoveryCadences {
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val closed = AtomicBoolean(false)
 
+    // Threading model: events arrive on binder, main and IO threads at once and
+    // may race with close(). Every call into [policy] runs under the READ lock
+    // after re-checking [closed]; close() takes the WRITE lock, so the native
+    // scheduler is never freed while a call is inside it and never touched
+    // after. Many events still run concurrently (read lock is shared; the Rust
+    // scheduler has its own lock). Listeners run OUTSIDE the lock so a listener
+    // may call back into the driver or close it without deadlocking.
+    private val policyLock = ReentrantReadWriteLock()
+
+    /** Run [block] against the policy, or return [whenClosed] if the driver is closed. */
+    private inline fun <T> withPolicy(whenClosed: T, block: () -> T): T =
+        policyLock.read {
+            if (closed.get()) whenClosed else block()
+        }
+
     fun addListener(listener: Listener) {
         listeners.add(listener)
     }
 
     /** Report a platform event. Returns the lanes that were reset. */
     fun onEvent(event: DiscoveryEventKind): Set<DiscoveryLane> {
-        if (closed.get()) return emptySet()
-        val reset = policy.onEvent(event)
+        val reset = withPolicy(null) { policy.onEvent(event) } ?: return emptySet()
         dispatch(event, reset)
         return reset
     }
 
     fun setInputs(connectedPeers: Int, power: DiscoveryPowerLevel, foreground: Boolean) {
-        if (closed.get()) return
-        policy.setInputs(connectedPeers, power, foreground)
+        withPolicy(Unit) { policy.setInputs(connectedPeers, power, foreground) }
     }
 
     private fun dispatch(event: DiscoveryEventKind, reset: Set<DiscoveryLane>) {
         Timber.i("[DISCOVERY] event=%s reset=%s", event, reset)
+        // trySend on a channel closed by a racing close() just fails; no throw.
         reset.forEach { wake[it]?.trySend(Unit) }
-        if (reset.isEmpty()) return
+        if (reset.isEmpty() || closed.get()) return
         listeners.forEach { l ->
             try {
                 l.onReset(event, reset)
@@ -126,8 +143,9 @@ class DiscoveryDriver(private val policy: DiscoveryPolicy) : DiscoveryCadences {
      */
     suspend fun awaitNextAttempt(lane: DiscoveryLane): Boolean {
         if (closed.get()) throw kotlinx.coroutines.CancellationException("discovery driver closed")
-        val delayMs = policy.nextDelayMs(lane).coerceAtLeast(1L)
-        val pendingDue = policy.pendingResetDueMs(lane)
+        val delayMs = withPolicy(null) { policy.nextDelayMs(lane) }?.coerceAtLeast(1L)
+            ?: throw kotlinx.coroutines.CancellationException("discovery driver closed")
+        val pendingDue = withPolicy(null) { policy.pendingResetDueMs(lane) }
         val waitMs = if (pendingDue != null) minOf(delayMs, pendingDue.coerceAtLeast(1L)) else delayMs
         val woken = withTimeoutOrNull(waitMs) {
             // A closed wake channel yields a failed result; treat
@@ -136,13 +154,13 @@ class DiscoveryDriver(private val policy: DiscoveryPolicy) : DiscoveryCadences {
         } ?: false
         if (closed.get()) throw kotlinx.coroutines.CancellationException("discovery driver closed")
         if (!woken && pendingDue != null && waitMs >= pendingDue) {
-            return policy.applyPendingReset(lane)
+            return withPolicy(false) { policy.applyPendingReset(lane) }
         }
         return woken
     }
 
     override fun cadenceFor(lane: DiscoveryLane): ScanCadence =
-        ScanCadence { if (closed.get()) CLOSED_FALLBACK_DELAY_MS else policy.nextDelayMs(lane) }
+        ScanCadence { withPolicy(CLOSED_FALLBACK_DELAY_MS) { policy.nextDelayMs(lane) } }
 
     /**
      * Release everything the driver holds: listeners are dropped, every wake
@@ -154,10 +172,13 @@ class DiscoveryDriver(private val policy: DiscoveryPolicy) : DiscoveryCadences {
         if (closed.getAndSet(true)) return
         listeners.clear()
         wake.values.forEach { it.close() }
-        try {
-            policy.close()
-        } catch (e: Exception) {
-            Timber.w(e, "Discovery policy close failed")
+        // Waits for in-flight policy calls to leave; later ones see `closed`.
+        policyLock.write {
+            try {
+                policy.close()
+            } catch (e: Exception) {
+                Timber.w(e, "Discovery policy close failed")
+            }
         }
     }
 }

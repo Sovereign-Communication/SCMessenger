@@ -135,6 +135,9 @@ class RadioStateReceiver internal constructor(
         onEvent
     )
 
+    // Guarded by this receiver's monitor: register() and unregister() may be
+    // called from the main thread and from repository teardown threads at once.
+    // onReceive runs on the main thread and only reads the immutable [onEvent].
     private var registrar: ReceiverRegistrar? = null
 
     private val registration = ManagedResource(
@@ -174,6 +177,7 @@ class RadioStateReceiver internal constructor(
         else -> null
     }
 
+    @Synchronized
     fun register(context: Context) {
         try {
             if (registrar == null) registrar = registrarFor(context)
@@ -185,6 +189,7 @@ class RadioStateReceiver internal constructor(
         }
     }
 
+    @Synchronized
     fun unregister() {
         registration.close()
     }

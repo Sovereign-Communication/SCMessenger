@@ -109,9 +109,19 @@ impl From<DiscoveryPower> for PowerState {
 }
 
 /// One scheduler per transport class, driven by platform events.
+///
+/// Threading model: the scheduler list is immutable after construction and
+/// each `DiscoveryScheduler` guards its own state with one `parking_lot`
+/// `RwLock`, so single-lane calls (`next_delay_ms`, `pending_reset_due_ms`,
+/// `apply_pending_reset`) need no coordinator lock. `on_event` and
+/// `set_inputs` fan out over every lane; `fan_out` makes each fan-out atomic
+/// with respect to the other, otherwise two concurrent `set_inputs` calls
+/// could interleave per lane and leave lanes with different inputs for good.
+/// No async code runs here, so no lock is ever held across an await.
 #[derive(uniffi::Object)]
 pub struct DiscoveryCoordinator {
     schedulers: Vec<(TransportClass, Arc<DiscoveryScheduler>)>,
+    fan_out: parking_lot::Mutex<()>,
 }
 
 impl Default for DiscoveryCoordinator {
@@ -128,7 +138,10 @@ impl Default for DiscoveryCoordinator {
 impl DiscoveryCoordinator {
     /// Build from explicit schedulers (tests inject a fake clock this way).
     pub fn with_schedulers(schedulers: Vec<(TransportClass, Arc<DiscoveryScheduler>)>) -> Self {
-        Self { schedulers }
+        Self {
+            schedulers,
+            fan_out: parking_lot::Mutex::new(()),
+        }
     }
 
     fn scheduler(&self, transport: DiscoveryTransport) -> Option<&Arc<DiscoveryScheduler>> {
@@ -152,6 +165,7 @@ impl DiscoveryCoordinator {
     /// timer and run an attempt immediately.
     pub fn on_event(&self, event: DiscoveryEvent) -> Vec<DiscoveryTransport> {
         let ev: NetworkEvent = event.into();
+        let _fan_out = self.fan_out.lock();
         self.schedulers
             .iter()
             .filter(|(_, s)| s.on_event(ev))
@@ -166,6 +180,7 @@ impl DiscoveryCoordinator {
             power: power.into(),
             foreground,
         };
+        let _fan_out = self.fan_out.lock();
         for (_, s) in &self.schedulers {
             s.set_inputs(inputs);
         }
@@ -599,5 +614,141 @@ mod tests {
         assert_eq!(c.pending_reset_due_ms(DiscoveryTransport::Ble), None);
         assert!(!c.apply_pending_reset(DiscoveryTransport::Ble));
         c.set_inputs(3, DiscoveryPower::Normal, true);
+    }
+
+    // ---- Concurrency: events race with each other and with the last handle
+    // ---- being dropped (the Rust side of DiscoveryDriver.close()).
+
+    const STRESS_THREADS: usize = 8;
+    const STRESS_ROUNDS: usize = 300;
+    const STRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+    /// Wait for `n` workers to report in; a deadlock fails the test instead of hanging CI.
+    fn await_workers(rx: &std::sync::mpsc::Receiver<()>, n: usize) {
+        for _ in 0..n {
+            rx.recv_timeout(STRESS_TIMEOUT)
+                .expect("a worker did not finish in time: deadlock or livelock");
+        }
+    }
+
+    #[test]
+    fn concurrent_set_inputs_never_leave_lanes_with_different_inputs() {
+        let c = Arc::new(coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000)))));
+        let (tx, rx) = std::sync::mpsc::channel();
+        for t in 0..STRESS_THREADS {
+            let c = c.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for i in 0..STRESS_ROUNDS {
+                    let power = match (t + i) % 3 {
+                        0 => DiscoveryPower::Charging,
+                        1 => DiscoveryPower::Normal,
+                        _ => DiscoveryPower::Low,
+                    };
+                    c.set_inputs(((t * 31 + i) % 17) as u32, power, (t + i) % 2 == 0);
+                }
+                let _ = tx.send(());
+            });
+        }
+        await_workers(&rx, STRESS_THREADS);
+        let first = c.schedulers[0].1.inputs();
+        for (class, s) in &c.schedulers {
+            assert_eq!(
+                s.inputs(),
+                first,
+                "{:?} diverged from the other lanes",
+                class
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_events_and_delay_queries_keep_every_lane_consistent() {
+        let c = Arc::new(coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000)))));
+        let events = [
+            DiscoveryEvent::BleOn,
+            DiscoveryEvent::BleOff,
+            DiscoveryEvent::WifiChanged,
+            DiscoveryEvent::CellularChanged,
+            DiscoveryEvent::LanInterfaceChanged,
+            DiscoveryEvent::AppForeground,
+            DiscoveryEvent::InviteRedeemed,
+            DiscoveryEvent::NewPeerConnected,
+            DiscoveryEvent::AllPeersLost,
+        ];
+        let (tx, rx) = std::sync::mpsc::channel();
+        for t in 0..STRESS_THREADS {
+            let c = c.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for i in 0..STRESS_ROUNDS {
+                    c.on_event(events[(t + i) % events.len()]);
+                    let lane = EVERY_TRANSPORT[(t + i) % EVERY_TRANSPORT.len()];
+                    assert!(c.next_delay_ms(lane) >= 1);
+                    let _ = c.pending_reset_due_ms(lane);
+                    let _ = c.apply_pending_reset(lane);
+                }
+                let _ = tx.send(());
+            });
+        }
+        await_workers(&rx, STRESS_THREADS);
+        for t in EVERY_TRANSPORT {
+            let snap = snapshot(&c, t);
+            assert!(snap.interval_ms >= 1);
+            assert!(snap.interval_ms <= snap.ceiling_ms.max(floor_ms(t)));
+        }
+    }
+
+    #[test]
+    fn events_racing_with_the_last_handle_drop_finish_and_release_every_scheduler() {
+        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+        let held: Vec<Arc<DiscoveryScheduler>> = TransportClass::ALL
+            .iter()
+            .map(|t| {
+                Arc::new(DiscoveryScheduler::new(
+                    *t,
+                    SchedulerConfig::for_transport(*t),
+                    clock.clone(),
+                    Arc::new(MidJitter),
+                ))
+            })
+            .collect();
+        let c = Arc::new(DiscoveryCoordinator::with_schedulers(
+            TransportClass::ALL
+                .iter()
+                .copied()
+                .zip(held.iter().cloned())
+                .collect(),
+        ));
+        let (tx, rx) = std::sync::mpsc::channel();
+        for t in 0..STRESS_THREADS {
+            let c = c.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for i in 0..STRESS_ROUNDS {
+                    c.on_event(if (t + i) % 2 == 0 {
+                        DiscoveryEvent::WifiChanged
+                    } else {
+                        DiscoveryEvent::AppForeground
+                    });
+                    c.set_inputs(i as u32 % 5, DiscoveryPower::Normal, i % 2 == 0);
+                    assert!(c.next_delay_ms(DiscoveryTransport::Lan) >= 1);
+                }
+                let _ = tx.send(());
+            });
+        }
+        // The owner closes while workers are mid-flight: workers hold clones,
+        // so the schedulers must stay valid until the last worker is done.
+        drop(c);
+        await_workers(&rx, STRESS_THREADS);
+        // Workers exit after sending; give their closures a moment to drop.
+        let deadline = std::time::Instant::now() + STRESS_TIMEOUT;
+        while held.iter().any(|s| Arc::strong_count(s) != 1) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a scheduler is still referenced after every handle was dropped"
+            );
+            std::thread::yield_now();
+        }
     }
 }
