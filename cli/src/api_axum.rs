@@ -18,11 +18,11 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use super::api::{
-    AddContactRequest, AddContactResponse, ConnectionPathStateResponse, DiscoveredPeer,
-    DiscoveryPeersResponse, DiscoveryStatusResponse, DriftStatusResponse,
-    GetExternalAddressResponse, GetHistoryRequest, GetHistoryResponse, GetListenersResponse,
-    GetPeersResponse, HistoryMessage, PeerEntry, PeerIdTriadDto, PeerResolveResponse,
-    SendMessageRequest, SendMessageResponse, API_PORT, triad_dto,
+    is_loopback_origin, triad_dto, AddContactRequest, AddContactResponse,
+    ConnectionPathStateResponse, DiscoveredPeer, DiscoveryPeersResponse, DiscoveryStatusResponse,
+    DriftStatusResponse, GetExternalAddressResponse, GetHistoryRequest, GetHistoryResponse,
+    GetListenersResponse, GetPeersResponse, HistoryMessage, PeerEntry, PeerIdTriadDto,
+    PeerResolveResponse, SendMessageRequest, SendMessageResponse, API_PORT,
 };
 
 /// Default number of messages `/api/history` returns when `limit` is
@@ -466,7 +466,10 @@ async fn history_response(
 
     let messages = if let Some(peer_id) = request.peer_id {
         history
-            .conversation(peer_id, request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32)
+            .conversation(
+                peer_id,
+                request.limit.unwrap_or(DEFAULT_HISTORY_LIMIT) as u32,
+            )
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -728,11 +731,7 @@ pub async fn start_api_server(ctx: ApiContext) -> Result<()> {
     // Create CORS layer restricted to localhost / loopback origins to prevent cross-origin attack vectors
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
-            let bytes = origin.as_bytes();
-            bytes.starts_with(b"http://localhost")
-                || bytes.starts_with(b"http://127.0.0.1")
-                || bytes.starts_with(b"https://localhost")
-                || bytes.starts_with(b"https://127.0.0.1")
+            is_loopback_origin(origin.as_bytes())
         }))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers(Any);
