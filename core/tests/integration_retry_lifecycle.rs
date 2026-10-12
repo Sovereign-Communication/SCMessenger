@@ -99,7 +99,7 @@ fn undelivered_message_does_not_transition_to_terminal_drop() {
 }
 
 #[test]
-fn test_custody_ownership_mutual_exclusion() {
+fn test_outbox_entry_is_removed_when_delivery_is_confirmed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir
         .path()
@@ -118,7 +118,9 @@ fn test_custody_ownership_mutual_exclusion() {
     let queued = outbox.peek_for_peer("peer-a");
     assert_eq!(queued.len(), 1);
 
-    // When moved to Drift custody (StoreAndCarry), it is removed from the outbox queue
+    // Delivery confirmed (receipt or transport accept): the retry entry is removed.
+    // This only exercises Outbox::remove; the StoreAndCarry send path, where an
+    // entry stays in the outbox alongside Drift custody, is tested below.
     let removed = outbox.remove("msg-custody");
     assert!(removed);
 
@@ -133,9 +135,9 @@ fn test_custody_ownership_mutual_exclusion() {
 // ============================================================================
 
 /// Forcing a StoreAndCarry routing decision (recipient marked definitely
-/// unreachable) must hand the message to drift custody and never enqueue it
-/// in the active outbox - there is nothing there for the retry loop to keep
-/// retrying.
+/// unreachable) must hand the message to drift custody AND keep it in the
+/// outbox, so the reconnect flush and periodic sweep keep retrying it. Drift is
+/// an additional path, not a replacement for the outbox entry.
 #[test]
 fn store_and_carry_send_is_held_in_drift_and_stays_in_outbox_for_retry() {
     let alice = make_core_with_routing();

@@ -5818,11 +5818,44 @@ mod inbound_receipt_tests {
 
     #[test]
     fn duplicate_delivery_is_acked_again() {
-        // The decision is pure and carries no per-message state, so the second
-        // delivery of the same id takes exactly the same path as the first.
-        for _ in 0..3 {
-            assert!(should_ack_inbound(Some("text"), Some(ALICE), Some(BOB)));
-        }
+        // Drives the real receive path twice with the same wire envelope, the
+        // way a sender retransmits after missing the first receipt. The claim
+        // under test: `receive_message` accepts the repeat (it must not turn
+        // the duplicate into an error, which would skip the ACK), and the ACK
+        // decision is made from what that SECOND delivery yields.
+        let alice = IronCore::new();
+        alice.grant_consent();
+        alice.initialize_identity().unwrap();
+        let bob = IronCore::new();
+        bob.grant_consent();
+        bob.initialize_identity().unwrap();
+        let alice_pk = alice.get_identity_info().public_key_hex.unwrap();
+        let bob_pk = bob.get_identity_info().public_key_hex.unwrap();
+        let prepared = alice
+            .prepare_message(bob_pk.clone(), "dup".to_string(), MessageType::Text, None)
+            .unwrap();
+
+        let first = bob
+            .receive_message(prepared.envelope_data.clone())
+            .expect("first delivery must be accepted");
+        let second = bob
+            .receive_message(prepared.envelope_data.clone())
+            .expect("a duplicate delivery must still return Ok so it can be re-ACKed");
+        assert_eq!(first.id, prepared.message_id);
+        assert_eq!(second.id, first.id, "duplicate must resolve to the same id");
+
+        let sender = envelope_sender_public_key_hex(&prepared.envelope_data);
+        assert_eq!(sender.as_deref(), Some(alice_pk.as_str()));
+        assert!(should_ack_inbound(
+            Some("text"),
+            sender.as_deref(),
+            Some(bob_pk.as_str())
+        ));
+        // A receipt for the duplicate is producible for the original sender.
+        let receipt = bob
+            .prepare_receipt(alice_pk.clone(), second.id.clone())
+            .expect("receipt for a duplicate must be producible");
+        assert!(!receipt.is_empty());
     }
 
     #[test]
