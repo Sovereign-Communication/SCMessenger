@@ -17,14 +17,14 @@ findings fail the gate, and the blocking pass output is byte-identical to #437.
 
 | | count |
 |---|---|
-| Findings reported by #437 | 33 |
+| Findings reported by #437 | 34 |
 | Detector false positives, fixed in the detector | 4 |
 | Findings exempted instead of fixed | 0 |
 | Collaterals removed with them (not findings) | 1 |
 | Genuinely dead declarations removed | 23 |
-| Remaining, genuinely unwired | 6 |
+| Remaining, genuinely unwired | 7 |
 
-The backlog is not zero, and it should not be. The remaining 6 are
+The backlog is not zero, and it should not be. The remaining 7 are
 **unwired features** -- not dead code, and not detector noise. Each has a
 KDoc stating an intended caller that does not exist. They stay flagged,
 because they are real defects of a different kind.
@@ -36,6 +36,7 @@ because they are real defects of a different kind.
 | `BleScanner.onTransportPause` | `android/app/src/main/java/com/scmessenger/android/transport/ble/BleScanner.kt` | reported by the scan; 0 external callers | KDoc says 'Called when the app is backgrounded or the user explicitly pauses BLE'. No call site exists. BleScannerTest covers it directly, so BLE pause-on-background is unwired. |
 | `ChatViewModel.getRetryDelayForAttempt` | `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ChatViewModel.kt` | reported by the scan; 0 external callers | KDoc says 'for display in message retry timing'. No UI reads it. |
 | `GhostIdentityGate.shouldRenderAsNode` | `android/app/src/main/java/com/scmessenger/android/data/GhostIdentityGate.kt` | reported by the scan; 0 external callers | Documented as a UI convenience (never let a ghost be online) but no UI calls it. GhostIdentityGateTest calls it directly, so the code is exercised while the app never reaches it - the decideCommand shape: tests green, feature absent. |
+| `LogDeduper.trackedKeyCount` | `android/app/src/main/java/com/scmessenger/android/utils/LogDeduper.kt` | reported by the scan; 0 external callers | Test-only diagnostics accessor (its own doc says "for tests and diagnostics"). LogDeduperTest asserts age and memory-pressure eviction through it; no production code reads it. Recorded rather than hidden: it is an observability seam, not a missing user-facing feature, and should either gain a diagnostics caller or move behind a test-only accessor when the detector supports one. |
 | `MainViewModel.consumeRequestsInboxNav` | `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MainViewModel.kt` | reported by the scan; 0 external callers | Sibling consumeChatNav() IS called from the UI. The requests-inbox equivalent has no caller, so that navigation target is never consumed. |
 | `MeshRepository.importSeedAddresses` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | reported by the scan; 0 external callers | Added by the train as an explicit parity seam and the source says so: "No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1." MeshRepositorySeedImportTest calls it directly, so the code is exercised while the app never reaches it. iOS calls the same-named function from JoinMeshView.swift:168; Android's JoinMeshScreen.kt does not. This is the decideCommand shape: tests green, feature absent. |
 | `TransportManager.attemptEscalation` | `android/app/src/main/java/com/scmessenger/android/transport/TransportManager.kt` | reported by the scan; 0 external callers | KDoc says 'Called when a peer is discovered on BLE'. No such call site exists, so BLE-to-WiFi escalation never runs. The implementation is intact and self-contained. |
@@ -52,7 +53,7 @@ separately so they do not inflate the finding arithmetic above.
 
 | Symbol | File | Evidence (re-derived on every run) | Note |
 |---|---|---|---|
-| `TLV_TYPE_PORT` | `android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt` | 0 code references across 175 Kotlin files (comments stripped) | orphaned once its only two users were deleted |
+| `TLV_TYPE_PORT` | `android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt` | 0 code references across 176 Kotlin files (comments stripped) | orphaned once its only two users were deleted |
 
 ## Removed as genuinely dead
 
@@ -63,29 +64,29 @@ fail the build rather than sit in this table.
 
 | Declaration | File | Evidence (re-derived on every run) | Note |
 |---|---|---|---|
-| `AnrEvent.toJson` | `android/app/src/main/java/com/scmessenger/android/service/PerformanceMonitor.kt` | 0 code references across 175 Kotlin files (comments stripped) | hand-rolled JSON, zero refs; the AnrEvent class is used and was kept |
-| `AnrWatchdog.getTotalAnrEvents` | `android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic accessor, zero refs; the backing field is still used and was kept |
-| `IdentityCreationCoordinator.isBackupAvailable` | `android/app/src/main/java/com/scmessenger/android/data/IdentityCreationCoordinator.kt` | 0 code references across 175 Kotlin files (comments stripped) | zero refs |
-| `MainViewModel.clearIdentityError` | `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MainViewModel.kt` | 0 code references across 175 Kotlin files (comments stripped) | zero refs |
-| `MeshRepository.exportLogs` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | logging passthrough, zero refs |
-| `MeshRepository.getDeviceId` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | device-management passthrough, zero refs |
-| `MeshRepository.getDiscoveredPeerCount` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
-| `MeshRepository.getLedgerSummary` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
-| `MeshRepository.getMissingRuntimePermissions` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
-| `MeshRepository.getPendingOutboxCount` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
-| `MeshRepository.getRegistrationState` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | device-management passthrough, zero refs |
-| `MeshRepository.getSeniorityTimestamp` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | device-management passthrough, zero refs |
-| `MeshRepository.getServiceStateName` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
-| `MeshRepository.recordConnection` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | ledger passthrough, zero refs. recordConnectionFailure IS called and was kept |
-| `MeshRepository.signData` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | crypto passthrough, zero refs |
-| `MeshRepository.testLedgerRelayConnectivity` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | diagnostic helper, zero refs |
-| `MeshRepository.unsubscribeTopic` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | its only caller was the deleted TopicManager.unsubscribe |
-| `MeshRepository.verifySignature` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 175 Kotlin files (comments stripped) | crypto passthrough, zero refs |
-| `OnAnrDetected` | `android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt` | 0 code references across 175 Kotlin files (comments stripped) | interface declared, never implemented or referenced anywhere; reported as OnAnrDetected.onAnr |
-| `SettingsViewModel.resetSettingsToDefault` | `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/SettingsViewModel.kt` | 0 code references across 175 Kotlin files (comments stripped) | zero refs |
-| `TopicManager.unsubscribe` | `android/app/src/main/java/com/scmessenger/android/data/TopicManager.kt` | 0 code references across 175 Kotlin files (comments stripped) | zero refs; it was the only caller of MeshRepository.unsubscribeTopic |
-| `WifiAwareTransport.decodePortTlv` | `android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt` | 0 code references across 175 Kotlin files (comments stripped) | TLV codec, zero refs |
-| `WifiAwareTransport.encodePortTlv` | `android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt` | 0 code references across 175 Kotlin files (comments stripped) | TLV codec, zero refs |
+| `AnrEvent.toJson` | `android/app/src/main/java/com/scmessenger/android/service/PerformanceMonitor.kt` | 0 code references across 176 Kotlin files (comments stripped) | hand-rolled JSON, zero refs; the AnrEvent class is used and was kept |
+| `AnrWatchdog.getTotalAnrEvents` | `android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic accessor, zero refs; the backing field is still used and was kept |
+| `IdentityCreationCoordinator.isBackupAvailable` | `android/app/src/main/java/com/scmessenger/android/data/IdentityCreationCoordinator.kt` | 0 code references across 176 Kotlin files (comments stripped) | zero refs |
+| `MainViewModel.clearIdentityError` | `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/MainViewModel.kt` | 0 code references across 176 Kotlin files (comments stripped) | zero refs |
+| `MeshRepository.exportLogs` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | logging passthrough, zero refs |
+| `MeshRepository.getDeviceId` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | device-management passthrough, zero refs |
+| `MeshRepository.getDiscoveredPeerCount` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
+| `MeshRepository.getLedgerSummary` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
+| `MeshRepository.getMissingRuntimePermissions` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
+| `MeshRepository.getPendingOutboxCount` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
+| `MeshRepository.getRegistrationState` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | device-management passthrough, zero refs |
+| `MeshRepository.getSeniorityTimestamp` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | device-management passthrough, zero refs |
+| `MeshRepository.getServiceStateName` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic passthrough, zero refs |
+| `MeshRepository.recordConnection` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | ledger passthrough, zero refs. recordConnectionFailure IS called and was kept |
+| `MeshRepository.signData` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | crypto passthrough, zero refs |
+| `MeshRepository.testLedgerRelayConnectivity` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | diagnostic helper, zero refs |
+| `MeshRepository.unsubscribeTopic` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | its only caller was the deleted TopicManager.unsubscribe |
+| `MeshRepository.verifySignature` | `android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt` | 0 code references across 176 Kotlin files (comments stripped) | crypto passthrough, zero refs |
+| `OnAnrDetected` | `android/app/src/main/java/com/scmessenger/android/service/AnrWatchdog.kt` | 0 code references across 176 Kotlin files (comments stripped) | interface declared, never implemented or referenced anywhere; reported as OnAnrDetected.onAnr |
+| `SettingsViewModel.resetSettingsToDefault` | `android/app/src/main/java/com/scmessenger/android/ui/viewmodels/SettingsViewModel.kt` | 0 code references across 176 Kotlin files (comments stripped) | zero refs |
+| `TopicManager.unsubscribe` | `android/app/src/main/java/com/scmessenger/android/data/TopicManager.kt` | 0 code references across 176 Kotlin files (comments stripped) | zero refs; it was the only caller of MeshRepository.unsubscribeTopic |
+| `WifiAwareTransport.decodePortTlv` | `android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt` | 0 code references across 176 Kotlin files (comments stripped) | TLV codec, zero refs |
+| `WifiAwareTransport.encodePortTlv` | `android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt` | 0 code references across 176 Kotlin files (comments stripped) | TLV codec, zero refs |
 
 ## Detector false positives - per-finding evidence
 

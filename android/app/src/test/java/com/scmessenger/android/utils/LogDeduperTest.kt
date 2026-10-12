@@ -59,8 +59,12 @@ class LogDeduperTest {
     @Test
     fun idleKeysAreEvictedByAgeNotByCount() {
         val d = LogDeduper(minIntervalMs = 60_000, refreshIntervalMs = 300_000)
-        // Many distinct volatile-looking mDNS keys: nothing is capped while they are fresh.
-        for (i in 0 until 200) d.evaluate(debug, "mDNS key${i}x event", 0)
+        // Many distinct mDNS keys: nothing is capped while they are fresh. Digits are
+        // normalised to "N" by keyFor, so the distinguishing suffix must be letters.
+        for (i in 0 until 200) {
+            val suffix = i.toString().map { 'g' + it.digitToInt() }.joinToString("")
+            d.evaluate(debug, "mDNS key${suffix}x event", 0)
+        }
         assertTrue(d.trackedKeyCount() > 64)
         // Past 2x refresh with no sightings, the next sweep drops them all.
         d.evaluate(debug, "Mesh Stats: peers=1", 700_000)
