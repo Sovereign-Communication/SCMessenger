@@ -18,110 +18,28 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
-  NDK_VERSION: r27
 
-# WHY EVERY STEP BELOW IS GATED
-# ------------------------------
-# All five jobs compile or generate bindings for the shared Rust core.
-# cross.yml already ignores documentation-only diffs at the trigger, but it still
-# woke a macOS build, a macOS bindings job and five ubuntu jobs for an
-# Android-only Kotlin diff, which cannot change a byte of what they compile.
-# detect-platform-change reports rust_relevant=false for exactly that diff, and
-# true for anything it cannot classify (workflow edits, new top-level files), so
-# a lane is only quiet when the classifier can prove it has nothing to observe.
-# Each job still starts and completes green, so the check keeps reporting
-# instead of vanishing from the PR.
+# SCOPE OF THIS WORKFLOW
+# ----------------------
+# This file used to also build the four Android ABIs, both iOS targets and the
+# Kotlin/Swift bindings. Every one of those was a duplicate of a canonical job
+# that stays: Android (4 ABIs) is built by "Android Debug APK" in mobile.yml
+# (gradle buildRustAndroid compiles all four and verify_apk_native_libs.py checks
+# them), iOS device+simulator by "iOS Build" in mobile.yml and ios-build-test.yml,
+# and the Kotlin/Swift bindings by "FFI Surface Contract" in ci.yml. Nothing
+# consumed the uploaded artifacts. What remains is the one lane with no other
+# owner on pull requests: wasm32.
+#
+# The job always starts and completes green, so its check keeps reporting; its
+# steps are skipped when detect-platform-change proves the diff cannot affect
+# the Rust workspace (it fails open on anything it cannot classify).
 
 jobs:
-  android:
-    name: Android (${{ matrix.abi }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - abi: arm64-v8a
-            target: aarch64-linux-android
-          - abi: armeabi-v7a
-            target: armv7-linux-androideabi
-          - abi: x86_64
-            target: x86_64-linux-android
-          - abi: x86
-            target: i686-linux-android
-    steps:
-      - uses: actions/checkout@v7
-      - name: Detect Rust-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true'
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
-        with:
-          key: android-${{ matrix.abi }}
-      - name: Install cargo-ndk
-        if: steps.platform.outputs.rust_relevant == 'true'
-        run: cargo install cargo-ndk
-      - name: Install Android NDK
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
-      - name: Build for ${{ matrix.abi }}
-        if: steps.platform.outputs.rust_relevant == 'true'
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: cargo ndk -t ${{ matrix.abi }} build -p scmessenger-core --release
-      - name: Upload artifacts
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-${{ matrix.abi }}
-          path: target/${{ matrix.target }}/release/libscmessenger_core.a
-
-  ios:
-    name: iOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Detect Rust-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true'
-        with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
-      - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
-        with:
-          key: ios
-      - name: Build for aarch64-apple-ios
-        if: steps.platform.outputs.rust_relevant == 'true'
-        run: cargo build --target aarch64-apple-ios -p scmessenger-core --release
-      - name: Build for aarch64-apple-ios-sim
-        if: steps.platform.outputs.rust_relevant == 'true'
-        run: cargo build --target aarch64-apple-ios-sim -p scmessenger-core --release
-      - name: Upload aarch64-apple-ios
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-aarch64
-          path: target/aarch64-apple-ios/release/libscmessenger_core.a
-      - name: Upload aarch64-apple-ios-sim
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-aarch64-sim
-          path: target/aarch64-apple-ios-sim/release/libscmessenger_core.a
-
   wasm:
     name: WASM
     runs-on: ubuntu-latest
@@ -138,6 +56,7 @@ jobs:
         if: steps.platform.outputs.rust_relevant == 'true'
         with:
           key: wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build for wasm32-unknown-unknown
         if: steps.platform.outputs.rust_relevant == 'true'
         run: cargo build --target wasm32-unknown-unknown -p scmessenger-wasm --release
@@ -147,72 +66,3 @@ jobs:
         with:
           name: wasm
           path: target/wasm32-unknown-unknown/release/
-
-  bindings-kotlin:
-    name: Bindings (Kotlin)
-    runs-on: ubuntu-latest
-    needs: android
-    steps:
-      - uses: actions/checkout@v7
-      - name: Detect Rust-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
-        with:
-          key: bindings-kotlin
-      - name: Download Android arm64 cdylib
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: android-arm64-v8a
-          path: target/aarch64-linux-android/release/
-      - name: Generate Kotlin bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
-        env:
-          SCMESSENGER_CDYLIB_PATH: target/aarch64-linux-android/release/libscmessenger_core.a
-        run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
-      - name: Upload Kotlin bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: bindings-kotlin
-          path: core/target/generated-sources/uniffi/kotlin/
-
-  bindings-swift:
-    name: Bindings (Swift)
-    runs-on: macos-latest
-    needs: ios
-    steps:
-      - uses: actions/checkout@v7
-      - name: Detect Rust-relevant change
-        id: platform
-        uses: ./.github/actions/detect-platform-change
-      - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: steps.platform.outputs.rust_relevant == 'true'
-        with:
-          key: bindings-swift
-      - name: Download iOS arm64 cdylib
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: ios-aarch64
-          path: target/aarch64-apple-ios/release/
-      - name: Generate Swift bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
-        env:
-          # gen_swift patches nonisolated(unsafe) onto UniFFI converter methods
-          # so the generated SCMessengerCore.swift compiles under Swift 6 strict
-          # concurrency (MainActor isolation defaults).
-          SCMESSENGER_CDYLIB_PATH: target/aarch64-apple-ios/release/libscmessenger_core.a
-        run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
-      - name: Upload Swift bindings
-        if: steps.platform.outputs.rust_relevant == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: bindings-swift
-          path: core/target/generated-sources/uniffi/swift/
