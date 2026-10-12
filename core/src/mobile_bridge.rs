@@ -1120,14 +1120,14 @@ impl MeshService {
                                                                         s.messages_relayed += 1;
                                                                     } else {
                                                                         crate::message_events::log_rx_drop(
-                                                                            &msg.id,
+                                                                            Some(&msg.id),
                                                                             "onion_relay",
                                                                             "next_hop_key_invalid",
                                                                         );
                                                                     }
                                                                 } else {
                                                                     crate::message_events::log_rx_drop(
-                                                                        &msg.id,
+                                                                        Some(&msg.id),
                                                                         "onion_relay",
                                                                         "next_hop_not_hex",
                                                                     );

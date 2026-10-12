@@ -5693,7 +5693,7 @@ fn rx_drop_limited(msg_id: &str, stage: &str, reason: &str) {
         if let Some(n) = suppressed {
             tracing::info!("[RX-DROP] suppressed={} stage={}", n, stage);
         }
-        crate::message_events::log_rx_drop(msg_id, stage, reason);
+        crate::message_events::log_rx_drop(Some(msg_id), stage, reason);
     }
 }
 

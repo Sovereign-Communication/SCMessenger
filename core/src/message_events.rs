@@ -614,14 +614,14 @@ y",
     #[test]
     fn rx_drop_marker_is_stable_and_sanitized() {
         assert_eq!(
-            fmt_rx_drop("5e7b311b-ef47", "receive", "decrypt_failed"),
+            fmt_rx_drop(Some("5e7b311b-ef47"), "receive", "decrypt_failed"),
             "[RX-DROP] msg=5e7b311b-ef47 stage=receive reason=decrypt_failed"
         );
-        let hostile = fmt_rx_drop("id\n[RX-DROP] msg=evil", "st age", "");
+        let hostile = fmt_rx_drop(Some("id\n[RX-DROP] msg=evil"), "st age", "");
         assert!(!hostile.contains('\n'));
         assert_eq!(hostile.matches("msg=").count(), 1);
         assert!(hostile.ends_with("reason=unknown"));
-        let long = fmt_rx_drop(&"a".repeat(500), "s", "r");
+        let long = fmt_rx_drop(Some(&"a".repeat(500)), "s", "r");
         assert!(long.len() < 200);
     }
 
