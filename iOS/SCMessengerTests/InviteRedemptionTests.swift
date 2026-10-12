@@ -38,7 +38,7 @@ final class InviteRedemptionTests: XCTestCase {
         var ledger = InviteClaimLedger()
         var calls = 0
         for _ in 0..<10 {
-            _ = ledger.consume("SCI1:frame") { _ -> Void in calls += 1 }
+            _ = ledger.consume("SCI1:frame") { _ in calls += 1 }
         }
         XCTAssertEqual(calls, 1)
     }
