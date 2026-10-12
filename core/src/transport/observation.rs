@@ -390,9 +390,10 @@ impl ConnectionTracker {
                     }
                 }
                 Protocol::Tcp(p) | Protocol::Udp(p) => {
-                    if port.replace(p).is_some() {
+                    if port.is_some() {
                         return None;
                     }
+                    port = Some(p);
                 }
                 _ => {}
             }
