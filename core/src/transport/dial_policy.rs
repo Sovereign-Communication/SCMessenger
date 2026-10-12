@@ -218,6 +218,12 @@ pub struct PerPeerBackoffState {
     authenticated_before: bool,
     /// Wake-credit buckets, one per trigger (bounded by the trigger count).
     wake_buckets: HashMap<WakeTrigger, WakeBucket>,
+    /// When the in-flight dial was admitted by `register_dial_attempt`.
+    attempt_started_at: Option<Instant>,
+    /// When the latest admitted wake credit was granted. A wake that lands
+    /// while a dial is in flight must survive that dial's failure: the dial
+    /// began before the event, so its failure says nothing about the event.
+    woken_at: Option<Instant>,
 }
 
 impl PerPeerBackoffState {
@@ -237,7 +243,22 @@ impl PerPeerBackoffState {
             success_rate: STABILITY_PRIOR,
             authenticated_before: false,
             wake_buckets: HashMap::new(),
+            attempt_started_at: None,
+            woken_at: None,
         }
+    }
+
+    /// Consume the in-flight marker. Returns true when an admitted wake
+    /// landed at or after the in-flight dial started (so the failure that is
+    /// being recorded must not erase the wake credit).
+    fn take_wake_during_attempt(&mut self) -> bool {
+        let woke = matches!(
+            (self.attempt_started_at, self.woken_at),
+            (Some(started), Some(woken)) if woken >= started
+        );
+        self.attempt_started_at = None;
+        self.woken_at = None;
+        woke
     }
 
     /// Fold a connect outcome into this address's stability estimate.
@@ -277,6 +298,15 @@ impl PerPeerBackoffState {
         self.backoff_duration = doubled.min(ceiling);
         let wait = jittered(self.backoff_duration);
         self.next_attempt_at = now + wait;
+        // TOCTOU guard: a wake admitted while this dial was in flight is
+        // honoured (one floor interval) instead of being overwritten by the
+        // jittered backoff. The ladder above still advanced.
+        if self.take_wake_during_attempt() {
+            let due = now + BACKOFF_FLOOR;
+            if due < self.next_attempt_at {
+                self.next_attempt_at = due;
+            }
+        }
 
         debug!(
             peer_id=?self.peer_id,
@@ -310,6 +340,12 @@ impl PerPeerBackoffState {
         self.backoff_duration = ceiling;
         let wait = jittered(ceiling);
         self.next_attempt_at = now + wait;
+        if self.take_wake_during_attempt() {
+            let due = now + BACKOFF_FLOOR;
+            if due < self.next_attempt_at {
+                self.next_attempt_at = due;
+            }
+        }
         self.dormant = true;
         info!(
             "[DIAL] dormant peer={} reason=permanent_failure next_wake=event|backoff_ms={}",
@@ -368,6 +404,7 @@ impl PerPeerBackoffState {
         if earliest < self.next_attempt_at {
             self.next_attempt_at = earliest;
         }
+        self.woken_at = Some(now);
         self.dormant = false;
         if was_dormant {
             info!(
@@ -398,6 +435,8 @@ impl PerPeerBackoffState {
         self.next_attempt_at = now;
         self.dormant = false;
         self.authenticated_before = true;
+        self.attempt_started_at = None;
+        self.woken_at = None;
 
         info!(
             peer_id=?self.peer_id,
@@ -489,6 +528,8 @@ impl DialPolicyManager {
         }
 
         *dial_count += 1;
+        // Mark the attempt in flight (see `PerPeerBackoffState::woken_at`).
+        state.attempt_started_at = Some(now);
         debug!(
             addr_key=%addr_key,
             concurrent_count=*dial_count,
@@ -804,6 +845,37 @@ impl Default for CircuitRelayLadder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Test support: run `job(worker_index)` on `workers` OS threads and collect
+/// the results, failing (instead of hanging) if the workers do not finish in
+/// time, which is how a lock-order deadlock shows up.
+#[cfg(test)]
+pub(crate) async fn run_contended<F>(workers: usize, job: F) -> Vec<usize>
+where
+    F: Fn(usize) -> usize + Send + Sync + 'static,
+{
+    let job = Arc::new(job);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    for index in 0..workers {
+        let job = job.clone();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(index)))
+                .map_err(|_| ());
+            let _ = tx.send(outcome);
+        });
+    }
+    drop(tx);
+    let mut results = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let outcome = tokio::time::timeout(Duration::from_secs(20), rx.recv())
+            .await
+            .expect("workers finished in time (no deadlock)")
+            .expect("worker channel open");
+        results.push(outcome.expect("worker did not panic"));
+    }
+    results
 }
 
 #[cfg(test)]
@@ -1378,5 +1450,193 @@ mod tests {
         assert!(!key.contains("/p2p/"));
         assert!(key.contains("192.168.1.1"));
         assert!(key.contains("4001"));
+    }
+
+    // ---- Concurrency discipline and failure handling (PR 520) ----
+
+    fn dormant_entry(m: &DialPolicyManager, key: &str, pid: PeerId) {
+        for _ in 0..4 {
+            m.record_dial_failure(key, Some(pid));
+        }
+        assert!(m.get_backoff_state(key).expect("entry").dormant);
+    }
+
+    #[tokio::test]
+    async fn concurrent_wake_storm_coalesces_to_one_credit_per_source() {
+        let m = Arc::new(DialPolicyManager::new());
+        let pid = PeerId::random();
+        dormant_entry(&m, "/ip4/10.0.0.1/tcp/1", pid);
+        dormant_entry(&m, "/ip4/10.0.0.2/tcp/1", pid);
+        let shared = m.clone();
+        let granted = run_contended(8, move |_| {
+            let mut total = 0usize;
+            for _ in 0..300 {
+                total += shared.wake_peer(pid, WakeTrigger::Identify);
+                total += shared.wake_all(WakeTrigger::InboundConnection);
+            }
+            total
+        })
+        .await;
+        // 2 entries x 2 sources, one credit each, however many events fire.
+        assert_eq!(granted.iter().sum::<usize>(), 4);
+    }
+
+    #[tokio::test]
+    async fn network_change_storm_grants_one_credit_per_waiting_entry() {
+        use crate::transport::discovery_scheduler::NetworkEvent;
+        let m = Arc::new(DialPolicyManager::new());
+        for i in 0..3 {
+            dormant_entry(&m, &format!("/ip4/10.0.1.{i}/tcp/1"), PeerId::random());
+        }
+        let shared = m.clone();
+        let granted = run_contended(8, move |w| {
+            let mut total = 0usize;
+            for i in 0..300 {
+                let event = match (w + i) % 3 {
+                    0 => NetworkEvent::WifiChanged,
+                    1 => NetworkEvent::CellularChanged,
+                    _ => NetworkEvent::LanInterfaceChanged,
+                };
+                total += shared.on_network_event(&event);
+            }
+            total
+        })
+        .await;
+        assert_eq!(granted.iter().sum::<usize>(), 3);
+        // Peer-loss style events never wake anyone, even under load.
+        assert_eq!(m.on_network_event(&NetworkEvent::AllPeersLost), 0);
+    }
+
+    #[tokio::test]
+    async fn mixed_operations_under_contention_do_not_deadlock_or_leak_slots() {
+        let m = Arc::new(DialPolicyManager::new());
+        let pids: Vec<PeerId> = (0..4).map(|_| PeerId::random()).collect();
+        let keys: Vec<String> = (0..4)
+            .map(|i| format!("/ip4/10.1.0.{i}/tcp/4001"))
+            .collect();
+        let shared = m.clone();
+        let _ = run_contended(8, move |w| {
+            let mut registered = 0usize;
+            for i in 0..400usize {
+                let k = (w + i) % keys.len();
+                let key = &keys[k];
+                let pid = pids[k];
+                match (w + i) % 7 {
+                    0 => {
+                        if shared.register_dial_attempt(key, Some(pid)) {
+                            registered += 1;
+                            shared.record_dial_failure(key, Some(pid));
+                            shared.complete_dial_attempt(key);
+                        }
+                    }
+                    1 => {
+                        shared.wake_peer(pid, WakeTrigger::InboundConnection);
+                    }
+                    2 => {
+                        shared.wake_all(WakeTrigger::NetworkChange);
+                    }
+                    3 => shared.reset_peer_backoff(pid),
+                    4 => shared.advance_clock(Duration::from_secs(5)),
+                    5 => shared.prune_old_entries(Duration::from_secs(3600)),
+                    _ => {
+                        let _ = shared.get_backoff_state(key);
+                        let _ = shared.ceiling_for(key);
+                        shared.record_permanent_failure(key, Some(pid));
+                    }
+                }
+            }
+            registered
+        })
+        .await;
+        let concurrent = m.concurrent_dials.read();
+        assert!(
+            concurrent.values().all(|count| *count == 0),
+            "every registered dial was completed"
+        );
+    }
+
+    #[test]
+    fn wake_during_inflight_dial_survives_its_failure() {
+        let key = "/ip4/10.2.0.1/tcp/4001";
+        let run = |wake: bool| {
+            let m = DialPolicyManager::new();
+            let pid = PeerId::random();
+            dormant_entry(&m, key, pid);
+            let before = m.get_backoff_state(key).expect("entry").attempt_count;
+            m.advance_clock(Duration::from_secs(3600));
+            assert!(m.register_dial_attempt(key, Some(pid)));
+            if wake {
+                assert_eq!(m.wake_peer(pid, WakeTrigger::InboundDial), 1);
+            }
+            m.record_dial_failure(key, Some(pid));
+            m.complete_dial_attempt(key);
+            let st = m.get_backoff_state(key).expect("entry");
+            // The ladder advanced either way (a wake never resets it).
+            assert_eq!(st.attempt_count, before + 1);
+            st.next_attempt_at <= m.now() + BACKOFF_FLOOR
+        };
+        assert!(
+            run(true),
+            "a wake that landed mid-dial pulls the retry to the floor"
+        );
+        assert!(!run(false), "without a wake the jittered backoff applies");
+    }
+
+    #[test]
+    fn dial_failure_paths_are_total_and_always_reschedule() {
+        let m = DialPolicyManager::new();
+        let pid = PeerId::random();
+        let key = "/ip4/10.3.0.1/tcp/1";
+
+        // Unknown keys and peers: handled, never a panic.
+        m.complete_dial_attempt("/ip4/10.9.9.9/tcp/1");
+        assert!(!m.wake_addr("/ip4/10.9.9.9/tcp/1", WakeTrigger::AddressLearned));
+        assert_eq!(m.wake_peer(pid, WakeTrigger::Identify), 0);
+        m.reset_peer_backoff(pid);
+
+        // A double complete cannot underflow the in-flight count.
+        assert!(m.register_dial_attempt(key, Some(pid)));
+        m.complete_dial_attempt(key);
+        m.complete_dial_attempt(key);
+        assert_eq!(*m.concurrent_dials.read().get(key).expect("slot"), 0);
+
+        // Every failure schedules strictly in the future, within the ceiling.
+        for _ in 0..40 {
+            let before = m.now();
+            m.record_dial_failure(key, Some(pid));
+            let st = m.get_backoff_state(key).expect("entry");
+            assert!(st.next_attempt_at > before);
+            assert!(st.backoff_duration <= st.ceiling().max(BACKOFF_FLOOR));
+        }
+
+        // Saturation instead of overflow.
+        let mut st = PerPeerBackoffState::new(None);
+        st.attempt_count = u32::MAX;
+        st.on_dial_failure_at(Instant::now(), BACKOFF_CEILING_BASE);
+        assert_eq!(st.attempt_count, u32::MAX);
+    }
+
+    #[test]
+    fn permanent_failure_goes_dormant_and_is_retried_after_wake_or_backoff() {
+        let m = DialPolicyManager::new();
+        let pid = PeerId::random();
+        let key = "/ip4/10.4.0.1/tcp/1";
+        m.record_permanent_failure(key, Some(pid));
+        assert!(m.get_backoff_state(key).expect("entry").dormant);
+        assert!(
+            !m.register_dial_attempt(key, Some(pid)),
+            "waiting, not dialing"
+        );
+
+        // Event-driven path: a wake brings the retry to the floor.
+        assert_eq!(m.wake_peer(pid, WakeTrigger::AddressLearned), 1);
+        m.advance_clock(BACKOFF_FLOOR + Duration::from_millis(100));
+        assert!(m.register_dial_attempt(key, Some(pid)));
+        m.complete_dial_attempt(key);
+
+        // Time-driven path: with no wake, the backoff still elapses (never dead).
+        m.record_permanent_failure(key, Some(pid));
+        m.advance_clock(m.ceiling_for(key) + BACKOFF_FLOOR);
+        assert!(m.register_dial_attempt(key, Some(pid)));
     }
 }

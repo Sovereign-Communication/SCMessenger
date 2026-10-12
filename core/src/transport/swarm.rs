@@ -8367,6 +8367,36 @@ pub async fn start_swarm_with_config(
                                     }
                                     Err(e) => {
                                         let err_msg: String = format!("{}", e);
+                                        // A synchronous dial error must be rescheduled, not
+                                        // just released: without a recorded failure the
+                                        // address stays eligible and a revival loop would
+                                        // re-dial it immediately. PeerCondition-false means
+                                        // a connection/dial already exists (not a failure);
+                                        // NoAddresses cannot succeed until an address is
+                                        // learned, so it goes Dormant (an AddressLearned
+                                        // wake or the jittered backoff retries it, never
+                                        // dead-marked).
+                                        match &e {
+                                            libp2p::swarm::DialError::DialPeerConditionFalse(_) => {
+                                                tracing::debug!(
+                                                    addr=%addr_key,
+                                                    "[DIAL] dial not issued: peer already connected or dialing"
+                                                );
+                                            }
+                                            libp2p::swarm::DialError::NoAddresses => {
+                                                dial_policy_manager
+                                                    .record_permanent_failure(&addr_key, target_peer_id);
+                                            }
+                                            _ => {
+                                                dial_policy_manager
+                                                    .record_dial_failure(&addr_key, target_peer_id);
+                                            }
+                                        }
+                                        tracing::warn!(
+                                            addr=%addr_key,
+                                            error=%err_msg,
+                                            "[DIAL] synchronous dial error; rescheduled with backoff"
+                                        );
                                         // P1 Item 3: Complete the dial attempt since it failed to queue
                                         dial_policy_manager.complete_dial_attempt(&addr_key);
                                         let _ = reply.send(Err(err_msg)).await;
@@ -8684,6 +8714,16 @@ pub async fn start_swarm_with_config(
                                             break;
                                         }
                                         Err(e) => {
+                                            // Reschedule (event-driven backoff) before
+                                            // releasing the slot; a bare release would leave
+                                            // this seed address immediately eligible again.
+                                            if !matches!(
+                                                e,
+                                                libp2p::swarm::DialError::DialPeerConditionFalse(_)
+                                            ) {
+                                                dial_policy_manager
+                                                    .record_dial_failure(&candidate_key, None);
+                                            }
                                             dial_policy_manager.complete_dial_attempt(&candidate_key);
                                             tracing::warn!("Seed peer dial failed: {}: {}", candidate, e);
                                             last_error = format!("{}: {}", candidate, e);
