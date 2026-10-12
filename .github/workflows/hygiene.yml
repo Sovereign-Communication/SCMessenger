@@ -11,12 +11,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   hygiene-checks:
     name: Repository Hygiene Checks
+    # Pure git/grep checks (10-15s of work). Hosted: OCI queue waits for this job reached 80 minutes.
     runs-on: ubuntu-latest
     
     steps:
@@ -325,6 +326,12 @@ jobs:
       - name: Prove the duplicate-key check can still fail
         run: python3 scripts/check_workflow_yaml.py --self-test
 
+      # CI_RUNNER selector (PR 557): evaluates the real runs-on expressions over
+      # every runner/scope/event combination and fails if any is empty, if an
+      # untrusted event leaves the hosted default, or if unset != legacy.
+      - name: Verify the CI_RUNNER selector weakens no check
+        run: python3 scripts/test_ci_runner_selector.py
+
       # WHY THIS LIVES IN THE EXISTING HYGIENE JOB
       # ------------------------------------------
       # A queue ticket whose status line advertises an open PR that has already
@@ -369,3 +376,6 @@ jobs:
           echo "For comprehensive security scanning, see the 'Security Scan' workflow"
           echo "For code quality checks, see the 'Lint' workflow"
           echo ""
+      - name: Clean self-hosted workspace
+        if: always()
+        uses: ./.github/actions/self-hosted-cleanup

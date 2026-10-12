@@ -55,7 +55,6 @@ fn relay_stats_and_health_reflect_recorded_events() {
             .update_relay_metrics(RelayMetrics {
                 peer_id,
                 addresses: vec![addr.clone()],
-                is_headless: false,
                 uptime_ratio: 0.5,
                 avg_latency_ms: 100,
                 bandwidth_estimate: 0,

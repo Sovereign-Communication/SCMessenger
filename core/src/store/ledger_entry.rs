@@ -199,7 +199,7 @@ pub const MAX_SEED_LEDGER_ENTRIES: usize = 16;
 
 /// Maximum number of [`LedgerEntry`] records retained in the in-memory ledger.
 /// New-insert paths evict the least-useful entry before exceeding this cap.
-const MAX_LEDGER_ENTRIES: usize = 1024;
+pub const MAX_LEDGER_ENTRIES: usize = 1024;
 
 const MAX_LEN_MULTIADDR: usize = 512;
 const MAX_LEN_PEER_ID: usize = 128;

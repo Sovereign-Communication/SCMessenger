@@ -124,12 +124,22 @@ class MeshServiceViewModel @Inject constructor(
      * Toggle the mesh service on/off.
      */
     fun toggleService() {
-        when (serviceState.value) {
-            uniffi.api.ServiceState.STOPPED -> startService()
-            uniffi.api.ServiceState.RUNNING -> stopService()
-            else -> {
-                Timber.w("Cannot toggle service in state: ${serviceState.value}")
+        // STOP-TEARDOWN-TIMEOUT-001 (2026-09-21): teardown is asynchronous, and
+        // a stop the user thinks failed is a stop the user repeats. Measured on
+        // the Pixel: every tap did call stopService(), each one re-entered the
+        // wedged teardown and blocked on the same lifecycle monitor, and the
+        // state read RUNNING throughout, so the UI kept claiming Active. A tap in
+        // STOPPING or STARTING used to be a silent no-op (the old else-branch only
+        // logged). Restart stays reachable only from STOPPED, and every other
+        // state resolves to another stop request rather than a no-op.
+        val state = serviceState.value
+        if (shouldStartFrom(state)) {
+            startService()
+        } else {
+            if (state != uniffi.api.ServiceState.RUNNING) {
+                Timber.i("Toggle in state %s: re-requesting stop", state)
             }
+            stopService()
         }
     }
 
@@ -169,6 +179,18 @@ class MeshServiceViewModel @Inject constructor(
             appendLine("Bytes Transferred: ${formatBytes(stats.bytesTransferred)}")
             appendLine("Uptime: ${formatDuration(stats.uptimeSecs)}")
         }
+    }
+
+    companion object {
+        /**
+         * STOP-TEARDOWN-TIMEOUT-001: only STOPPED may start the mesh. Any other
+         * state -- RUNNING, STARTING, and especially the asynchronous STOPPING --
+         * resolves to a stop request, so a retry can never resurrect a mesh the
+         * user just stopped. Pure, so it is unit-testable without an Android
+         * runtime.
+         */
+        internal fun shouldStartFrom(state: uniffi.api.ServiceState): Boolean =
+            state == uniffi.api.ServiceState.STOPPED
     }
 
     private fun formatBytes(bytes: ULong): String {
