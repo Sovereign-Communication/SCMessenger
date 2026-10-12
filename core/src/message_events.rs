@@ -362,7 +362,11 @@ pub fn fmt_rx_drop(msg_id: Option<&str>, stage: &str, reason: &str) -> String {
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| "-".to_string()),
         sanitize_log_field(stage, 32),
-        sanitize_log_field(reason, 64)
+        if reason.is_empty() {
+            "unknown".to_string()
+        } else {
+            sanitize_log_field(reason, 64)
+        }
     )
 }
 
