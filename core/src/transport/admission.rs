@@ -157,7 +157,9 @@ pub fn classify_exhaustion(err: &(dyn std::error::Error + 'static)) -> Option<Pr
 }
 
 /// True when `err` (or anything in its source chain) is an `io::Error` for
-/// genuine OS resource exhaustion.
+/// genuine OS resource exhaustion. Production classifies through
+/// `classify_exhaustion` to keep the kind; this boolean form is test-only.
+#[cfg(test)]
 pub fn is_os_exhaustion(err: &(dyn std::error::Error + 'static)) -> bool {
     classify_exhaustion(err).is_some()
 }
@@ -226,7 +228,8 @@ fn log_hard_ceiling(context: &str, kind: PressureKind, err: &dyn fmt::Display) {
 }
 
 /// Log `[CONN] hard-ceiling` (rate-limited) and return true when `err` is OS
-/// exhaustion.
+/// exhaustion. Production goes through `note_exhaustion_event`; test-only.
+#[cfg(test)]
 pub fn log_if_hard_ceiling(context: &str, err: &(dyn std::error::Error + 'static)) -> bool {
     match classify_exhaustion(err) {
         Some(kind) => {
@@ -335,6 +338,10 @@ pub struct AdmissionBehaviour {
     /// Inbound paths still waiting for their first validated stamp. An entry
     /// leaves on validation or on close, so the set is bounded by live paths.
     unvalidated_inbound: HashSet<ConnectionId>,
+    /// When the last stranger probe (an envelope signature check plus contact
+    /// lookup) ran on each path. Entries leave on close, so the map is bounded
+    /// by live paths; see [`AdmissionBehaviour::may_probe_stranger`].
+    stranger_probed: HashMap<ConnectionId, Instant>,
     /// Consecutive quiet quanta while a pending cap is in force.
     quiet_quanta: u32,
     /// When the last pressure episode ran (episodes are one per quantum).
@@ -388,6 +395,7 @@ impl AdmissionBehaviour {
             validated_now: 0,
             validated_prev: 0,
             unvalidated_inbound: HashSet::new(),
+            stranger_probed: HashMap::new(),
             quiet_quanta: 0,
             last_episode: None,
             fd_at: now,
@@ -445,12 +453,16 @@ impl AdmissionBehaviour {
         self
     }
 
-    /// An outbound connection attempt started.
+    /// An outbound connection attempt started. Production registers handshakes
+    /// through `track_pending` from the swarm callbacks; test-only.
+    #[cfg(test)]
     pub fn begin_handshake(&mut self, id: ConnectionId, now: Instant) {
         self.track_pending(id, now, false, None);
     }
 
-    /// An inbound connection was accepted and is in its handshake.
+    /// An inbound connection was accepted and is in its handshake. Test-only,
+    /// see [`AdmissionBehaviour::begin_handshake`].
+    #[cfg(test)]
     pub fn begin_inbound_handshake(&mut self, id: ConnectionId, now: Instant) {
         self.track_pending(id, now, true, None);
     }
@@ -582,6 +594,7 @@ impl AdmissionBehaviour {
     ) {
         self.end_handshake(id);
         self.unvalidated_inbound.remove(id);
+        self.stranger_probed.remove(id);
         let outcome = self.ledger.on_closed(peer, id, remaining_established);
         if outcome.was_eviction {
             self.evicted_closed.insert(*id, now);
@@ -607,6 +620,26 @@ impl AdmissionBehaviour {
         self.ledger.stamp_traffic(peer, id, now);
         if self.unvalidated_inbound.remove(id) {
             self.validated_now = self.validated_now.saturating_add(1);
+        }
+    }
+
+    /// Whether a request from a peer without authenticated history may be
+    /// probed now (envelope signature check plus contact lookup, both paid by
+    /// us and free for the sender to trigger). Each path is probed at most once
+    /// per pending allowance, the same locally measured interval a new path
+    /// gets as grace (a few baseline handshakes, never under one scheduling
+    /// quantum). The sender cannot raise its own rate by sending more: extra
+    /// requests inside the interval are simply not validated, which only
+    /// withholds eviction protection from a stranger. Total probe work is
+    /// bounded by the live paths, which the derived total already bounds.
+    pub fn may_probe_stranger(&mut self, id: &ConnectionId, now: Instant) -> bool {
+        let allowance = self.pending_allowance();
+        match self.stranger_probed.get(id) {
+            Some(at) if now.saturating_duration_since(*at) < allowance => false,
+            _ => {
+                self.stranger_probed.insert(*id, now);
+                true
+            }
         }
     }
 
@@ -655,7 +688,9 @@ impl AdmissionBehaviour {
         self.evicted_closed.remove(id).is_some()
     }
 
-    /// Next close request waiting for the swarm, if any.
+    /// Next close request waiting for the swarm, if any. Production drains
+    /// `to_close` in `poll`; test-only.
+    #[cfg(test)]
     pub fn next_close_request(&mut self) -> Option<(PeerId, ConnectionId)> {
         self.to_close.pop_front()
     }
@@ -1275,6 +1310,28 @@ mod tests {
                 )
                 .is_ok());
         }
+    }
+
+    #[test]
+    fn a_stranger_path_is_probed_once_per_allowance_and_is_forgotten_on_close() {
+        let base = Instant::now();
+        let mut b = AdmissionBehaviour::new();
+        let peer = PeerId::random();
+        let allowance = b.pending_allowance();
+        assert!(b.may_probe_stranger(&cid(1), base), "first probe runs");
+        // A flood of requests inside the allowance buys no further probes.
+        for ms in [1u64, 10, 100] {
+            assert!(!b.may_probe_stranger(&cid(1), at(base, ms)));
+        }
+        // Another path has its own allowance.
+        assert!(b.may_probe_stranger(&cid(2), at(base, 5)));
+        // The allowance elapses, so the path may be probed again.
+        let later = base + allowance;
+        assert!(b.may_probe_stranger(&cid(1), later));
+        // Close drops the bookkeeping, so it is bounded by live paths.
+        b.path_closed(&peer, &cid(1), 0, later);
+        b.path_closed(&peer, &cid(2), 0, later);
+        assert!(b.stranger_probed.is_empty());
     }
 
     #[test]

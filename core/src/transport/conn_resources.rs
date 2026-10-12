@@ -161,21 +161,6 @@ pub struct ResourceSnapshot {
     pub rss: Option<u64>,
 }
 
-impl ResourceSnapshot {
-    /// This reading, with every field the probe failed to supply taken from
-    /// `last`. Under descriptor exhaustion the `/proc` reads themselves fail
-    /// (they need a descriptor); losing the memory figures at exactly that
-    /// moment would drop the bound to the pressure cap alone, so the last good
-    /// figure stands in until a probe succeeds again.
-    pub fn or_last(self, last: &ResourceSnapshot) -> ResourceSnapshot {
-        ResourceSnapshot {
-            fd_soft_limit: self.fd_soft_limit.or(last.fd_soft_limit),
-            mem_available: self.mem_available.or(last.mem_available),
-            rss: self.rss.or(last.rss),
-        }
-    }
-}
-
 /// A derived bound and the input that binds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Derived {
@@ -312,7 +297,8 @@ impl ResourceModel {
         self.pressure = None;
     }
 
-    /// True while a pressure cap is in force.
+    /// True while a pressure cap is in force. Test-only.
+    #[cfg(test)]
     pub fn under_pressure(&self) -> bool {
         self.pressure.is_some()
     }
@@ -870,28 +856,6 @@ mod tests {
             decayed >= PRIOR_CONNECTION_BYTES * ESTIMATE_FLOOR_FRACTION,
             "never below the floor"
         );
-    }
-
-    #[test]
-    fn a_failed_probe_keeps_the_last_good_figures() {
-        let good = ResourceSnapshot {
-            fd_soft_limit: Some(1024),
-            mem_available: Some(GIB),
-            rss: Some(100 * 1024 * 1024),
-        };
-        // Under EMFILE the /proc reads fail; getrlimit still answers.
-        let degraded = ResourceSnapshot {
-            fd_soft_limit: Some(1024),
-            mem_available: None,
-            rss: None,
-        };
-        assert_eq!(degraded.or_last(&good), good);
-        let fresh = ResourceSnapshot {
-            fd_soft_limit: Some(2048),
-            mem_available: Some(2 * GIB),
-            rss: Some(1),
-        };
-        assert_eq!(fresh.or_last(&good), fresh, "a successful probe wins");
     }
 
     #[test]

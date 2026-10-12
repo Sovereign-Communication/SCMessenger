@@ -110,9 +110,15 @@ pub const SILENCE_INTERVALS: u32 = 3;
 /// long, treat it as absent and act locally.
 pub const AUTHORITY_DEFER_WINDOWS: u32 = SILENCE_INTERVALS;
 
-/// Number of recent handshakes kept for the local baseline. A window, not a
-/// cap on anything: it bounds the memory of the percentile estimator and
+/// Number of recent handshakes kept for the local baseline. A statistical
+/// sample size, not a resource cap: it limits neither connections, peers nor
+/// paths, only how many timing samples the percentile estimator remembers.
+/// A 90th percentile needs at least 10 samples to be distinct from the
+/// maximum and about three times that for the estimate to stop swinging on a
+/// single outlier, so 32 is the smallest power of two past that point; it also
 /// spans several churn episodes so one burst cannot define the baseline.
+/// It cannot be derived from machine state, because it describes how much
+/// history makes an estimate trustworthy, not how much the machine can carry.
 pub const BASELINE_WINDOW: usize = 32;
 
 /// Percentile of the handshake window used as the baseline. The 90th keeps
@@ -802,7 +808,9 @@ where
     }
 
     /// Record a newly established path with default tie-break metadata.
-    /// See [`PathLedger::on_established_with`].
+    /// See [`PathLedger::on_established_with`]. Production always supplies
+    /// real metadata through `on_established_with`; test-only.
+    #[cfg(test)]
     pub fn on_established(
         &mut self,
         peer: C,
@@ -1262,6 +1270,7 @@ where
     }
 
     /// True while `id` is an evicted path awaiting `ConnectionClosed`.
+    #[cfg(test)]
     pub fn is_closing(&self, peer: &C, id: &I) -> bool {
         self.peers
             .get(peer)
@@ -1270,6 +1279,7 @@ where
     }
 
     /// Live (non-closing) paths for a peer.
+    #[cfg(test)]
     pub fn live_paths(&self, peer: &C) -> usize {
         self.peers.get(peer).map_or(0, |paths| {
             paths.iter().filter(|p| p.closing.is_none()).count()
@@ -1277,6 +1287,7 @@ where
     }
 
     /// Ids of the live (non-closing) paths of a peer.
+    #[cfg(test)]
     pub fn live_ids(&self, peer: &C) -> Vec<I> {
         self.peers.get(peer).map_or_else(Vec::new, |paths| {
             paths
@@ -1288,6 +1299,7 @@ where
     }
 
     /// All tracked paths for a peer, including ones awaiting close.
+    #[cfg(test)]
     pub fn tracked_paths(&self, peer: &C) -> usize {
         self.peers.get(peer).map_or(0, Vec::len)
     }
@@ -1314,6 +1326,7 @@ where
     }
 
     /// Derived budget for one peer right now.
+    #[cfg(test)]
     pub fn budget_of(&self, peer: &C, now: Instant) -> usize {
         self.peers
             .get(peer)

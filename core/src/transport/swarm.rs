@@ -149,10 +149,19 @@ fn envelope_signed_by_known_contact(core: &crate::IronCore, envelope_data: &[u8]
 /// proves nothing (a Sybil can send requests for free); traffic counts only
 /// when the sender is not blocked AND is a peer with authenticated history or
 /// the message is signed by a saved contact.
+///
+/// The signed-by-contact fallback costs an envelope parse, an Ed25519 verify
+/// and a contact-store scan, all triggered for free by any stranger. It is
+/// therefore gated behind admission: `may_probe_stranger` admits one probe per
+/// path per locally measured allowance (derived from the handshake baseline),
+/// so a flood of requests on one path costs one probe, and the number of paths
+/// is itself bounded by the derived total. Peers with authenticated history
+/// never reach the probe, so honest traffic is unaffected.
 fn inbound_message_is_validated(
     core_handle: &Option<Weak<crate::IronCore>>,
     peer_id: PeerId,
     envelope_data: &[u8],
+    may_probe_stranger: impl FnOnce() -> bool,
 ) -> bool {
     let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) else {
         return false;
@@ -165,6 +174,9 @@ fn inbound_message_is_validated(
     }
     if peer_standing_in(&core, peer_id).authenticated {
         return true;
+    }
+    if !may_probe_stranger() {
+        return false;
     }
     let payload = match DriftFrame::from_bytes(envelope_data) {
         Ok(frame) => frame.payload,
@@ -5053,7 +5065,9 @@ pub async fn start_swarm_with_config(
                                 // to a request WE sent. Bare receipt proves nothing.
                                 let admission_validated = match &message {
                                     request_response::Message::Request { request, .. } => {
-                                        inbound_message_is_validated(&core_handle, peer, &request.envelope_data)
+                                        inbound_message_is_validated(&core_handle, peer, &request.envelope_data, || {
+                                            swarm.behaviour_mut().admission.may_probe_stranger(&connection_id, web_time::Instant::now())
+                                        })
                                     }
                                     request_response::Message::Response { request_id, response } => {
                                         // An `accepted` reply from a peer we chose as a
@@ -9423,7 +9437,9 @@ pub async fn start_swarm_with_config(
                                     message: request_response::Message::Request { request, .. },
                                 } = &ev
                                 {
-                                    if inbound_message_is_validated(&core_handle, *peer, &request.envelope_data) {
+                                    if inbound_message_is_validated(&core_handle, *peer, &request.envelope_data, || {
+                                        swarm.behaviour_mut().admission.may_probe_stranger(connection_id, web_time::Instant::now())
+                                    }) {
                                         swarm.behaviour_mut().admission.stamp_traffic(peer, connection_id, web_time::Instant::now());
                                         refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, *peer);
                                     }
