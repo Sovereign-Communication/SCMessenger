@@ -29,6 +29,10 @@ use libp2p::{
 use uuid::Uuid;
 use web_time::Duration;
 
+/// Protocol-level request timeout for address reflection (seconds). The
+/// requester-side await bound in `swarm.rs` is derived from this.
+pub const ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS: u64 = 10;
+
 /// Per-peer cap on simultaneously established connections.
 ///
 /// Handover ghost slots (#417): when a mobile peer switches from Wi-Fi to
@@ -435,7 +439,8 @@ impl IronCoreBehaviour {
                 StreamProtocol::new("/sc/address-reflection/1.0.0"),
                 ProtocolSupport::Full,
             )],
-            request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+            request_response::Config::default()
+                .with_request_timeout(Duration::from_secs(ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS)),
         );
 
         // Request-response for relay (mesh routing - Phase 3)
