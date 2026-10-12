@@ -32,6 +32,7 @@ open func contactsManager()throws  -> ContactManager  {
 open func conversation(peerId: String, limit: UInt32)throws  -> [MessageRecord]  {
 open func count() -> UInt32  {
 open func count() -> UInt32  {
+open func createInviteQr(reachableAddrs: [String], ttlSecs: UInt64)throws  -> String  {
 open func custodyAuditCount() -> UInt32  {
 open func custodyGetRegistrationStateInfo(identityId: String) -> RegistrationStateInfo  {
 open func custodyRegistrationTransitions(identityId: String) -> String  {
@@ -181,6 +182,7 @@ open func recordAbuseSignal(peerId: String, signal: String)  {try! rustCall() {
 open func recordConnection(multiaddr: String, peerId: String)  {try! rustCall() {
 open func recordFailure(multiaddr: String)  {try! rustCall() {
 open func recordLog(line: String)  {try! rustCall() {
+open func redeemInviteQr(payload: String)throws  -> RedeemReport  {
 open func registerBlockedDevice(peerId: String, deviceId: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
 open func relayJitterDelay(severity: String) -> UInt64  {
 open func remove(peerId: String)throws   {try rustCallWithError(FfiConverterTypeIronCoreError_lift) {
@@ -354,6 +356,8 @@ public func FfiConverterTypeReceipt_lift(_ buf: RustBuffer) throws -> Receipt {
 public func FfiConverterTypeReceipt_lower(_ value: Receipt) -> RustBuffer {
 public func FfiConverterTypeReceivedMessage_lift(_ buf: RustBuffer) throws -> ReceivedMessage {
 public func FfiConverterTypeReceivedMessage_lower(_ value: ReceivedMessage) -> RustBuffer {
+public func FfiConverterTypeRedeemReport_lift(_ buf: RustBuffer) throws -> RedeemReport {
+public func FfiConverterTypeRedeemReport_lower(_ value: RedeemReport) -> RustBuffer {
 public func FfiConverterTypeRegistrationStateInfo_lift(_ buf: RustBuffer) throws -> RegistrationStateInfo {
 public func FfiConverterTypeRegistrationStateInfo_lower(_ value: RegistrationStateInfo) -> RustBuffer {
 public func FfiConverterTypeRelayAdjustment_lift(_ buf: RustBuffer) throws -> RelayAdjustment {
@@ -462,6 +466,7 @@ public struct FfiConverterTypePreparedMessage: FfiConverterRustBuffer {
 public struct FfiConverterTypeProximityTransport: FfiConverterRustBuffer {
 public struct FfiConverterTypeReceipt: FfiConverterRustBuffer {
 public struct FfiConverterTypeReceivedMessage: FfiConverterRustBuffer {
+public struct FfiConverterTypeRedeemReport: FfiConverterRustBuffer {
 public struct FfiConverterTypeRegistrationStateInfo: FfiConverterRustBuffer {
 public struct FfiConverterTypeRelayAdjustment: FfiConverterRustBuffer {
 public struct FfiConverterTypeSeedLedgerEntry: FfiConverterRustBuffer {
@@ -492,6 +497,7 @@ public struct PeelResult: Equatable, Hashable {
 public struct PreparedMessage: Equatable, Hashable {
 public struct Receipt: Equatable, Hashable {
 public struct ReceivedMessage: Equatable, Hashable {
+public struct RedeemReport: Equatable, Hashable {
 public struct RegistrationStateInfo: Equatable, Hashable {
 public struct RelayAdjustment: Equatable, Hashable {
 public struct SeedLedgerEntry: Equatable, Hashable {

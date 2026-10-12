@@ -111,6 +111,62 @@ pub enum ConsentState {
     Granted,
 }
 
+/// Crate-visible entry to the canonical routing peer-id validator, for
+/// transport-ingress guards (mobile bridge) that must decide whether a
+/// platform-supplied peer string is a real, non-zero 32-byte peer id before it
+/// may touch routing state. It is `validate_routing_peer_id` (length bound,
+/// `parse_peer_id_32`, all-zero rejection), not a weaker parallel parser.
+pub(crate) fn parse_transport_peer_id(peer_id_str: &str) -> Option<[u8; 32]> {
+    validate_routing_peer_id("transport_ingress", peer_id_str)
+}
+
+/// Longest peer / identity / device handle string accepted from platform code
+/// across the FFI boundary (a 64-hex key or libp2p PeerId is well under this).
+pub(crate) const MAX_FFI_HANDLE_LEN: usize = 128;
+/// Longest nickname accepted from the platform (matches the identity envelope).
+const MAX_FFI_NICKNAME_LEN: usize = 64;
+/// Longest free-text reason accepted on block calls.
+const MAX_FFI_REASON_LEN: usize = 1024;
+/// Largest log line retained from the platform; longer lines are truncated.
+const MAX_FFI_LOG_LINE_LEN: usize = 8 * 1024;
+/// Largest privacy-config JSON document accepted.
+const MAX_FFI_PRIVACY_JSON_LEN: usize = 64 * 1024;
+/// Largest invite token accepted before bincode decoding.
+const MAX_FFI_INVITE_TOKEN_LEN: usize = 16 * 1024;
+/// Most routing hints accepted in one `routing_update_peer_hints` call.
+const MAX_FFI_ROUTING_HINTS: usize = 64;
+
+/// Platform-supplied handles are opaque, so the only decidable checks are:
+/// non-blank, bounded, and free of control characters. Fails closed.
+pub(crate) fn is_bounded_ffi_handle(handle: &str) -> bool {
+    !handle.trim().is_empty()
+        && handle.len() <= MAX_FFI_HANDLE_LEN
+        && !handle.chars().any(char::is_control)
+}
+
+/// Shared guard for the block/unblock FFI entry points: bounded peer handle,
+/// bounded optional device id, bounded optional reason. Fails closed.
+fn validate_block_args(
+    peer_id: &str,
+    device_id: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), IronCoreError> {
+    if !is_bounded_ffi_handle(peer_id) {
+        return Err(IronCoreError::InvalidInput);
+    }
+    if let Some(device_id) = device_id {
+        if !is_bounded_ffi_handle(device_id) {
+            return Err(IronCoreError::InvalidInput);
+        }
+    }
+    if let Some(reason) = reason {
+        if reason.len() > MAX_FFI_REASON_LEN {
+            return Err(IronCoreError::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
 /// Map a transport string (as passed to `routing_peer_seen`) to a
 /// `TransportType` for the optimized routing engine.
 fn parse_transport_type(transport: &str) -> crate::routing::TransportType {
@@ -971,12 +1027,34 @@ impl IronCore {
         _msg_type: crate::MessageType,
         _ttl: Option<crate::TtlConfig>,
     ) -> Result<crate::PreparedMessage, IronCoreError> {
+        // Bound the untrusted text before any lock, decode, or allocation of
+        // derived buffers; the codec enforces the same cap later but reports
+        // it as an internal error.
+        if content.len() > crate::message::codec::MAX_PAYLOAD_SIZE {
+            tracing::warn!("[WARN] refusing to send: payload exceeds maximum size");
+            return Err(IronCoreError::InvalidInput);
+        }
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
+        // Canon: the only valid recipient is ONE public-key-hex identity (64
+        // hex chars that are a canonical Ed25519 point). Anything else -- a
+        // libp2p PeerId, an identity_id hash that is not a curve point, a
+        // prefixed/padded/oversized string -- is rejected before any decoding.
+        if !crate::identity::keys::is_valid_public_key(recipient_id) {
+            tracing::error!("[ERROR] refusing to send: recipient is not a public-key hex identity");
+            return Err(IronCoreError::InvalidInput);
+        }
         let recipient_bytes = hex::decode(recipient_id).map_err(|_| IronCoreError::InvalidInput)?;
         let recipient_pk: [u8; 32] = recipient_bytes
             .try_into()
             .map_err(|_| IronCoreError::InvalidInput)?;
+        // Our own identity_id (blake3 of our public key) can decompress to a
+        // curve point about half the time and would then be encrypted to as if
+        // it were a key. We always know it, so refuse it deterministically.
+        if keys.identity_id().eq_ignore_ascii_case(recipient_id) {
+            tracing::error!("[ERROR] refusing to send: recipient_id is our own identity_id hash");
+            return Err(IronCoreError::InvalidInput);
+        }
         // Reject a recipient id that is well-formed but MEANINGLESS as a key.
         //
         // identity_id() is hex(blake3(pubkey)) and public_key_hex() is
@@ -1370,6 +1448,7 @@ impl IronCore {
         peer_id: String,
         device_id: String,
     ) -> Result<(), IronCoreError> {
+        validate_block_args(&peer_id, Some(device_id.as_str()), None)?;
         self.blocked_manager
             .write()
             .register_device_id(&peer_id, &device_id)?;
@@ -1430,6 +1509,10 @@ impl IronCore {
     /// Notify the core that a peer was discovered.
     /// Blocked peers (peer-level or any known device) are silently ignored.
     pub fn notify_peer_discovered(&self, peer_id: String) {
+        if !is_bounded_ffi_handle(&peer_id) {
+            tracing::warn!("[WARN] peer discovery ignored: malformed peer handle");
+            return;
+        }
         // Suppress discovery notifications for blocked peers.
         //
         // FAIL CLOSED: if the block store cannot be read we cannot prove the
@@ -1460,6 +1543,10 @@ impl IronCore {
 
     /// Notify the core that a peer disconnected.
     pub fn notify_peer_disconnected(&self, peer_id: String) {
+        if !is_bounded_ffi_handle(&peer_id) {
+            tracing::warn!("[WARN] peer disconnect ignored: malformed peer handle");
+            return;
+        }
         if let Some(delegate) = self.delegate.read().as_ref() {
             delegate.on_peer_disconnected(peer_id.clone());
         }
@@ -1467,6 +1554,12 @@ impl IronCore {
 
     /// Record an abuse signal from the transport layer.
     pub fn record_abuse_signal(&self, peer_id: String, signal: String) {
+        // Each distinct peer id creates a reputation entry, so an unbounded or
+        // junk handle would let platform code grow the table without limit.
+        if !is_bounded_ffi_handle(&peer_id) || signal.len() > MAX_FFI_HANDLE_LEN {
+            tracing::warn!("[WARN] abuse signal ignored: malformed peer handle or signal");
+            return;
+        }
         let abuse = self.abuse_manager.read();
         let abuse_signal = match signal.as_str() {
             "RateLimited" => AbuseSignal::RateLimited,
@@ -1623,6 +1716,10 @@ impl IronCore {
 
     /// Set the nickname for the local identity.
     pub fn set_nickname(&self, nickname: String) -> Result<(), IronCoreError> {
+        if nickname.chars().count() > MAX_FFI_NICKNAME_LEN || nickname.chars().any(char::is_control)
+        {
+            return Err(IronCoreError::InvalidInput);
+        }
         let mut identity = self.identity.write();
         identity.set_nickname(nickname.clone()).map_err(|e| {
             tracing::error!("Failed to persist nickname to store: {:?}", e);
@@ -1657,6 +1754,10 @@ impl IronCore {
         signature: Vec<u8>,
         public_key_hex: String,
     ) -> Result<bool, IronCoreError> {
+        // An Ed25519 key is 64 hex chars; refuse anything longer before decoding.
+        if public_key_hex.len() > MAX_FFI_HANDLE_LEN {
+            return Err(IronCoreError::InvalidInput);
+        }
         let pk_bytes = hex::decode(&public_key_hex).map_err(|_| IronCoreError::InvalidInput)?;
         crate::identity::IdentityKeys::verify(&data, &signature, &pk_bytes)
             .map_err(|_| IronCoreError::CryptoError)
@@ -1718,6 +1819,7 @@ impl IronCore {
         device_id: Option<String>,
         reason: Option<String>,
     ) -> Result<(), IronCoreError> {
+        validate_block_args(&peer_id, device_id.as_deref(), reason.as_deref())?;
         let contact_public_key = self
             .contact_manager
             .read()
@@ -1785,6 +1887,7 @@ impl IronCore {
         peer_id: String,
         device_id: Option<String>,
     ) -> Result<(), IronCoreError> {
+        validate_block_args(&peer_id, device_id.as_deref(), None)?;
         let contact_public_key = self
             .contact_manager
             .read()
@@ -1818,6 +1921,7 @@ impl IronCore {
         _device_id: Option<String>,
         reason: Option<String>,
     ) -> Result<(), IronCoreError> {
+        validate_block_args(&peer_id, _device_id.as_deref(), reason.as_deref())?;
         let contact_public_key = self
             .contact_manager
             .read()
@@ -1910,7 +2014,7 @@ impl IronCore {
     fn build_identity_backup_payload(&self) -> Result<String, IronCoreError> {
         let identity = self.identity.read();
         let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
-        let identity_key_hex = hex::encode(keys.to_bytes());
+        let identity_key_hex = hex::encode(keys.to_bytes().map_err(|_| IronCoreError::Internal)?);
         let nickname = identity.nickname();
 
         let ratchet_sessions_json = self.ratchet_sessions.read().serialize_sessions().ok();
@@ -2189,6 +2293,9 @@ impl IronCore {
         &self,
         peer_id: String,
     ) -> Result<String, IronCoreError> {
+        if peer_id.len() > MAX_FFI_HANDLE_LEN {
+            return Err(IronCoreError::InvalidInput);
+        }
         let peer_id: libp2p::PeerId = peer_id.parse().map_err(|_| IronCoreError::InvalidInput)?;
         // Ed25519 PeerIds use identity multihash (code 0) where the digest
         // contains the protobuf-encoded public key.
@@ -2217,6 +2324,9 @@ impl IronCore {
         recipient_public_key_hex: String,
         message_id: String,
     ) -> Result<Vec<u8>, IronCoreError> {
+        if !is_bounded_ffi_handle(&message_id) {
+            return Err(IronCoreError::InvalidInput);
+        }
         let receipt = crate::Receipt {
             message_id,
             status: crate::DeliveryStatus::Delivered,
@@ -2296,6 +2406,9 @@ impl IronCore {
     // -----------------------------------------------------------------------
 
     pub fn set_privacy_config(&self, json: String) -> Result<(), IronCoreError> {
+        if json.len() > MAX_FFI_PRIVACY_JSON_LEN {
+            return Err(IronCoreError::InvalidInput);
+        }
         let config: crate::privacy::PrivacyConfig =
             serde_json::from_str(&json).map_err(|_| IronCoreError::InvalidInput)?;
         *self.privacy_config.write() = config;
@@ -2315,6 +2428,9 @@ impl IronCore {
     ///    by searching contacts for a matching identity_id.
     /// 3. libp2p Peer ID (base58, e.g. "12D3Koo...") — public key extracted.
     pub fn resolve_identity(&self, any_id: String) -> Result<String, IronCoreError> {
+        if any_id.len() > MAX_FFI_HANDLE_LEN {
+            return Err(IronCoreError::InvalidInput);
+        }
         let trimmed = any_id.trim().to_lowercase();
 
         // If 64 hex chars, determine whether it's a public key or a Blake3 identity_id.
@@ -2483,6 +2599,12 @@ impl IronCore {
     }
 
     pub fn update_disk_stats(&self, total_bytes: u64, free_bytes: u64) {
+        // Free space can never exceed capacity; a contradictory report from the
+        // platform is dropped rather than skewing storage-pressure decisions.
+        if free_bytes > total_bytes {
+            tracing::warn!("[WARN] disk stats ignored: free_bytes exceeds total_bytes");
+            return;
+        }
         self.storage_manager
             .read()
             .update_disk_stats(total_bytes, free_bytes);
@@ -2493,6 +2615,17 @@ impl IronCore {
     }
 
     pub fn record_log(&self, line: String) {
+        // Bound what the platform can push into the log cache: truncate (on a
+        // char boundary) rather than store an arbitrarily large line.
+        let line = if line.len() > MAX_FFI_LOG_LINE_LEN {
+            let mut end = MAX_FFI_LOG_LINE_LEN;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line[..end].to_string()
+        } else {
+            line
+        };
         self.log_manager.record_log(line);
     }
 
@@ -2634,6 +2767,7 @@ impl IronCore {
         peer_id: String,
         device_id: Option<String>,
     ) -> Result<(), IronCoreError> {
+        validate_block_args(&peer_id, device_id.as_deref(), None)?;
         self.contact_manager
             .read()
             .update_last_known_device_id(peer_id.clone(), device_id.clone())?;
@@ -2657,11 +2791,188 @@ impl IronCore {
     /// Returns the serialized token data (without signature) suitable for
     /// Ed25519 signing.
     pub fn invite_get_signable_data(&self, token_bytes: Vec<u8>) -> Result<Vec<u8>, IronCoreError> {
+        if token_bytes.is_empty() || token_bytes.len() > MAX_FFI_INVITE_TOKEN_LEN {
+            return Err(IronCoreError::InvalidInput);
+        }
         let token: crate::relay::invite::InviteToken =
             bincode::deserialize(&token_bytes).map_err(|_e| IronCoreError::Internal)?;
         token
             .get_signable_data()
             .map_err(|_e| IronCoreError::Internal)
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #469 T1: invite QR create / redeem
+    // -----------------------------------------------------------------------
+
+    /// Mint a signed `SCI1:` invite for this node.
+    ///
+    /// `reachable_addrs` are this node's current dialable multiaddrs, supplied
+    /// by the caller that owns the swarm (listeners / external addresses);
+    /// nothing is hardcoded. The first valid address becomes the inviter's own
+    /// seed entry (never evicted); the remainder of the seed ledger is this
+    /// node's locally verified peers. The token is Ed25519-signed by this
+    /// node's identity key.
+    ///
+    /// `ttl_secs` must be in `1..=30 days`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn create_invite_qr(
+        &self,
+        reachable_addrs: Vec<String>,
+        ttl_secs: u64,
+    ) -> Result<String, IronCoreError> {
+        use crate::relay::invite::{build_seed_ledger, InviteToken, SeedLedgerEntry};
+        use crate::transport::addr_filter::{is_dialable_multiaddr, DnsPolicy, NetworkMode};
+
+        const MAX_TTL_SECS: u64 = 30 * 24 * 3600;
+        if ttl_secs == 0 || ttl_secs > MAX_TTL_SECS {
+            tracing::warn!("[INVITE] rejected reason=bad_ttl");
+            return Err(IronCoreError::InvalidInput);
+        }
+
+        let mut own: Vec<SeedLedgerEntry> = Vec::new();
+        for addr in reachable_addrs {
+            let stripped = match addr.find("/p2p/") {
+                Some(idx) => addr[..idx].to_string(),
+                None => addr,
+            };
+            if is_dialable_multiaddr(&stripped, NetworkMode::Local, DnsPolicy::Reject)
+                && !own.iter().any(|e| e.multiaddr == stripped)
+            {
+                own.push(SeedLedgerEntry {
+                    multiaddr: stripped,
+                });
+            }
+        }
+        if own.is_empty() {
+            tracing::warn!("[INVITE] rejected reason=no_reachable_addresses");
+            return Err(IronCoreError::NoAddresses);
+        }
+        let inviter_entry = own.remove(0);
+        let mut ranked = own;
+        ranked.extend(
+            self.ledger_manager
+                .export_seed_entries(crate::relay::invite::MAX_SEED_LEDGER_ENTRIES as u32),
+        );
+
+        let inviter_id = self.identity_id().ok_or(IronCoreError::NotInitialized)?;
+        let (token, peer_id) = {
+            let identity = self.identity.read();
+            let keys = identity.keys().ok_or(IronCoreError::NotInitialized)?;
+            let public_key =
+                hex::decode(keys.public_key_hex()).map_err(|_| IronCoreError::CryptoError)?;
+            let unsigned = InviteToken::new(inviter_id, public_key, "open".to_string())
+                .with_expiry(ttl_secs)
+                .with_seed_ledger(build_seed_ledger(inviter_entry, ranked));
+            let signable = unsigned
+                .get_signable_data()
+                .map_err(|_| IronCoreError::Internal)?;
+            let signature = keys
+                .sign(&signable)
+                .map_err(|_| IronCoreError::CryptoError)?;
+            (
+                unsigned.with_signature(signature),
+                keys.to_libp2p_peer_id().ok(),
+            )
+        };
+
+        let payload = token.to_qr_payload().map_err(|e| {
+            tracing::warn!("[INVITE] rejected reason=encode_failed detail={}", e);
+            IronCoreError::InvalidInput
+        })?;
+        tracing::info!(
+            "[INVITE] created peer={} addrs={}",
+            peer_id.unwrap_or_default(),
+            token.seed_ledger.len()
+        );
+        Ok(payload)
+    }
+
+    /// Verify and redeem an `SCI1:` invite.
+    ///
+    /// Fails closed: a payload that does not decode, is expired, unsigned or
+    /// carries a bad signature is rejected before anything touches the ledger.
+    /// Verified seed addresses are imported through
+    /// `LedgerManager::import_seed_entries` as UNPROVEN entries (promoted only
+    /// by a later successful dial). `IronCore` owns no swarm handle, so the
+    /// returned `dial_addrs` must be dialed immediately by the caller via the
+    /// existing dial path (the inviter's address carries `/p2p/<peer id>` so the
+    /// dial is pinned to the signing identity).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn redeem_invite_qr(&self, payload: String) -> Result<crate::RedeemReport, IronCoreError> {
+        use crate::relay::invite::{InviteError, InviteToken};
+        use crate::transport::addr_filter::{is_dialable_multiaddr, DnsPolicy, NetworkMode};
+
+        fn reject(reason: &str, err: IronCoreError) -> IronCoreError {
+            tracing::warn!("[INVITE] rejected reason={}", reason);
+            err
+        }
+
+        let token = InviteToken::from_qr_payload(payload.trim()).map_err(|e| match e {
+            InviteError::PayloadTooLarge(..) => reject("too_large", IronCoreError::InvalidInput),
+            _ => reject("malformed", IronCoreError::InvalidInput),
+        })?;
+        token.verify_with_policy(false).map_err(|e| match e {
+            InviteError::TokenExpired => reject("expired", IronCoreError::InvalidInput),
+            InviteError::MissingSignature => reject("unsigned", IronCoreError::CryptoError),
+            InviteError::VerificationFailed | InviteError::PqVerificationFailed => {
+                reject("bad_signature", IronCoreError::CryptoError)
+            }
+            _ => reject("malformed", IronCoreError::InvalidInput),
+        })?;
+
+        if self.identity.read().keys().is_some_and(|k| {
+            hex::decode(k.public_key_hex()).ok().as_deref() == Some(&token.inviter_public_key[..])
+        }) {
+            return Err(reject("self_invite", IronCoreError::InvalidInput));
+        }
+
+        let inviter_peer_id =
+            libp2p::identity::ed25519::PublicKey::try_from_bytes(&token.inviter_public_key)
+                .ok()
+                .map(|pk| {
+                    libp2p::identity::PublicKey::from(pk)
+                        .to_peer_id()
+                        .to_string()
+                });
+
+        let offered: Vec<String> = token
+            .seed_ledger
+            .iter()
+            .map(|e| e.multiaddr.clone())
+            .filter(|a| is_dialable_multiaddr(a, NetworkMode::Local, DnsPolicy::Reject))
+            .collect();
+        if offered.is_empty() {
+            return Err(reject("no_addresses", IronCoreError::NoAddresses));
+        }
+
+        let imported = self
+            .ledger_manager
+            .import_seed_entries(token.seed_ledger.clone());
+
+        // The first seed entry is the inviter's own address (see
+        // `build_seed_ledger`); pin it to the signing identity for the dial.
+        let dial_addrs: Vec<String> = offered
+            .iter()
+            .enumerate()
+            .map(|(i, a)| match (&inviter_peer_id, i) {
+                (Some(pid), 0) => format!("{}/p2p/{}", a, pid),
+                _ => a.clone(),
+            })
+            .collect();
+
+        tracing::info!(
+            "[INVITE] redeemed peer={} addrs={}",
+            inviter_peer_id.as_deref().unwrap_or(&token.inviter_id),
+            offered.len()
+        );
+        Ok(crate::RedeemReport {
+            inviter_id: token.inviter_id,
+            inviter_peer_id,
+            addresses_offered: offered.len() as u32,
+            addresses_imported: imported,
+            dial_addrs,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -2914,6 +3225,10 @@ impl IronCore {
     /// engine, so a hostile transport cannot grow the adaptive-TTL or
     /// negative-cache maps with arbitrary strings.
     pub fn routing_peer_seen(&self, peer_id_hex: String, transport: String) {
+        if transport.len() > MAX_FFI_HANDLE_LEN {
+            tracing::warn!("[WARN] routing_peer_seen ignored: oversized transport name");
+            return;
+        }
         let Some(peer_id) = validate_routing_peer_id("routing_peer_seen", &peer_id_hex) else {
             return;
         };
@@ -2928,6 +3243,10 @@ impl IronCore {
     /// length-bounded and parsed to 32 bytes before it touches the engine, and
     /// adaptive-TTL state is keyed by the canonical hex form.
     pub fn routing_update_peer_hints(&self, peer_id_hex: String, hints: Vec<Vec<u8>>) {
+        if hints.len() > MAX_FFI_ROUTING_HINTS {
+            tracing::warn!("[WARN] routing_update_peer_hints ignored: oversized hint list");
+            return;
+        }
         let Some(peer_id) = validate_routing_peer_id("routing_update_peer_hints", &peer_id_hex)
         else {
             return;
@@ -2950,16 +3269,14 @@ impl IronCore {
 
     /// Mark a peer as a gateway (relay-capable) or not.
     pub fn routing_mark_gateway(&self, peer_id_hex: String, is_gateway: bool) {
-        if let Ok(peer_id_bytes) = hex::decode(&peer_id_hex) {
-            if peer_id_bytes.len() == 32 {
-                let peer_id: crate::routing::PeerId = peer_id_bytes.try_into().unwrap_or([0u8; 32]);
-                if let Some(engine) = self.routing_engine.write().as_mut() {
-                    engine
-                        .base_engine_mut()
-                        .local_cell_mut()
-                        .mark_as_gateway(&peer_id, is_gateway);
-                }
-            }
+        let Some(peer_id) = validate_routing_peer_id("routing_mark_gateway", &peer_id_hex) else {
+            return;
+        };
+        if let Some(engine) = self.routing_engine.write().as_mut() {
+            engine
+                .base_engine_mut()
+                .local_cell_mut()
+                .mark_as_gateway(&peer_id, is_gateway);
         }
     }
 
@@ -3077,8 +3394,13 @@ impl IronCore {
 
     /// Clear an unreachable peer from the routing table.
     pub fn routing_clear_unreachable_peer(&self, peer_id_hex: String) {
+        let Some(peer_id) =
+            validate_routing_peer_id("routing_clear_unreachable_peer", &peer_id_hex)
+        else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.clear_unreachable_peer(&peer_id_hex);
+            engine.clear_unreachable_peer(&hex::encode(peer_id));
         }
     }
 
@@ -3161,9 +3483,13 @@ impl IronCore {
     /// Records the path in the multipath delivery manager (Phase 2) and
     /// notes message activity for adaptive TTL tracking.
     pub fn routing_register_path(&self, peer_id_hex: String, path_id: u64, latency_ms: u64) {
+        let Some(peer_id) = validate_routing_peer_id("routing_register_path", &peer_id_hex) else {
+            return;
+        };
         if let Some(engine) = self.routing_engine.write().as_mut() {
-            engine.record_message_activity(&peer_id_hex);
-            engine.multipath_register_path(peer_id_hex.clone(), path_id, latency_ms);
+            let key = hex::encode(peer_id);
+            engine.record_message_activity(&key);
+            engine.multipath_register_path(key, path_id, latency_ms);
         }
     }
 
@@ -3855,7 +4181,48 @@ impl IronCore {
         keys.to_libp2p_keypair()
             .map_err(|_| IronCoreError::CryptoError)
     }
+    /// Best-effort message id for drop diagnostics: the Drift header carries
+    /// the id in clear, so a frame that fails later (verify/decrypt) can still
+    /// be attributed. Returns "unknown" for non-Drift or undecodable frames.
+    fn peek_envelope_message_id(envelope_data: &[u8]) -> String {
+        if envelope_data.first() == Some(&crate::drift::DRIFT_VERSION) {
+            if let Ok(env) = crate::drift::DriftEnvelope::from_bytes(envelope_data) {
+                return uuid::Uuid::from_bytes(env.message_id).to_string();
+            }
+        }
+        "unknown".to_string()
+    }
+
+    /// Process one inbound envelope. Every `Err` return is a drop: it is
+    /// logged at INFO as `[RX-DROP] msg=<id> stage=<stage> reason=<reason>`
+    /// so inbound loss is never silent.
     pub fn receive_message(&self, envelope_data: Vec<u8>) -> Result<Message, IronCoreError> {
+        let len = envelope_data.len();
+        // Validation first (main, #482): ingress size cap before any decode.
+        // The codec rejects larger encoded messages anyway, so nothing
+        // legitimate exceeds this. Logged as [RX-DROP] like every other drop.
+        if len > crate::message::codec::MAX_MESSAGE_SIZE {
+            tracing::warn!("[WARN] receive_message: envelope exceeds maximum size, dropping");
+            let reason = format!(
+                "{}_len{}",
+                ironcore_error_variant(&IronCoreError::InvalidInput),
+                len
+            );
+            rx_drop_limited("unknown", "receive_message", &reason);
+            return Err(IronCoreError::InvalidInput);
+        }
+        let peeked_id = Self::peek_envelope_message_id(&envelope_data);
+        let result = self.receive_message_inner(envelope_data);
+        if let Err(e) = &result {
+            // Variant name only: never format the error with `{:?}`, so no
+            // payload a future variant might carry can reach the log.
+            let reason = format!("{}_len{}", ironcore_error_variant(e), len);
+            rx_drop_limited(&peeked_id, "receive_message", &reason);
+        }
+        result
+    }
+
+    fn receive_message_inner(&self, envelope_data: Vec<u8>) -> Result<Message, IronCoreError> {
         // Hoist sender public key and local identity id out of the ratchet
         // block below so they remain in scope for downstream inbox / audit
         // handling.
@@ -4424,8 +4791,11 @@ impl IronCore {
     /// Called when a previously-unreachable peer is successfully reconnected,
     /// so future routing decisions consider it reachable again.
     pub fn clear_unreachable_peer(&self, peer_id: &str) {
+        let Some(canonical) = validate_routing_peer_id("clear_unreachable_peer", peer_id) else {
+            return;
+        };
         if let Some(ref mut engine) = self.routing_engine.write().as_mut() {
-            engine.clear_unreachable_peer(peer_id);
+            engine.clear_unreachable_peer(&hex::encode(canonical));
         }
     }
 
@@ -5255,9 +5625,126 @@ impl IronCore {
     }
 }
 
+/// Fixed variant-name map for drop diagnostics (no payloads). `Blocked` is
+/// the sender-blocked drop; `NotInitialized` is the core-unavailable drop.
+fn ironcore_error_variant(e: &IronCoreError) -> &'static str {
+    match e {
+        IronCoreError::NotInitialized => "core_not_initialized",
+        IronCoreError::AlreadyRunning => "already_running",
+        IronCoreError::StorageError => "storage_error",
+        IronCoreError::CryptoError => "crypto_error",
+        IronCoreError::NetworkError => "network_error",
+        IronCoreError::InvalidInput => "invalid_input",
+        IronCoreError::Blocked => "sender_blocked",
+        IronCoreError::ConsentRequired => "consent_required",
+        IronCoreError::Internal => "internal",
+        IronCoreError::CorruptionDetected => "corruption_detected",
+        IronCoreError::DialSelf => "dial_self",
+        IronCoreError::NoAddresses => "no_addresses",
+        IronCoreError::ConnectionLimit => "connection_limit",
+        IronCoreError::MultiaddrNotSupported => "multiaddr_not_supported",
+        IronCoreError::IoError => "io_error",
+        IronCoreError::OnionRoutingDisabled => "onion_routing_disabled",
+    }
+}
+
+/// Token bucket per drop stage: a burst of `RX_DROP_BURST` lines, refilled at
+/// one token per `RX_DROP_REFILL_SECS`. Suppressed drops are counted and
+/// reported by the next admitted line.
+const RX_DROP_BURST: f64 = 10.0;
+const RX_DROP_REFILL_SECS: f64 = 3.0;
+
+#[derive(Default)]
+struct RxDropBucket {
+    tokens: f64,
+    last: Option<std::time::Instant>,
+    suppressed: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RxDropAdmit {
+    /// Log the drop; `Some(n)` means n earlier drops were suppressed.
+    Log(Option<u64>),
+    Suppress,
+}
+
+impl RxDropBucket {
+    fn admit(&mut self, now: std::time::Instant) -> RxDropAdmit {
+        match self.last {
+            None => self.tokens = RX_DROP_BURST,
+            Some(prev) => {
+                let elapsed = now.saturating_duration_since(prev).as_secs_f64();
+                self.tokens = (self.tokens + elapsed / RX_DROP_REFILL_SECS).min(RX_DROP_BURST);
+            }
+        }
+        self.last = Some(now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            let suppressed = std::mem::take(&mut self.suppressed);
+            RxDropAdmit::Log((suppressed > 0).then_some(suppressed))
+        } else {
+            self.suppressed += 1;
+            RxDropAdmit::Suppress
+        }
+    }
+}
+
+static RX_DROP_BUCKETS: std::sync::OnceLock<
+    Mutex<std::collections::HashMap<String, RxDropBucket>>,
+> = std::sync::OnceLock::new();
+
+/// Rate-limited `[RX-DROP]` logging, one bucket per stage.
+fn rx_drop_limited(msg_id: &str, stage: &str, reason: &str) {
+    let verdict = {
+        let mut buckets = RX_DROP_BUCKETS
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+            .lock();
+        buckets
+            .entry(stage.to_string())
+            .or_default()
+            .admit(std::time::Instant::now())
+    };
+    if let RxDropAdmit::Log(suppressed) = verdict {
+        if let Some(n) = suppressed {
+            tracing::info!("[RX-DROP] suppressed={} stage={}", n, stage);
+        }
+        crate::message_events::log_rx_drop(msg_id, stage, reason);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rx_drop_bucket_limits_burst_reports_suppressed_and_refills() {
+        let t0 = std::time::Instant::now();
+        let mut b = RxDropBucket::default();
+        for _ in 0..10 {
+            assert_eq!(b.admit(t0), RxDropAdmit::Log(None));
+        }
+        assert_eq!(b.admit(t0), RxDropAdmit::Suppress);
+        assert_eq!(b.admit(t0), RxDropAdmit::Suppress);
+        let later = t0 + std::time::Duration::from_secs(3);
+        assert_eq!(b.admit(later), RxDropAdmit::Log(Some(2)));
+        assert_eq!(b.admit(later), RxDropAdmit::Suppress);
+    }
+
+    #[test]
+    fn rx_drop_variant_names_are_fixed_and_split_blocked_from_unavailable() {
+        assert_eq!(
+            ironcore_error_variant(&IronCoreError::Blocked),
+            "sender_blocked"
+        );
+        assert_eq!(
+            ironcore_error_variant(&IronCoreError::NotInitialized),
+            "core_not_initialized"
+        );
+        assert_eq!(
+            ironcore_error_variant(&IronCoreError::CryptoError),
+            "crypto_error"
+        );
+    }
 
     #[test]
     fn test_record_and_export_logs() {
@@ -6955,6 +7442,62 @@ mod tests {
         );
     }
 
+    /// JEV audit (iron_core identity_hash_not_usable_as_recipient, validate-guard
+    /// 0.94): every non-public-key recipient shape is refused up front, and the
+    /// control (a real public key) still works.
+    #[test]
+    fn prepare_message_rejects_every_non_public_key_recipient_shape() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let info = core.get_identity_info();
+        let my_public_key = info.public_key_hex.expect("public key");
+        let my_identity_id = info.identity_id.expect("identity id");
+
+        let send = |recipient: &str| {
+            core.prepare_message(
+                recipient.to_string(),
+                "guard".to_string(),
+                crate::MessageType::Text,
+                None,
+            )
+        };
+
+        // Control: a real key is accepted, so rejections below are not vacuous.
+        assert!(send(&my_public_key).is_ok());
+
+        // A 64-hex string that is NOT a curve point (an identity_id-shaped hash),
+        // found deterministically.
+        let non_point = (0u32..)
+            .map(|i| hex::encode(blake3::hash(&i.to_le_bytes()).as_bytes()))
+            .find(|h| !crate::identity::keys::is_valid_public_key(h))
+            .expect("a non-point hash exists");
+
+        let hostile: Vec<String> = vec![
+            String::new(),
+            "   ".to_string(),
+            my_identity_id.clone(),
+            my_identity_id.to_uppercase(),
+            non_point,
+            "0".repeat(64),
+            format!("0x{my_public_key}"),
+            format!("public_key:{my_public_key}"),
+            format!(" {my_public_key} "),
+            my_public_key[..62].to_string(),
+            format!("{my_public_key}00"),
+            "zz".repeat(32),
+            "12D3KooWEfZ2fJ8AcGvVfEUi2wFQPo6z8kZVr5TsgP7JQF2B9kS1".to_string(),
+            "a".repeat(100_000),
+        ];
+        for recipient in hostile {
+            assert!(
+                send(&recipient).is_err(),
+                "non-key recipient must be rejected (len {})",
+                recipient.len()
+            );
+        }
+    }
+
     /// Captures the delegate callback arguments for the WP1.4 / CRYPTO-01 check.
     struct Wp1CapturingDelegate {
         seen: std::sync::Arc<std::sync::Mutex<Option<(String, String)>>>,
@@ -7181,6 +7724,318 @@ mod tests {
             )
             .is_ok(),
             "the key a name resolves to must be an encryptable recipient"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Untrusted-input guards on FFI entry points (JEV security_input)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ffi_guard_bounded_handle_rejects_empty_blank_control_and_oversized() {
+        assert!(is_bounded_ffi_handle("peer-1"));
+        assert!(is_bounded_ffi_handle(&"a".repeat(MAX_FFI_HANDLE_LEN)));
+        assert!(!is_bounded_ffi_handle(""));
+        assert!(!is_bounded_ffi_handle("   "));
+        assert!(!is_bounded_ffi_handle("bad\0handle"));
+        assert!(!is_bounded_ffi_handle("line\nbreak"));
+        assert!(!is_bounded_ffi_handle(&"a".repeat(MAX_FFI_HANDLE_LEN + 1)));
+    }
+
+    #[test]
+    fn ffi_guard_prepare_message_rejects_oversized_text() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let key = core.get_identity_info().public_key_hex.expect("public key");
+        let send =
+            |text: String| core.prepare_message(key.clone(), text, crate::MessageType::Text, None);
+        assert!(matches!(
+            send("a".repeat(crate::message::codec::MAX_PAYLOAD_SIZE + 1)),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            send("a".repeat(10 * 1024 * 1024)),
+            Err(IronCoreError::InvalidInput)
+        ));
+        // Control: the boundary size is still accepted.
+        assert!(send("a".repeat(crate::message::codec::MAX_PAYLOAD_SIZE)).is_ok());
+    }
+
+    #[test]
+    fn ffi_guard_block_entry_points_reject_malformed_empty_and_oversized() {
+        let core = IronCore::new();
+        let long = "p".repeat(MAX_FFI_HANDLE_LEN + 1);
+        for bad in ["", "   ", "bad\0peer", long.as_str()] {
+            assert!(matches!(
+                core.block_peer(bad.to_string(), None, None),
+                Err(IronCoreError::InvalidInput)
+            ));
+            assert!(matches!(
+                core.unblock_peer(bad.to_string(), None),
+                Err(IronCoreError::InvalidInput)
+            ));
+            assert!(matches!(
+                core.block_and_delete_peer(bad.to_string(), None, None),
+                Err(IronCoreError::InvalidInput)
+            ));
+            assert!(matches!(
+                core.register_blocked_device(bad.to_string(), "dev".to_string()),
+                Err(IronCoreError::InvalidInput)
+            ));
+            assert!(matches!(
+                core.register_blocked_device("peer".to_string(), bad.to_string()),
+                Err(IronCoreError::InvalidInput)
+            ));
+            assert!(matches!(
+                core.contact_update_last_known_device_id(bad.to_string(), None),
+                Err(IronCoreError::InvalidInput)
+            ));
+        }
+        assert!(matches!(
+            core.block_peer(
+                "peer".to_string(),
+                Some(long.clone()),
+                Some("r".repeat(MAX_FFI_REASON_LEN + 1)),
+            ),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.block_peer(
+                "peer".to_string(),
+                None,
+                Some("r".repeat(MAX_FFI_REASON_LEN + 1)),
+            ),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert_eq!(core.blocked_count().unwrap(), 0, "nothing may be blocked");
+    }
+
+    #[test]
+    fn ffi_guard_peer_event_and_abuse_entry_points_drop_malformed_handles() {
+        let core = IronCore::new();
+        let long = "x".repeat(MAX_FFI_HANDLE_LEN + 1);
+        let baseline = core
+            .abuse_manager
+            .read()
+            .get_score("never-seen-peer")
+            .value();
+        for bad in ["", "   ", "bad\0peer", long.as_str()] {
+            core.notify_peer_discovered(bad.to_string());
+            core.notify_peer_disconnected(bad.to_string());
+            for _ in 0..20 {
+                core.record_abuse_signal(bad.to_string(), "RateLimited".to_string());
+            }
+            assert_eq!(
+                core.abuse_manager.read().get_score(bad).value(),
+                baseline,
+                "a malformed handle must not create reputation state"
+            );
+        }
+        core.record_abuse_signal("peer-ok".to_string(), "s".repeat(500));
+    }
+
+    #[test]
+    fn ffi_guard_routing_entry_points_drop_malformed_and_oversized_input() {
+        let core = IronCore::new();
+        let long = "r".repeat(MAX_FFI_HANDLE_LEN + 1);
+        for bad in ["", "   ", "bad\0peer", long.as_str()] {
+            core.routing_peer_seen(bad.to_string(), "tcp".to_string());
+            core.routing_update_peer_hints(bad.to_string(), vec![vec![0u8; 8]]);
+            core.routing_mark_gateway(bad.to_string(), true);
+            core.routing_update_reliability(bad.to_string(), false);
+            core.routing_clear_unreachable_peer(bad.to_string());
+            core.routing_register_path(bad.to_string(), 1, 10);
+        }
+        let peer = hex::encode([7u8; 32]);
+        core.routing_peer_seen(peer.clone(), long.clone());
+        core.routing_update_peer_hints(peer, vec![vec![0u8; 8]; MAX_FFI_ROUTING_HINTS + 1]);
+        let _ = core.routing_summary();
+    }
+
+    #[test]
+    fn ffi_guard_set_nickname_rejects_oversized_and_control_chars() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        assert!(matches!(
+            core.set_nickname("n".repeat(MAX_FFI_NICKNAME_LEN + 1)),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.set_nickname("bad\0name".to_string()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.set_nickname("line\nbreak".to_string()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        // Control: a valid nickname still works.
+        core.set_nickname("Alice".to_string()).unwrap();
+    }
+
+    #[test]
+    fn ffi_guard_receive_message_rejects_oversized_and_malformed_envelopes() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        assert!(matches!(
+            core.receive_message(vec![0u8; crate::message::codec::MAX_MESSAGE_SIZE + 1]),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(core.receive_message(Vec::new()).is_err());
+        assert!(core.receive_message(vec![0xff; 64]).is_err());
+    }
+
+    #[test]
+    fn ffi_guard_identity_string_entry_points_reject_oversized_and_malformed() {
+        let core = IronCore::new();
+        let long = "a".repeat(MAX_FFI_HANDLE_LEN + 1);
+        assert!(matches!(
+            core.verify_signature(vec![1], vec![2], long.clone()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.verify_signature(vec![1], vec![2], "not-hex".to_string()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(core
+            .verify_signature(vec![1], vec![2], String::new())
+            .is_err());
+        assert!(matches!(
+            core.resolve_identity(long.clone()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(core.resolve_identity(String::new()).is_err());
+        assert!(matches!(
+            core.extract_public_key_from_peer_id(long.clone()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(core.extract_public_key_from_peer_id(String::new()).is_err());
+        for bad in ["", "   ", "bad\0id", long.as_str()] {
+            assert!(matches!(
+                core.prepare_receipt("k".to_string(), bad.to_string()),
+                Err(IronCoreError::InvalidInput)
+            ));
+        }
+    }
+
+    #[test]
+    fn ffi_guard_json_and_token_entry_points_reject_oversized_empty_malformed() {
+        let core = IronCore::new();
+        assert!(matches!(
+            core.set_privacy_config(" ".repeat(MAX_FFI_PRIVACY_JSON_LEN + 1)),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.set_privacy_config(String::new()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.set_privacy_config("{not json".to_string()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.invite_get_signable_data(Vec::new()),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            core.invite_get_signable_data(vec![0u8; MAX_FFI_INVITE_TOKEN_LEN + 1]),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(core.invite_get_signable_data(vec![0xff; 8]).is_err());
+    }
+
+    #[test]
+    fn ffi_guard_disk_stats_and_log_line_are_bounded() {
+        let core = IronCore::new();
+        core.update_disk_stats(1_000, 500);
+        core.update_disk_stats(1_000, 5_000);
+        let stats = core.get_disk_stats();
+        assert_eq!(stats.total_bytes, 1_000);
+        assert_eq!(stats.free_bytes, 500, "free > total must be ignored");
+
+        let huge = format!("{}\u{e9}", "L".repeat(MAX_FFI_LOG_LINE_LEN * 4));
+        core.record_log(huge);
+        core.record_log(String::new());
+        let exported = core.export_logs().unwrap();
+        let logs: Vec<serde_json::Value> = serde_json::from_str(&exported).unwrap();
+        assert!(
+            logs.iter().all(|l| l["content"]
+                .as_str()
+                .map(|c| c.len() <= MAX_FFI_LOG_LINE_LEN)
+                .unwrap_or(true)),
+            "no stored log line may exceed the cap"
+        );
+    }
+
+    /// Every routing write entry point must reject the same hostile id set and
+    /// leave all routing state (peers, adaptive TTL, negative cache, multipath)
+    /// untouched, while a valid id still reaches the engine.
+    #[test]
+    fn routing_ingress_table_all_entry_points_reject_non_key_ids_and_accept_valid() {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        let hint_of = |peer: [u8; 32]| -> [u8; 8] {
+            blake3::hash(&peer).as_bytes()[0..8]
+                .try_into()
+                .expect("8 byte hint")
+        };
+        let snapshot = |core: &IronCore| {
+            let mut guard = core.routing_engine.write();
+            let engine = guard.as_mut().expect("engine set");
+            let peers = engine.base_engine_mut().local_cell_mut().peer_count();
+            let ttl = engine.adaptive_ttl().len();
+            let neg = engine.negative_cache_stats().entry_count;
+            // A zero-padded bypass of the id parser would register under the
+            // all-zero peer's hint, so watch that bucket explicitly.
+            let zero_paths = engine.active_paths(&hint_of([0u8; 32])).len();
+            (peers, ttl, neg, zero_paths)
+        };
+        let baseline = snapshot(&core);
+
+        let hostile = [
+            String::new(),
+            "   ".to_string(),
+            "not-a-peer-id".to_string(),
+            "zz".repeat(32),
+            hex::encode([1u8; 16]),
+            hex::encode([1u8; 31]),
+            hex::encode([1u8; 33]),
+            hex::encode([0u8; 32]),
+            format!("0x{}", hex::encode([0u8; 32])),
+            "A".repeat(100_000),
+            "\u{0}\u{1}\u{2}".to_string(),
+            "192.168.49.1/tcp/1/p2p/12D3KooWAbc".to_string(),
+        ];
+        for id in &hostile {
+            core.routing_peer_seen(id.clone(), "tcp".to_string());
+            core.routing_update_peer_hints(id.clone(), vec![vec![0u8; 8]]);
+            core.routing_mark_gateway(id.clone(), true);
+            core.routing_update_reliability(id.clone(), true);
+            core.routing_update_reliability(id.clone(), false);
+            core.routing_clear_unreachable_peer(id.clone());
+            core.clear_unreachable_peer(id);
+            core.routing_register_path(id.clone(), 1, 10);
+        }
+        assert_eq!(
+            snapshot(&core),
+            baseline,
+            "no routing write entry point may change state for a non-key id"
+        );
+
+        let peer = [9u8; 32];
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+        core.routing_register_path(hex::encode(peer), 1, 10);
+        let (peers, ttl, _neg, _zero) = snapshot(&core);
+        assert_eq!(peers, 1, "valid id reaches routing_peer_seen");
+        assert_eq!(ttl, 1, "valid id is keyed once in adaptive TTL");
+        let mut guard = core.routing_engine.write();
+        let engine = guard.as_mut().expect("engine set");
+        assert_eq!(
+            engine.active_paths(&hint_of(peer)).len(),
+            1,
+            "valid id registers its multipath path"
         );
     }
 }
