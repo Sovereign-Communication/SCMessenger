@@ -11299,8 +11299,9 @@ mod tests {
             "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
             "o".to_string(),
         );
-        let own_endpoint: SocketAddr = "18.234.62.247:9001".parse().unwrap();
-        let ours: SocketAddr = "147.81.41.188:9001".parse().unwrap();
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let own_endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(18, 234, 62, 247)), 9001);
+        let ours = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(147, 81, 41, 188)), 9001);
         assert!(super::observed_names_observer_endpoint(
             &tracker,
             &observer,
