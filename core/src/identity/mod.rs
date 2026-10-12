@@ -158,7 +158,14 @@ impl IdentityManager {
 
     /// Export raw identity key bytes for secure platform backup.
     pub fn export_key_bytes(&self) -> Option<Vec<u8>> {
-        self.keys.as_ref().map(|keys| keys.to_bytes())
+        let keys = self.keys.as_ref()?;
+        match keys.to_bytes() {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                tracing::error!("export_key_bytes: key serialization failed: {}", e);
+                None
+            }
+        }
     }
 
     /// Import raw identity key bytes and persist them in the configured store.

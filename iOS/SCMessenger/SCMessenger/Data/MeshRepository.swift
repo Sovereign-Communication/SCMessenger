@@ -3954,7 +3954,16 @@ final class MeshRepository {
         networkStatus.wifi = wifi
         networkStatus.cellular = cellular
 
-        // Report to Rust
+        // Order matters: the core records the new interface state in
+        // onNetworkChanged, and updateDeviceState echoes it back to the
+        // platform. Reporting the change first keeps that echo consistent.
+        // Issue #523: forward only real interface changes (available, lost,
+        // WiFi <-> cellular) into the core so dial revival resets backoff and
+        // redials immediately. No-op path updates are not events.
+        if wifi != previousWifi || cellular != previousCellular {
+            meshService?.onNetworkChanged(hasWifi: wifi, hasCellular: cellular)
+        }
+        // Report to Rust (after the change signal; see ordering note above)
         let profile = DeviceProfile(
             peerId: nil,
             deviceId: nil,
@@ -3964,12 +3973,6 @@ final class MeshRepository {
             motionState: currentMotionState
         )
         meshService?.updateDeviceState(profile: profile)
-        // Issue #523: forward only real interface changes (available, lost,
-        // WiFi <-> cellular) into the core so dial revival resets backoff and
-        // redials immediately. No-op path updates are not events.
-        if wifi != previousWifi || cellular != previousCellular {
-            meshService?.onNetworkChanged(hasWifi: wifi, hasCellular: cellular)
-        }
         Task { @MainActor [weak self] in
             await self?.applyPowerAdjustments(reason: "network_changed")
         }

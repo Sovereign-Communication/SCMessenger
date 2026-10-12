@@ -61,6 +61,12 @@ class NetworkDetector @Inject constructor(
     @Volatile
     var networkChangeListener: NetworkChangeListener? = null
 
+    /** Last non-VPN transport seen; the underlying link of any active VPN. */
+    @Volatile
+    private var lastPhysicalType: NetworkType? = null
+    private val notifyLock = Any()
+    private var lastNotifiedFlags: Pair<Boolean, Boolean>? = null
+
     /** Currently blocked ports (populated on cellular networks) */
     private val _blockedPorts = MutableStateFlow<Set<Int>>(emptySet())
     val blockedPorts: StateFlow<Set<Int>> = _blockedPorts.asStateFlow()
@@ -286,6 +292,13 @@ class NetworkDetector @Inject constructor(
     internal fun updateNetworkType(newType: NetworkType) {
         val previousType = _networkType.value
         _networkType.value = newType
+        // Remember the physical transport so a VPN (which rides on top of one)
+        // is classified by what it runs over rather than as "lost".
+        when (newType) {
+            NetworkType.VPN -> Unit
+            NetworkType.UNKNOWN -> lastPhysicalType = null
+            else -> lastPhysicalType = newType
+        }
         if (newType != previousType) {
             notifyNetworkChange(newType)
         }
@@ -314,14 +327,15 @@ class NetworkDetector @Inject constructor(
      */
     private fun notifyNetworkChange(newType: NetworkType) {
         val listener = networkChangeListener ?: return
-        val hasWifi = newType == NetworkType.WIFI ||
-            newType == NetworkType.WIFI_RESTRICTED ||
-            newType == NetworkType.ETHERNET
-        val hasCellular = newType == NetworkType.CELLULAR ||
-            newType == NetworkType.CELLULAR_RESTRICTED ||
-            newType == NetworkType.CELLULAR_NO_INTERNET
+        val flags = NetworkAvailability.flagsFor(newType, lastPhysicalType) ?: return
+        // A VPN switch over the same transport yields the same flags; the core
+        // must see each real change exactly once.
+        synchronized(notifyLock) {
+            if (lastNotifiedFlags == flags) return
+            lastNotifiedFlags = flags
+        }
         try {
-            listener.onNetworkChanged(hasWifi, hasCellular)
+            listener.onNetworkChanged(flags.first, flags.second)
         } catch (e: Exception) {
             Timber.w(e, "Network change listener failed")
         }
@@ -515,4 +529,29 @@ data class NetworkDiagnostics(
             |  Transport Priority: ${recommendedTransports.joinToString(" → ")}
         """.trimMargin()
     }
+}
+
+/**
+ * Maps a [NetworkType] to the (hasWifi, hasCellular) pair the core understands.
+ * Both false means "lost", so only genuinely disconnected states may produce it.
+ */
+object NetworkAvailability {
+    /**
+     * @param underlying the physical transport a VPN runs over, if known.
+     * @return the flags, or null when the type carries no new information
+     *   (a VPN with no known underlying transport must not report "lost").
+     */
+    fun flagsFor(type: NetworkType, underlying: NetworkType? = null): Pair<Boolean, Boolean>? =
+        when (type) {
+            NetworkType.WIFI, NetworkType.WIFI_RESTRICTED, NetworkType.ETHERNET -> true to false
+            NetworkType.CELLULAR, NetworkType.CELLULAR_RESTRICTED,
+            NetworkType.CELLULAR_NO_INTERNET -> false to true
+            // Bluetooth tethering (PAN) is a LAN-class link: available, reported
+            // on the non-metered wifi-class flag.
+            NetworkType.BLUETOOTH -> true to false
+            NetworkType.VPN ->
+                if (underlying == null || underlying == NetworkType.VPN) null
+                else flagsFor(underlying, null)
+            NetworkType.UNKNOWN -> false to false
+        }
 }

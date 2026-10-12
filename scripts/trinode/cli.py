@@ -32,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="with --from-dir on a flat dir: map files to a node (repeatable)")
     src.add_argument("--android", action="store_true", help="collect over adb (read-only)")
     src.add_argument("--adb-serial", help="adb serial, ip:port for wireless ADB (default: only attached device)")
+    p.add_argument("--passive", action="store_true",
+                   help="never send any command to the Pixel: refuses --android and --adb-serial, so the "
+                        "Android node is only ever read from --from-dir captures")
     src.add_argument("--windows", action="store_true", help="collect local Windows CLI node logs")
     src.add_argument("--win-log-dir", help=r"default %%LOCALAPPDATA%%\scmessenger\logs")
     src.add_argument("--win-diag-url", default="http://localhost:9001/api/diagnostics")
@@ -72,6 +75,10 @@ def _node_files(run_dir: str, c: collectors.CollectResult) -> List[str]:
 def run(argv: Optional[List[str]] = None, runner: collectors.Runner = collectors.default_runner,
         out=sys.stdout) -> int:
     a = build_parser().parse_args(argv)
+    if a.passive and (a.android or a.adb_serial):
+        print("[FAIL] --passive forbids --android/--adb-serial: no command may reach the Pixel. "
+              "Feed its logs with --from-dir --map android=<glob> instead.", file=sys.stderr)
+        return report.EXIT_INSUFFICIENT
     now = datetime.now(timezone.utc)
     run_id = a.run_id or f"tri-{now.strftime('%H%M%S')}-{hashlib.sha1(os.urandom(8)).hexdigest()[:6]}"
     run_dir = os.path.join(a.repo_root, a.out_root, now.strftime("%Y-%m-%d"), run_id)
