@@ -3871,12 +3871,24 @@ impl IronCore {
                                 .unwrap_or_default()
                                 .as_secs();
                             let expired = msg.receipt_expired(now_secs);
-                            let blocked = !expired
-                                && self
-                                    .blocked_manager
+                            // Lock discipline: `outbox` is not held here (the
+                            // entry was drained above), and this blocked_manager
+                            // read guard is a statement-scoped temporary: no
+                            // await in this file, no nesting with `outbox`.
+                            // Tagged like the receive path so an identity-ID
+                            // alias block also matches (an unprefixed 64-hex
+                            // value is opaque to the resolver).
+                            let blocked = !expired && {
+                                let tagged = format!(
+                                    "{}{}",
+                                    crate::identity::keys::PUBLIC_KEY_PREFIX,
+                                    peer_id
+                                );
+                                self.blocked_manager
                                     .read()
-                                    .is_blocked_resolved(peer_id, None)
-                                    .unwrap_or(false);
+                                    .is_blocked_resolved(&tagged, None)
+                                    .unwrap_or(false)
+                            };
                             if expired || blocked {
                                 tracing::warn!(
                                     event = "outbox_receipt_expired",
@@ -6323,6 +6335,133 @@ mod tests {
             core.outbox_contains_for_recipient(&recipient, &text.message_id),
             "a real message is never given up on"
         );
+    }
+
+    /// A receipt queued for a peer that was blocked after it was queued (the
+    /// drain in block_peer can race a re-enqueue) is dropped, not sent.
+    #[test]
+    fn receipt_for_blocked_peer_is_dropped_not_dispatched() {
+        let core = IronCore::new();
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        core.block_peer(recipient.clone(), None, None).unwrap();
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        core.outbox
+            .write()
+            .enqueue(QueuedMessage {
+                version: crate::store::outbox::QUEUED_VERSION_FIRE_AND_FORGET,
+                message_id: "blocked-receipt".to_string(),
+                recipient_id: recipient.clone(),
+                envelope_data: vec![1, 2, 3],
+                queued_at: now,
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: crate::store::outbox::MessageState::Enqueued,
+            })
+            .unwrap();
+        let mut dispatched = 0usize;
+        core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |_, _| {
+            dispatched += 1;
+            true
+        });
+        assert_eq!(dispatched, 0, "no receipt goes to a blocked peer");
+        assert!(!core.outbox_contains_for_recipient(&recipient, "blocked-receipt"));
+    }
+
+    /// Concurrent receipt enqueue, reconnect flush, retry-now and maintenance
+    /// expiry on one core: no deadlock (outbox and blocked_manager are never
+    /// held together), every receipt is dispatched at most once, and none
+    /// survives a dispatch.
+    #[test]
+    fn concurrent_receipt_enqueue_flush_and_expiry_is_consistent() {
+        use std::collections::HashMap;
+        use std::sync::Mutex as StdMutex;
+
+        let core = Arc::new(IronCore::new());
+        core.grant_consent();
+        core.initialize_identity().unwrap();
+        let recipient = core.get_identity_info().public_key_hex.unwrap();
+        let dispatched: Arc<StdMutex<HashMap<String, u32>>> =
+            Arc::new(StdMutex::new(HashMap::new()));
+        let enqueued: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let core = Arc::clone(&core);
+                let recipient = recipient.clone();
+                let enqueued = Arc::clone(&enqueued);
+                scope.spawn(move || {
+                    for _ in 0..15 {
+                        if let Ok(p) = core.prepare_message(
+                            recipient.clone(),
+                            "{}".to_string(),
+                            crate::MessageType::Receipt,
+                            None,
+                        ) {
+                            if let Ok(mut ids) = enqueued.lock() {
+                                ids.push(p.message_id);
+                            }
+                        }
+                    }
+                });
+            }
+            for _ in 0..2 {
+                let core = Arc::clone(&core);
+                let recipient = recipient.clone();
+                let dispatched = Arc::clone(&dispatched);
+                scope.spawn(move || {
+                    for _ in 0..30 {
+                        core.handle_peer_connection_event_with_egress(
+                            &recipient,
+                            true,
+                            false,
+                            &mut |id, _| {
+                                if let Ok(mut seen) = dispatched.lock() {
+                                    *seen.entry(id.to_string()).or_insert(0) += 1;
+                                }
+                                true
+                            },
+                        );
+                    }
+                });
+            }
+            {
+                let core = Arc::clone(&core);
+                scope.spawn(move || {
+                    for _ in 0..30 {
+                        let _ = core.perform_maintenance();
+                    }
+                });
+            }
+        });
+
+        // Final sweep picks up anything enqueued after the last concurrent flush.
+        core.handle_peer_connection_event_with_egress(&recipient, true, false, &mut |id, _| {
+            if let Ok(mut seen) = dispatched.lock() {
+                *seen.entry(id.to_string()).or_insert(0) += 1;
+            }
+            true
+        });
+        let seen = dispatched.lock().map(|g| g.clone()).unwrap_or_default();
+        let ids = enqueued.lock().map(|g| g.clone()).unwrap_or_default();
+        assert!(!ids.is_empty(), "at least one receipt was enqueued");
+        for id in &ids {
+            assert_eq!(
+                seen.get(id).copied(),
+                Some(1),
+                "receipt {id} dispatched exactly once"
+            );
+            assert!(
+                !core.outbox_contains_for_recipient(&recipient, id),
+                "dispatched receipt {id} must not remain queued"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
