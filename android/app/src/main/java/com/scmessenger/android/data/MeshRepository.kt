@@ -6774,16 +6774,16 @@ open class MeshRepository(
         val isNew = activeSessions.put(peerId, System.currentTimeMillis()) == null
         if (isNew) {
             updateDiscoveryInputs()
-            reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.NEW_PEER_CONNECTED)
         }
+        com.scmessenger.android.transport.discovery.PeerPresence.onSessionStarted(isNew)
+            ?.let { reportDiscoveryEvent(it) }
     }
 
     /** A transport session ended; losing the last peer resets discovery to aggressive. */
     private fun noteSessionEnded() {
         updateDiscoveryInputs()
-        if (activeSessions.isEmpty()) {
-            reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.ALL_PEERS_LOST)
-        }
+        com.scmessenger.android.transport.discovery.PeerPresence.onSessionEnded(activeSessions.size)
+            ?.let { reportDiscoveryEvent(it) }
     }
 
     /**

@@ -189,3 +189,17 @@ class RadioStateReceiver internal constructor(
         registration.close()
     }
 }
+
+/**
+ * Maps peer-session transitions to discovery events (#469 T7). Pure so the
+ * decision is unit testable; `MeshRepository` supplies the session counts.
+ */
+object PeerPresence {
+    /** A session started; only a peer not seen before restarts decay. */
+    fun onSessionStarted(peerWasNew: Boolean): DiscoveryEventKind? =
+        if (peerWasNew) DiscoveryEventKind.NEW_PEER_CONNECTED else null
+
+    /** A session ended with [remainingPeers] still connected; losing the last one resets. */
+    fun onSessionEnded(remainingPeers: Int): DiscoveryEventKind? =
+        if (remainingPeers <= 0) DiscoveryEventKind.ALL_PEERS_LOST else null
+}

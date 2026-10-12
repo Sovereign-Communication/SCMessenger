@@ -368,4 +368,236 @@ mod tests {
             clock.0.fetch_add(60_000, Ordering::SeqCst);
         }
     }
+
+    // ---- #469 T7/T8 behaviour tests: events reach the scheduler and cadence
+    // ---- is driven by events only (no static timers).
+
+    fn floor_ms(t: DiscoveryTransport) -> u64 {
+        SchedulerConfig::for_transport(t.into()).floor_ms
+    }
+
+    const EVERY_TRANSPORT: [DiscoveryTransport; 4] = [
+        DiscoveryTransport::Ble,
+        DiscoveryTransport::Lan,
+        DiscoveryTransport::WifiDirect,
+        DiscoveryTransport::Ledger,
+    ];
+
+    fn decay_every_transport(c: &DiscoveryCoordinator) {
+        for t in EVERY_TRANSPORT {
+            for _ in 0..4 {
+                c.next_delay_ms(t);
+            }
+            assert!(snapshot(c, t).interval_ms > floor_ms(t));
+        }
+    }
+
+    #[test]
+    fn new_peer_connected_resets_every_transport_to_its_floor() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        decay_every_transport(&c);
+        let reset = c.on_event(DiscoveryEvent::NewPeerConnected);
+        for t in EVERY_TRANSPORT {
+            assert!(reset.contains(&t), "{:?} not reset", t);
+            let snap = snapshot(&c, t);
+            assert_eq!(snap.phase, Phase::Aggressive);
+            assert_eq!(snap.interval_ms, floor_ms(t));
+        }
+    }
+
+    #[test]
+    fn all_peers_lost_resets_every_transport_to_its_floor() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        decay_every_transport(&c);
+        let reset = c.on_event(DiscoveryEvent::AllPeersLost);
+        for t in EVERY_TRANSPORT {
+            assert!(reset.contains(&t), "{:?} not reset", t);
+            assert_eq!(snapshot(&c, t).interval_ms, floor_ms(t));
+        }
+    }
+
+    #[test]
+    fn app_foreground_resets_every_transport() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        decay_every_transport(&c);
+        let reset = c.on_event(DiscoveryEvent::AppForeground);
+        assert_eq!(reset.len(), EVERY_TRANSPORT.len());
+    }
+
+    #[test]
+    fn wifi_changed_resets_lan_wifi_direct_and_ledger_but_not_ble() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        decay_every_transport(&c);
+        let reset = c.on_event(DiscoveryEvent::WifiChanged);
+        assert!(!reset.contains(&DiscoveryTransport::Ble));
+        for t in [
+            DiscoveryTransport::Lan,
+            DiscoveryTransport::WifiDirect,
+            DiscoveryTransport::Ledger,
+        ] {
+            assert!(reset.contains(&t), "{:?} not reset", t);
+            assert_eq!(snapshot(&c, t).interval_ms, floor_ms(t));
+        }
+        assert!(
+            snapshot(&c, DiscoveryTransport::Ble).interval_ms > floor_ms(DiscoveryTransport::Ble)
+        );
+    }
+
+    #[test]
+    fn cellular_changed_resets_only_the_ledger_transport() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        let reset = c.on_event(DiscoveryEvent::CellularChanged);
+        assert_eq!(reset, vec![DiscoveryTransport::Ledger]);
+    }
+
+    #[test]
+    fn lan_interface_changed_resets_lan_wifi_direct_and_ledger() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        let reset = c.on_event(DiscoveryEvent::LanInterfaceChanged);
+        assert_eq!(reset.len(), 3);
+        assert!(!reset.contains(&DiscoveryTransport::Ble));
+    }
+
+    #[test]
+    fn invite_redeemed_after_decay_returns_the_ledger_to_floor_and_leaves_ble_decayed() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        decay_every_transport(&c);
+        let reset = c.on_event(DiscoveryEvent::InviteRedeemed);
+        assert_eq!(reset, vec![DiscoveryTransport::Ledger]);
+        assert_eq!(
+            snapshot(&c, DiscoveryTransport::Ledger).interval_ms,
+            floor_ms(DiscoveryTransport::Ledger)
+        );
+        assert_eq!(snapshot(&c, DiscoveryTransport::Ble).phase, Phase::Decay);
+    }
+
+    #[test]
+    fn first_delay_after_ble_on_is_the_floor_then_widens_without_passing_the_ceiling() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        c.on_event(DiscoveryEvent::BleOn);
+        let ceiling = snapshot(&c, DiscoveryTransport::Ble).ceiling_ms;
+        let delays: Vec<u64> = (0..12)
+            .map(|_| c.next_delay_ms(DiscoveryTransport::Ble))
+            .collect();
+        assert_eq!(delays[0], floor_ms(DiscoveryTransport::Ble));
+        assert!(delays[1] > delays[0], "interval must widen after the floor");
+        assert!(delays.windows(2).all(|w| w[1] >= w[0]));
+        assert!(delays.iter().all(|d| *d <= ceiling));
+        assert_eq!(*delays.last().unwrap_or(&0), ceiling);
+    }
+
+    #[test]
+    fn elapsed_time_alone_never_resets_the_schedule() {
+        // Backoff is event-driven only: a quiet hour must not return the
+        // scheduler to aggressive, queue a reset, or change the reset count.
+        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+        let c = coordinator(clock.clone());
+        c.on_event(DiscoveryEvent::BleOn);
+        for _ in 0..6 {
+            c.next_delay_ms(DiscoveryTransport::Ble);
+        }
+        let before = snapshot(&c, DiscoveryTransport::Ble);
+        clock.0.fetch_add(60 * 60 * 1000, Ordering::SeqCst);
+        let delay = c.next_delay_ms(DiscoveryTransport::Ble);
+        let after = snapshot(&c, DiscoveryTransport::Ble);
+        assert_eq!(after.resets, before.resets);
+        assert_eq!(after.phase, Phase::Decay);
+        assert!(delay > floor_ms(DiscoveryTransport::Ble));
+        assert_eq!(c.pending_reset_due_ms(DiscoveryTransport::Ble), None);
+        assert!(!c.apply_pending_reset(DiscoveryTransport::Ble));
+    }
+
+    #[test]
+    fn set_inputs_moves_the_ceiling_but_never_resets_the_schedule() {
+        let c = coordinator(Arc::new(FakeClock(AtomicU64::new(1_000_000))));
+        c.on_event(DiscoveryEvent::BleOn);
+        c.next_delay_ms(DiscoveryTransport::Ble);
+        let before = snapshot(&c, DiscoveryTransport::Ble);
+        c.set_inputs(8, DiscoveryPower::Low, false);
+        let after = snapshot(&c, DiscoveryTransport::Ble);
+        assert!(after.ceiling_ms > before.ceiling_ms);
+        assert_eq!(after.resets, before.resets);
+        assert_eq!(after.attempts, before.attempts);
+        assert_eq!(after.interval_ms, before.interval_ms);
+    }
+
+    #[test]
+    fn a_flap_inside_the_window_is_deferred_and_applied_when_the_window_ends() {
+        let clock = Arc::new(FakeClock(AtomicU64::new(1_000_000)));
+        let c = coordinator(clock.clone());
+        assert_eq!(
+            c.on_event(DiscoveryEvent::BleOn),
+            vec![DiscoveryTransport::Ble]
+        );
+        for _ in 0..3 {
+            c.next_delay_ms(DiscoveryTransport::Ble);
+        }
+        clock.0.fetch_add(100, Ordering::SeqCst);
+        assert!(c.on_event(DiscoveryEvent::BleOn).is_empty());
+        let floor = floor_ms(DiscoveryTransport::Ble);
+        assert_eq!(
+            c.pending_reset_due_ms(DiscoveryTransport::Ble),
+            Some(floor - 100)
+        );
+        // The long decayed wait is cut short to the deferred reset.
+        assert_eq!(c.next_delay_ms(DiscoveryTransport::Ble), floor - 100);
+        clock.0.fetch_add(floor, Ordering::SeqCst);
+        assert!(c.apply_pending_reset(DiscoveryTransport::Ble));
+        assert!(is_aggressive(&c, DiscoveryTransport::Ble));
+        assert!(!c.apply_pending_reset(DiscoveryTransport::Ble));
+        assert_eq!(c.pending_reset_due_ms(DiscoveryTransport::Ble), None);
+    }
+
+    #[test]
+    fn every_discovery_event_maps_to_its_network_event() {
+        let table = [
+            (DiscoveryEvent::BleOn, "BleStateChanged"),
+            (DiscoveryEvent::BleOff, "BleStateChanged"),
+            (DiscoveryEvent::WifiChanged, "WifiChanged"),
+            (DiscoveryEvent::CellularChanged, "CellularChanged"),
+            (DiscoveryEvent::LanInterfaceChanged, "LanInterfaceChanged"),
+            (DiscoveryEvent::AppForeground, "AppForeground"),
+            (DiscoveryEvent::InviteRedeemed, "InviteRedeemed"),
+            (DiscoveryEvent::NewPeerConnected, "NewPeerConnected"),
+            (DiscoveryEvent::AllPeersLost, "AllPeersLost"),
+        ];
+        for (event, kind) in table {
+            assert_eq!(NetworkEvent::from(event).kind(), kind);
+        }
+        assert!(matches!(
+            NetworkEvent::from(DiscoveryEvent::BleOn),
+            NetworkEvent::BleStateChanged { on: true }
+        ));
+        assert!(matches!(
+            NetworkEvent::from(DiscoveryEvent::BleOff),
+            NetworkEvent::BleStateChanged { on: false }
+        ));
+    }
+
+    #[test]
+    fn transports_and_power_levels_map_to_the_scheduler_types() {
+        assert_eq!(
+            TransportClass::from(DiscoveryTransport::Ledger),
+            TransportClass::Internet
+        );
+        for t in EVERY_TRANSPORT {
+            assert_eq!(DiscoveryTransport::from(TransportClass::from(t)), t);
+        }
+        assert_eq!(
+            PowerState::from(DiscoveryPower::Charging),
+            PowerState::Charging
+        );
+        assert_eq!(PowerState::from(DiscoveryPower::Normal), PowerState::Normal);
+        assert_eq!(PowerState::from(DiscoveryPower::Low), PowerState::Low);
+    }
+
+    #[test]
+    fn a_coordinator_without_a_scheduler_still_returns_a_positive_delay_and_no_reset() {
+        let c = DiscoveryCoordinator::with_schedulers(Vec::new());
+        assert!(c.next_delay_ms(DiscoveryTransport::Ble) >= 1);
+        assert!(c.on_event(DiscoveryEvent::BleOn).is_empty());
+        assert_eq!(c.pending_reset_due_ms(DiscoveryTransport::Ble), None);
+        assert!(!c.apply_pending_reset(DiscoveryTransport::Ble));
+        c.set_inputs(3, DiscoveryPower::Normal, true);
+    }
 }
