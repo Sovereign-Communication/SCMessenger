@@ -103,6 +103,9 @@ pub struct LocalCell {
     announced_total: usize,
     /// Seconds an announced hint lives without a re-announce.
     hint_ttl: u64,
+    /// Time of each peer's last accepted announcement (unix secs); drives the
+    /// adaptive announce rate limit. Pruned with the peer.
+    last_announce: HashMap<PeerId, u64>,
 }
 
 /// Hint budget floor: every peer, however new, may announce this many hints.
@@ -112,6 +115,9 @@ const HINT_BUDGET_TRUST_SPAN: usize = 120;
 /// Average announced hints per tracked peer; scales the global budget with
 /// the routing table size.
 const HINT_BUDGET_PER_PEER_AVG: usize = 64;
+/// Seconds of extra minimum announce spacing a zero-reliability peer pays over
+/// a fully trusted one (which pays the 1 s clock-resolution floor).
+const ANNOUNCE_INTERVAL_SPAN_SECS: f64 = 30.0;
 
 impl LocalCell {
     /// Create a new local cell with default timeouts
@@ -125,6 +131,7 @@ impl LocalCell {
             hint_index: HashMap::new(),
             announced_total: 0,
             hint_ttl: 1800,
+            last_announce: HashMap::new(),
         }
     }
 
@@ -139,6 +146,7 @@ impl LocalCell {
             hint_index: HashMap::new(),
             announced_total: 0,
             hint_ttl: stale_timeout,
+            last_announce: HashMap::new(),
         }
     }
 
@@ -209,14 +217,50 @@ impl LocalCell {
         self.peers.len().max(1) * HINT_BUDGET_PER_PEER_AVG
     }
 
+    /// Level the announced total is evicted down to once it exceeds the
+    /// budget (90%). The gap is hysteresis: the next announces fit in the
+    /// band instead of each re-triggering enforcement.
+    fn hint_low_water(&self) -> usize {
+        let budget = self.global_hint_budget();
+        budget - budget / 10
+    }
+
+    /// Minimum seconds between accepted announcements from a peer, derived
+    /// from its reliability: trusted peers may announce often, unproven or
+    /// failing peers rarely.
+    fn announce_min_interval(reliability: f64) -> u64 {
+        let r = reliability.max(0.0).min(1.0);
+        1 + ((1.0 - r) * ANNOUNCE_INTERVAL_SPAN_SECS) as u64
+    }
+
+    /// Accept or coalesce an announcement. Records the accept time. A clock
+    /// that moved backwards resets the peer's window.
+    fn announce_allowed(&mut self, peer_id: &PeerId, reliability: f64, now: u64) -> bool {
+        if let Some(last) = self.last_announce.get(peer_id) {
+            if now >= *last && now - *last < Self::announce_min_interval(reliability) {
+                return false;
+            }
+        }
+        self.last_announce.insert(*peer_id, now);
+        true
+    }
+
     /// Number of indexed (hint, peer) entries.
     pub fn indexed_hint_count(&self) -> usize {
         self.hint_index.values().map(|m| m.len()).sum()
     }
 
-    fn update_peer_hints_at(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>, now: u64) {
+    /// Returns false when the announcement was ignored (unknown peer, or the
+    /// peer announced faster than its adaptive rate limit allows).
+    fn update_peer_hints_at(&mut self, peer_id: &PeerId, hints: Vec<[u8; 8]>, now: u64) -> bool {
+        let Some(reliability) = self.peers.get(peer_id).map(|p| p.reliability_score) else {
+            return false;
+        };
+        if !self.announce_allowed(peer_id, reliability, now) {
+            return false;
+        }
         let Some(peer) = self.peers.get_mut(peer_id) else {
-            return;
+            return false;
         };
         let direct = crate::identity::keys::routing_hint_from_public_key(peer_id);
         let budget = Self::peer_hint_budget(peer.reliability_score);
@@ -248,6 +292,7 @@ impl LocalCell {
             peer.reachable_hints = kept;
         }
         self.enforce_global_hint_budget();
+        true
     }
 
     fn index_insert(&mut self, peer_id: &PeerId, hint: &[u8; 8], now: u64) {
@@ -275,13 +320,13 @@ impl LocalCell {
     }
 
     /// Drop announced hints (never direct hints) over the global budget,
-    /// lowest-reliability first, then oldest announcement first.
+    /// lowest-reliability first, then oldest announcement first. Evicts down
+    /// to the low-water mark, and selects the victims without a full sort.
     fn enforce_global_hint_budget(&mut self) {
-        let budget = self.global_hint_budget();
-        if self.announced_total <= budget {
+        if self.announced_total <= self.global_hint_budget() {
             return;
         }
-        let excess = self.announced_total - budget;
+        let excess = self.announced_total - self.hint_low_water();
         let mut ranked: Vec<(f64, u64, PeerId, [u8; 8])> = Vec::new();
         for (hint, holders) in &self.hint_index {
             for (peer_id, at) in holders {
@@ -292,12 +337,17 @@ impl LocalCell {
                 ranked.push((score, *at, *peer_id, *hint));
             }
         }
-        ranked.sort_by(|a, b| {
+        let order = |a: &(f64, u64, PeerId, [u8; 8]), b: &(f64, u64, PeerId, [u8; 8])| {
             a.0.total_cmp(&b.0)
                 .then_with(|| a.1.cmp(&b.1))
                 .then_with(|| a.2.cmp(&b.2))
                 .then_with(|| a.3.cmp(&b.3))
-        });
+        };
+        // The order is total (peer, hint is unique), so the first `excess`
+        // entries after partitioning are exactly the sorted prefix.
+        if excess > 0 && excess < ranked.len() {
+            ranked.select_nth_unstable_by(excess - 1, order);
+        }
         for (_, _, peer_id, hint) in ranked.into_iter().take(excess) {
             self.index_remove(&peer_id, &hint);
             if let Some(peer) = self.peers.get_mut(&peer_id) {
@@ -514,6 +564,7 @@ impl LocalCell {
             .map(|p| &p.peer_id)
             .expect("checked non-empty above");
 
+        self.last_announce.remove(&peer_to_evict);
         if let Some(removed) = self.peers.remove(&peer_to_evict) {
             for hint in &removed.reachable_hints {
                 self.index_remove(&peer_to_evict, hint);
@@ -626,14 +677,18 @@ mod tests {
         }
         let high_budget = LocalCell::max_peer_hint_budget();
         let low_budget = LocalCell::peer_hint_budget(0.5);
-        assert!(high_budget + low_budget > cell.global_hint_budget());
+        // Announce under the high peer's budget so the whole excess falls on
+        // the low peer even after evicting down to the low-water mark.
+        let high_announced = 100usize;
+        assert!(high_announced <= high_budget);
+        assert!(high_announced + low_budget > cell.global_hint_budget());
         cell.update_peer_hints_at(&low, flood(0, low_budget as u32), 100);
-        cell.update_peer_hints_at(&high, flood(10_000, high_budget as u32), 200);
-        let excess = high_budget + low_budget - cell.global_hint_budget();
-        assert_eq!(cell.announced_total, cell.global_hint_budget());
+        cell.update_peer_hints_at(&high, flood(10_000, high_announced as u32), 200);
+        let excess = high_announced + low_budget - cell.hint_low_water();
+        assert_eq!(cell.announced_total, cell.hint_low_water());
         assert_eq!(
             cell.get_peer(&high).unwrap().reachable_hints.len(),
-            high_budget
+            high_announced
         );
         assert_eq!(
             cell.get_peer(&low).unwrap().reachable_hints.len(),
@@ -650,12 +705,140 @@ mod tests {
         assert!(2 * budget > cell.global_hint_budget());
         cell.update_peer_hints_at(&old, flood(0, budget as u32), 100);
         cell.update_peer_hints_at(&new, flood(10_000, budget as u32), 200);
-        let excess = 2 * budget - cell.global_hint_budget();
+        let excess = 2 * budget - cell.hint_low_water();
         assert_eq!(cell.get_peer(&new).unwrap().reachable_hints.len(), budget);
         assert_eq!(
             cell.get_peer(&old).unwrap().reachable_hints.len(),
             budget - excess
         );
+        assert_index_consistent(&cell);
+    }
+
+    /// Seed (peer, hint, announce time) entries directly, bypassing the
+    /// per-announce enforcement and rate limit.
+    fn seed_entry(cell: &mut LocalCell, peer: &PeerId, hint: [u8; 8], at: u64) {
+        cell.index_insert(peer, &hint, at);
+        if let Some(p) = cell.peers.get_mut(peer) {
+            p.reachable_hints.push(hint);
+        }
+    }
+
+    #[test]
+    fn repeated_announces_over_budget_enforce_once_per_hysteresis_band() {
+        let mut cell = hint_test_cell(4);
+        let budget = cell.global_hint_budget();
+        let low = cell.hint_low_water();
+        assert!(low < budget);
+        let ids: Vec<PeerId> = (1..=4).map(make_peer_id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            cell.update_peer_hints_at(id, flood(i as u32 * 1000, 68), 100 * (i as u64 + 1));
+        }
+        // 4 * 68 > budget: enforcement ran once and evicted to the low mark.
+        assert_eq!(cell.announced_total, low);
+        // Growth inside the band (low, budget] triggers no further eviction.
+        let mut grown = cell.get_peer(&ids[0]).unwrap().reachable_hints.clone();
+        let mut next = 50_000u32;
+        let mut t = 1_000u64;
+        while cell.announced_total + 10 <= budget {
+            let before = cell.announced_total;
+            grown.extend(flood(next, 10));
+            next += 10;
+            t += 100;
+            assert!(cell.update_peer_hints_at(&ids[0], grown.clone(), t));
+            assert_eq!(cell.announced_total, before + 10);
+            assert_index_consistent(&cell);
+        }
+        // Crossing the budget enforces again, down to the low mark.
+        grown.extend(flood(next, 10));
+        cell.update_peer_hints_at(&ids[0], grown, t + 100);
+        assert_eq!(cell.announced_total, low);
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn eviction_victims_match_the_full_sort_order() {
+        let mut cell = hint_test_cell(5);
+        for _ in 0..2 {
+            cell.update_reliability(&make_peer_id(2), true);
+        }
+        cell.update_reliability(&make_peer_id(3), true);
+        cell.update_reliability(&make_peer_id(4), false);
+        // Shared hints and repeated times force the peer-id and hint
+        // tie-breaks; peers 1 and 5 tie on reliability.
+        for n in 1..=5u8 {
+            for i in 0..80u32 {
+                let at = 100 + 10 * ((i + n as u32) % 3) as u64;
+                seed_entry(&mut cell, &make_peer_id(n), make_hint(i % 50 + 1000), at);
+            }
+        }
+        assert_index_consistent(&cell);
+        let excess = cell.announced_total - cell.hint_low_water();
+        assert!(cell.announced_total > cell.global_hint_budget());
+        let mut all: Vec<(f64, u64, PeerId, [u8; 8])> = Vec::new();
+        for (hint, holders) in &cell.hint_index {
+            for (peer_id, at) in holders {
+                let score = cell.peers.get(peer_id).map_or(0.0, |p| p.reliability_score);
+                all.push((score, *at, *peer_id, *hint));
+            }
+        }
+        // The previous implementation: full sort, take the prefix.
+        all.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.3.cmp(&b.3))
+        });
+        let survivors: HashSet<(PeerId, [u8; 8])> =
+            all.iter().skip(excess).map(|e| (e.2, e.3)).collect();
+        cell.enforce_global_hint_budget();
+        assert_eq!(cell.announced_total, cell.hint_low_water());
+        let remaining: HashSet<(PeerId, [u8; 8])> = cell
+            .hint_index
+            .iter()
+            .flat_map(|(h, holders)| holders.keys().map(move |p| (*p, *h)))
+            .collect();
+        assert_eq!(remaining, survivors);
+        assert_index_consistent(&cell);
+    }
+
+    #[test]
+    fn announce_rate_limit_throttles_flooder_not_normal_peer() {
+        let mut cell = hint_test_cell(2);
+        let (flooder, normal) = (make_peer_id(1), make_peer_id(2));
+        for _ in 0..4 {
+            cell.update_reliability(&flooder, false);
+        }
+        for _ in 0..6 {
+            cell.update_reliability(&normal, true);
+        }
+        assert!(LocalCell::announce_min_interval(0.0) > LocalCell::announce_min_interval(1.0));
+        assert_eq!(
+            LocalCell::announce_min_interval(f64::NAN),
+            LocalCell::announce_min_interval(0.0)
+        );
+        let (mut flooder_ok, mut normal_ok) = (0u32, 0u32);
+        for t in 0..60u64 {
+            if cell.update_peer_hints_at(&flooder, vec![make_hint(t as u32)], 1_000 + t) {
+                flooder_ok += 1;
+            }
+            if t % 2 == 0
+                && cell.update_peer_hints_at(&normal, vec![make_hint(5_000 + t as u32)], 1_000 + t)
+            {
+                normal_ok += 1;
+            }
+        }
+        // Flooder: one announce per second, but only a couple are accepted.
+        assert!(
+            (1..=3).contains(&flooder_ok),
+            "flooder accepted {flooder_ok}"
+        );
+        // Normal trusted peer announcing every 2 s is never throttled.
+        assert_eq!(normal_ok, 30);
+        // A coalesced announce leaves the stored hints untouched.
+        let held = &cell.get_peer(&flooder).unwrap().reachable_hints;
+        assert!(held.contains(&make_hint(0)) && !held.contains(&make_hint(1)));
+        // Once its window has elapsed the flooder is heard again.
+        assert!(cell.update_peer_hints_at(&flooder, vec![make_hint(777)], 1_200));
         assert_index_consistent(&cell);
     }
 
