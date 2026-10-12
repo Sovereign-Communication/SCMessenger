@@ -3982,51 +3982,38 @@ open class MeshRepository(
      * first 14 s after launch, 3-node run 2026-10-08). Callers now queue here
      * and the gate turns every redundant one into a no-op.
      */
-    private val swarmStartMutex = kotlinx.coroutines.sync.Mutex()
-
-    /** Whether the last successful swarm start already had a local identity. */
-    @Volatile
-    private var swarmStartedWithIdentity: Boolean? = null
+    private val swarmStartCoordinator = SwarmStartCoordinator(
+        bridgePresent = { swarmBridge != null },
+        readIdentity = {
+            // Blocking FFI read: keep it off the caller's dispatcher (callers
+            // include main-thread-launched triggers).
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    SwarmIdentityRead(
+                        known = true,
+                        present = !ironCore?.getIdentityInfo()?.libp2pPeerId.isNullOrBlank()
+                    )
+                } catch (e: Exception) {
+                    // Unknown, not "absent": assuming absent would silently miss a
+                    // headless -> full upgrade until some later trigger. Assume an
+                    // identity may exist so the gate re-allows the upgrade start; a
+                    // persistently failing read therefore retries on each trigger.
+                    Timber.w(e, "Swarm start gate: identity read failed; treating as possibly present")
+                    SwarmIdentityRead(known = false, present = true)
+                }
+            }
+        },
+        // Non-reentrant Mutex inside the coordinator: nothing in
+        // initializeAndStartSwarmLocked may call initializeAndStartSwarm
+        // synchronously. Audited: it only calls ensureLocalIdentityFederation,
+        // startSwarm/getSwarmBridge FFI, dial(), and repoScope.launch'ed helpers
+        // (separate coroutines that would merely queue on the mutex).
+        start = { initializeAndStartSwarmLocked() }
+    )
 
     private suspend fun initializeAndStartSwarm() {
-        swarmStartMutex.withLock {
-            var identityKnown = true
-            val identityNow = try {
-                !ironCore?.getIdentityInfo()?.libp2pPeerId.isNullOrBlank()
-            } catch (e: Exception) {
-                // Unknown, not "absent": assuming absent would silently miss a
-                // headless -> full upgrade until some later trigger. Assume an
-                // identity may exist so the gate re-allows the upgrade start; a
-                // persistently failing read therefore retries on each trigger.
-                identityKnown = false
-                Timber.w(e, "Swarm start gate: identity read failed; treating as possibly present")
-                true
-            }
-            if (!SwarmStartGate.shouldStart(
-                    bridgePresent = swarmBridge != null,
-                    startedWithIdentity = swarmStartedWithIdentity,
-                    identityNow = identityNow
-                )
-            ) {
-                Timber.d("Swarm already started; skipping redundant start trigger")
-                return
-            }
-            // Non-reentrant Mutex: nothing in initializeAndStartSwarmLocked may
-            // call initializeAndStartSwarm synchronously. Audited: it only calls
-            // ensureLocalIdentityFederation, startSwarm/getSwarmBridge FFI,
-            // dial(), and repoScope.launch'ed helpers (separate coroutines that
-            // would merely queue on this mutex).
-            val startSucceeded = initializeAndStartSwarmLocked()
-            // Record the flag only when this locked start really succeeded. A
-            // failed upgrade retry keeps the old bridge but must leave the flag
-            // unchanged so the next trigger retries. An unknown identity read
-            // records "started without identity" so the next trigger retries.
-            swarmStartedWithIdentity = SwarmStartGate.nextStartedWithIdentity(
-                previous = swarmStartedWithIdentity,
-                startSucceeded = startSucceeded,
-                identityKnown = identityKnown,
-                identityNow = identityNow
-            )
+        if (!swarmStartCoordinator.trigger()) {
+            Timber.d("Swarm already started; skipping redundant start trigger")
         }
     }
 
@@ -4461,6 +4448,7 @@ open class MeshRepository(
         // Clear references to avoid stale lifecycle state on next start.
         coreDelegate = null
         swarmBridge = null
+        swarmStartCoordinator.reset()
         ironCore = null
         // MESSAGE-STORE-LOCK-001: the summary logging tree is process-wide
         // (Timber.forest()) and startMeshService() injects the core into it.
@@ -6665,6 +6653,7 @@ open class MeshRepository(
         val resetSwarm = swarmBridge
         stopTeardown.shutdownSwarm(RESET_SHUTDOWN_TIMEOUT_MS) { resetSwarm?.shutdown() }
         swarmBridge = null
+        swarmStartCoordinator.reset()
 
         // Blocking Rust FFI: bound both, a reset must not wedge on them either.
         val resetMeshService = meshService

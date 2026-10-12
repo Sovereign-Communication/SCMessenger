@@ -832,14 +832,54 @@ fn reflection_requester_socket(
 /// port 0 is a placeholder from a responder that could not resolve a direct
 /// socket and must never reach the AddressObserver.
 fn reflection_reply_is_usable(addr: &SocketAddr) -> bool {
-    !addr.ip().is_unspecified() && addr.port() != 0
+    super::observation::is_plausible_external_socket(addr)
 }
 
-/// Text form of [`reflection_reply_is_usable`]; unparseable replies are unusable.
+/// Longest textual `SocketAddr` we will even try to parse (a scoped IPv6
+/// socket is under 64 bytes). The reply text is peer-supplied.
+const MAX_REFLECTION_REPLY_TEXT_LEN: usize = 64;
+
+/// Text form of [`reflection_reply_is_usable`]; oversized or unparseable
+/// replies are unusable.
 fn reflection_reply_text_is_usable(text: &str) -> bool {
-    text.parse::<SocketAddr>()
-        .map(|a| reflection_reply_is_usable(&a))
-        .unwrap_or(false)
+    text.len() <= MAX_REFLECTION_REPLY_TEXT_LEN
+        && text
+            .parse::<SocketAddr>()
+            .map(|a| reflection_reply_is_usable(&a))
+            .unwrap_or(false)
+}
+
+/// True when an identify-observed socket is the observer's own connection
+/// endpoint. A peer that reports its own address as "ours" (relay confusion
+/// or a hostile peer) would make us treat that peer as a self-dial target.
+fn observed_names_observer_endpoint(
+    tracker: &ConnectionTracker,
+    observer: &PeerId,
+    observed: &SocketAddr,
+) -> bool {
+    tracker.all_connections().iter().any(|conn| {
+        conn.peer_id == *observer
+            && ConnectionTracker::extract_direct_observed_socket_addr(&conn.remote_addr)
+                == Some(*observed)
+    })
+}
+
+/// Maximum age of an address observation before the periodic sweep drops it.
+/// Identify refreshes a live observer far more often than this.
+#[cfg(not(target_arch = "wasm32"))]
+const ADDRESS_OBSERVATION_MAX_AGE_SECS: u64 = 900;
+
+/// Drop pending reflection entries whose waiter has gone away (timed out or
+/// cancelled: the receiver is dropped, so the sender is closed). Returns the
+/// number removed. Entries with a live waiter are left to the protocol's own
+/// request timeout, which always yields an `OutboundFailure`.
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_abandoned_reflections<K: Eq + Hash>(
+    pending: &mut HashMap<K, mpsc::Sender<Result<String, String>>>,
+) -> usize {
+    let before = pending.len();
+    pending.retain(|_, tx| !tx.is_closed());
+    before - pending.len()
 }
 
 /// Requester-side bound on one address-reflection round trip: the protocol's
@@ -851,13 +891,18 @@ const ADDRESS_REFLECTION_REPLY_BOUND: Duration =
 
 /// Remove a pending reflection entry and release its waiter with `Err`.
 /// No-op when the entry is already gone.
-async fn fail_pending_reflection<K: Eq + Hash>(
+///
+/// Deliberately synchronous (`try_send`): this runs inside the swarm event
+/// loop and must never park it on a waiter's channel. The channel is created
+/// with capacity 1 and carries exactly one message, so the send cannot be
+/// full; a closed channel means the waiter already left.
+fn fail_pending_reflection<K: Eq + Hash>(
     pending: &mut HashMap<K, mpsc::Sender<Result<String, String>>>,
     key: &K,
     reason: String,
 ) {
     if let Some(reply_tx) = pending.remove(key) {
-        let _ = reply_tx.send(Err(reason)).await;
+        let _ = reply_tx.try_send(Err(reason));
     }
 }
 
@@ -4883,6 +4928,15 @@ pub async fn start_swarm_with_config(
                         // ConnectionEstablished via reset_peer_backoff above.
                         dial_policy_manager.prune_old_entries(Duration::from_secs(3600)); // Prune entries older than 1 hour
                         tracing::debug!("[DIAL-POLICY] Pruned stale backoff entries");
+                        // Observer-fed state is bounded by expiry, not a count:
+                        // observations from peers that stopped refreshing them,
+                        // and reflection entries whose waiter timed out.
+                        address_observer.expire_old_observations(ADDRESS_OBSERVATION_MAX_AGE_SECS);
+                        sync_external_address(&mut swarm, &address_observer, &bound_addresses);
+                        let abandoned = prune_abandoned_reflections(&mut pending_reflections);
+                        if abandoned > 0 {
+                            tracing::debug!("Pruned {} abandoned address-reflection waiter(s)", abandoned);
+                        }
                     }
 
                     // TRN-04: custody must not outlive its retention window. Its own
@@ -5667,7 +5721,7 @@ pub async fn start_swarm_with_config(
                                                 &mut pending_reflections,
                                                 &request_id,
                                                 "unusable reflection reply".to_string(),
-                                            ).await;
+                                            );
                                             continue;
                                         }
 
@@ -5689,7 +5743,7 @@ pub async fn start_swarm_with_config(
                                 // or unknown connection), timed out, or the connection
                                 // closed. Release the requester immediately.
                                 tracing::debug!("Address reflection to {} failed: {}", peer, error);
-                                fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string()).await;
+                                fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string());
                             }
                             SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::AddressReflection(
                                 request_response::Event::InboundFailure { peer, error, .. }
@@ -6936,6 +6990,7 @@ pub async fn start_swarm_with_config(
                                 // "what the network sees" signal for publishing connection hints.
                                 if let Some(observed_addr) =
                                     ConnectionTracker::extract_direct_observed_socket_addr(&info.observed_addr)
+                                        .filter(|observed| !observed_names_observer_endpoint(&connection_tracker, &peer_id, observed))
                                 {
                                     address_observer.record_observation(peer_id, observed_addr);
                                     tracing::info!(
@@ -9797,7 +9852,7 @@ pub async fn start_swarm_with_config(
                                                     &mut pending_reflections,
                                                     &request_id,
                                                     "unusable reflection reply".to_string(),
-                                                ).await;
+                                                );
                                                 continue;
                                             }
                                             if let Some(reply_tx) = pending_reflections.remove(&request_id) {
@@ -9810,7 +9865,7 @@ pub async fn start_swarm_with_config(
                                         }
                                     },
                                     request_response::Event::OutboundFailure { request_id, error, .. } => {
-                                        fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string()).await;
+                                        fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string());
                                     }
                                     _ => {}
                                 }
@@ -10255,6 +10310,7 @@ pub async fn start_swarm_with_config(
                                 // entirely -- see the wasm loop declarations.)
                                 if let Some(observed_addr) =
                                     ConnectionTracker::extract_direct_observed_socket_addr(&info.observed_addr)
+                                        .filter(|observed| !observed_names_observer_endpoint(&connection_tracker, &peer_id, observed))
                                 {
                                     // WASM: diagnostics-only observation recording.
                                     // No external-address promotion exists in the
@@ -11110,13 +11166,177 @@ mod tests {
         let mut pending: HashMap<u64, tokio::sync::mpsc::Sender<Result<String, String>>> =
             HashMap::new();
         pending.insert(7, tx);
-        super::fail_pending_reflection(&mut pending, &7, "refused".to_string()).await;
+        super::fail_pending_reflection(&mut pending, &7, "refused".to_string());
         assert!(pending.is_empty());
         let res = super::await_reflection_reply(&mut rx, std::time::Duration::from_secs(2)).await;
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("refused"));
         // Idempotent for an already-removed entry.
-        super::fail_pending_reflection(&mut pending, &7, "again".to_string()).await;
+        super::fail_pending_reflection(&mut pending, &7, "again".to_string());
+    }
+
+    #[tokio::test]
+    async fn abandoned_reflection_waiters_are_pruned_live_ones_kept() {
+        let mut pending: HashMap<u64, tokio::sync::mpsc::Sender<Result<String, String>>> =
+            HashMap::new();
+        let mut live_rx = Vec::new();
+        for key in 0..1000u64 {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            pending.insert(key, tx);
+            if key % 10 == 0 {
+                live_rx.push(rx);
+            } // else: receiver dropped = waiter timed out / cancelled
+        }
+        assert_eq!(super::prune_abandoned_reflections(&mut pending), 900);
+        assert_eq!(pending.len(), 100);
+        assert_eq!(super::prune_abandoned_reflections(&mut pending), 0);
+        drop(live_rx);
+        assert_eq!(super::prune_abandoned_reflections(&mut pending), 100);
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fail_pending_reflection_never_blocks_on_a_full_or_closed_channel() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.try_send(Ok("preloaded".to_string())).unwrap(); // channel now full
+        let mut pending: HashMap<u8, tokio::sync::mpsc::Sender<Result<String, String>>> =
+            HashMap::new();
+        pending.insert(1, tx);
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            super::fail_pending_reflection(&mut pending, &1, "x".to_string());
+        })
+        .await;
+        assert!(
+            outcome.is_ok(),
+            "fail_pending_reflection parked on a full channel"
+        );
+        assert!(pending.is_empty());
+        drop(rx);
+        let (tx2, rx2) = tokio::sync::mpsc::channel(1);
+        drop(rx2);
+        pending.insert(2, tx2);
+        super::fail_pending_reflection(&mut pending, &2, "closed".to_string());
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reflection_waiters_stress_no_deadlock_no_leak() {
+        // Many concurrent waiters resolved by a mix of reply, failure and
+        // silence; the run must finish under a deadlock timeout and leave the
+        // pending map empty after the sweep.
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let mut pending: HashMap<u32, tokio::sync::mpsc::Sender<Result<String, String>>> =
+                HashMap::new();
+            let mut waiters = Vec::new();
+            for key in 0..400u32 {
+                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                pending.insert(key, tx);
+                waiters.push(tokio::spawn(async move {
+                    super::await_reflection_reply(&mut rx, std::time::Duration::from_millis(300))
+                        .await
+                        .is_ok()
+                }));
+            }
+            for key in 0..400u32 {
+                match key % 4 {
+                    0 => {
+                        if let Some(tx) = pending.remove(&key) {
+                            let _ = tx.try_send(Ok("203.0.113.7:9001".to_string()));
+                        }
+                    }
+                    1 => super::fail_pending_reflection(&mut pending, &key, "boom".to_string()),
+                    _ => {} // silence: only the bounded wait can release these
+                }
+            }
+            let mut ok = 0usize;
+            for waiter in waiters {
+                if waiter.await.expect("waiter task panicked") {
+                    ok += 1;
+                }
+            }
+            assert_eq!(ok, 100);
+            // Every silent waiter timed out and dropped its receiver.
+            assert_eq!(super::prune_abandoned_reflections(&mut pending), 200);
+            assert!(pending.is_empty());
+        })
+        .await;
+        assert!(outcome.is_ok(), "reflection waiter stress test deadlocked");
+    }
+
+    #[test]
+    fn hostile_reflection_replies_are_unusable() {
+        for text in [
+            "",
+            "0.0.0.0:0",
+            "0.0.0.0:9001",
+            "[::]:9001",
+            "203.0.113.7:0",
+            "224.0.0.1:9001",
+            "[ff02::1]:9001",
+            "255.255.255.255:9001",
+            "203.0.113.7",
+            "203.0.113.7:99999",
+            "203.0.113.7:9001\u{0}",
+            "not an address",
+        ] {
+            assert!(!super::reflection_reply_text_is_usable(text), "{text:?}");
+        }
+        let oversized = format!("203.0.113.7:9001{}", " ".repeat(10_000));
+        assert!(!super::reflection_reply_text_is_usable(&oversized));
+        assert!(super::reflection_reply_text_is_usable("203.0.113.7:9001"));
+        assert!(super::reflection_reply_text_is_usable("[2001:db8::1]:9001"));
+    }
+
+    #[test]
+    fn observer_cannot_name_its_own_endpoint_as_ours() {
+        use crate::transport::observation::ConnectionTracker;
+        let mut tracker = ConnectionTracker::new();
+        let observer = PeerId::random();
+        let other = PeerId::random();
+        tracker.add_connection(
+            observer,
+            "/ip4/18.234.62.247/tcp/9001".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "o".to_string(),
+        );
+        let own_endpoint: SocketAddr = "18.234.62.247:9001".parse().unwrap();
+        let ours: SocketAddr = "147.81.41.188:9001".parse().unwrap();
+        assert!(super::observed_names_observer_endpoint(
+            &tracker,
+            &observer,
+            &own_endpoint
+        ));
+        assert!(!super::observed_names_observer_endpoint(
+            &tracker, &observer, &ours
+        ));
+        assert!(!super::observed_names_observer_endpoint(
+            &tracker,
+            &other,
+            &own_endpoint
+        ));
+    }
+
+    #[test]
+    fn dial_skip_guard_handles_hostile_addresses_without_panic() {
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        for text in [
+            "/ip4/0.0.0.0/tcp/0",
+            "/ip4/192.168.0.121/tcp/0",
+            "/ip4/255.255.255.255/tcp/9001",
+            "/ip4/224.0.0.1/tcp/9001",
+            "/ip6/::/tcp/9001",
+            "/ip6/fe80::1/tcp/9001",
+            "/ip4/192.168.0.121/udp/9001",
+            "/dns4/example.com/tcp/9001",
+            "/tcp/9001",
+        ] {
+            let addr: Multiaddr = text.parse().unwrap();
+            let _ = super::address_only_dial_skip_reason(&addr, None, false, &tracker);
+        }
+        // The endpoint set is deduplicated: bounded by distinct live sockets.
+        let many: Vec<(&str, &str)> = (0..64).map(|_| ("p", "/ip4/10.0.0.9/tcp/9001")).collect();
+        let big = tracker_with(&many);
+        assert_eq!(super::connected_direct_endpoints(&big).len(), 1);
     }
 
     #[tokio::test]

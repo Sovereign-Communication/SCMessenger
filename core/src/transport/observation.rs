@@ -9,6 +9,22 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use web_time::{SystemTime, UNIX_EPOCH};
 
+/// Upper bound on components of an identify-observed address we are willing
+/// to inspect (ip, transport, quic/ws suffix, p2p id fit well inside this).
+const MAX_OBSERVED_ADDR_COMPONENTS: usize = 6;
+
+/// Whether a peer-reported socket can name our external endpoint at all.
+/// Rejects the placeholder and non-unicast classes: unspecified ip, port 0,
+/// multicast, and IPv4 broadcast. Loopback and private ranges are accepted:
+/// same-host and LAN peers legitimately observe us there.
+pub fn is_plausible_external_socket(socket: &SocketAddr) -> bool {
+    let ip = socket.ip();
+    if ip.is_unspecified() || ip.is_multicast() || socket.port() == 0 {
+        return false;
+    }
+    !matches!(ip, std::net::IpAddr::V4(v4) if v4.is_broadcast())
+}
+
 /// Observation of our address from a peer
 #[derive(Debug, Clone)]
 pub struct AddressObservation {
@@ -151,7 +167,7 @@ impl AddressObserver {
             .as_secs();
 
         self.observations
-            .retain(|_, obs| now - obs.timestamp < max_age_secs);
+            .retain(|_, obs| now.saturating_sub(obs.timestamp) < max_age_secs);
 
         self.recalculate_consensus();
     }
@@ -329,13 +345,40 @@ impl ConnectionTracker {
     /// AWS 18.234.62.247:9001 became "our" external addr, so every dial to
     /// AWS was skipped as a self-dial).
     pub fn extract_direct_observed_socket_addr(addr: &Multiaddr) -> Option<SocketAddr> {
-        if addr
-            .iter()
-            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
-        {
-            return None;
+        use libp2p::multiaddr::Protocol;
+
+        // Peer-supplied input: bound the component count, accept exactly one
+        // ip and one transport port (the lenient extractor keeps the LAST of
+        // each, so a hostile `/ip4/a/tcp/1/ip4/b/tcp/2` would pick the
+        // attacker's tail), and refuse relayed forms.
+        let mut ip = None;
+        let mut port = None;
+        for (index, protocol) in addr.iter().enumerate() {
+            if index >= MAX_OBSERVED_ADDR_COMPONENTS {
+                return None;
+            }
+            match protocol {
+                Protocol::P2pCircuit => return None,
+                Protocol::Ip4(a) => {
+                    if ip.replace(std::net::IpAddr::V4(a)).is_some() {
+                        return None;
+                    }
+                }
+                Protocol::Ip6(a) => {
+                    if ip.replace(std::net::IpAddr::V6(a)).is_some() {
+                        return None;
+                    }
+                }
+                Protocol::Tcp(p) | Protocol::Udp(p) => {
+                    if port.replace(p).is_some() {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
         }
-        Self::extract_socket_addr(addr)
+        let socket = SocketAddr::new(ip?, port?);
+        is_plausible_external_socket(&socket).then_some(socket)
     }
 
     /// Extract SocketAddr from a Multiaddr (best effort)
@@ -526,6 +569,73 @@ mod tests {
             observer.primary_external_address(),
             Some("203.0.113.5:9001".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn hostile_observed_addresses_are_rejected() {
+        let rejected = [
+            "/ip4/0.0.0.0/tcp/9001",
+            "/ip6/::/tcp/9001",
+            "/ip4/203.0.113.7/tcp/0",
+            "/ip4/224.0.0.1/tcp/9001",
+            "/ip6/ff02::1/tcp/9001",
+            "/ip4/255.255.255.255/tcp/9001",
+            "/ip4/203.0.113.7/ip4/198.51.100.9/tcp/9001",
+            "/ip4/203.0.113.7/tcp/1/tcp/2",
+            "/ip4/203.0.113.7/udp/9001/udp/9002",
+            "/dns4/example.com/tcp/9001",
+            "/ip4/203.0.113.7",
+            "/tcp/9001",
+            "/ip4/203.0.113.7/tcp/9001/p2p-circuit",
+            "/ip4/1.1.1.1/tcp/1/ws/ws/ws/ws/ws",
+        ];
+        for text in rejected {
+            let addr: Multiaddr = text.parse().unwrap();
+            assert!(
+                ConnectionTracker::extract_direct_observed_socket_addr(&addr).is_none(),
+                "{text}"
+            );
+        }
+        for text in [
+            "/ip4/203.0.113.7/tcp/9001",
+            "/ip4/192.168.0.5/tcp/9001",
+            "/ip4/127.0.0.1/tcp/9001",
+            "/ip4/203.0.113.7/udp/9001/quic-v1",
+            "/ip6/2001:db8::1/tcp/9001",
+        ] {
+            let addr: Multiaddr = text.parse().unwrap();
+            assert!(
+                ConnectionTracker::extract_direct_observed_socket_addr(&addr).is_some(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn expiry_survives_future_timestamps() {
+        // A clock step backwards leaves a timestamp in the future; expiry
+        // must not underflow (debug panic / release wraparound).
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.7:9001".parse().unwrap());
+        for obs in observer.observations.values_mut() {
+            obs.timestamp = u64::MAX;
+        }
+        observer.expire_old_observations(60);
+        assert_eq!(observer.all_observations().len(), 1);
+        observer.expire_old_observations(0);
+        assert!(observer.all_observations().is_empty());
+    }
+
+    #[test]
+    fn observation_map_is_bounded_by_expiry() {
+        let mut observer = AddressObserver::new();
+        for _ in 0..500 {
+            observer.record_observation(PeerId::random(), "203.0.113.7:9001".parse().unwrap());
+        }
+        assert_eq!(observer.all_observations().len(), 500);
+        observer.expire_old_observations(0);
+        assert!(observer.all_observations().is_empty());
+        assert!(observer.external_addresses().is_empty());
     }
 
     #[test]

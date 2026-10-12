@@ -5029,6 +5029,32 @@ mod tests {
         assert_eq!(classify_dial_skip("Network error"), None);
     }
 
+    #[test]
+    fn hostile_dial_error_strings_are_never_classified_as_skips() {
+        // Only the swarm's own `skipped:`-prefixed replies are skips. An error
+        // that merely mentions the marker or the prefix mid-string, or is
+        // empty/oversized, is a real failure (or unclassified), never a skip.
+        for msg in [
+            "Dial failed: respond over existing link",
+            "libp2p error: skipped: target is self",
+            "",
+            "   ",
+        ] {
+            assert_eq!(classify_dial_skip(msg), None, "{msg:?}");
+            assert!(!matches!(
+                map_dial_result(Err(anyhow::anyhow!(msg.to_string()))),
+                Err(crate::IronCoreError::DialSkipped)
+            ));
+        }
+        let oversized = "x".repeat(1 << 20);
+        assert_eq!(classify_dial_skip(&oversized), None);
+        // The marker only upgrades a real skip to AlreadyConnected.
+        assert_eq!(
+            classify_dial_skip("skipped: odd reason respond over existing link"),
+            Some(DialSkipOutcome::AlreadyConnected)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // DeviceState / BehaviorAdjustment tests
     // -----------------------------------------------------------------------
