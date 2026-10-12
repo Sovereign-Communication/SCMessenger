@@ -1015,12 +1015,16 @@ impl MeshService {
                                             }
                                         });
                                     }
+                                    let registration_gate = RegistrationGate::new();
                                     while let Some(event) = event_rx.recv().await {
                                         match event {
                                             crate::transport::SwarmEvent::MessageReceived {
                                                 peer_id,
                                                 envelope_data,
                                             } => {
+                                                // Event-driven retry: an inbound from a peer whose
+                                                // registration is waiting out a backoff retries now.
+                                                registration_gate.kick(&peer_id.to_string());
                                                 // Clone the Arc and RELEASE the mutex before calling
                                                 // into the core. Holding it across receive_message
                                                 // serialises every other core user behind this call.
@@ -1073,7 +1077,19 @@ impl MeshService {
 
                                                                         let mut s = stats_clone.lock();
                                                                         s.messages_relayed += 1;
+                                                                    } else {
+                                                                        crate::message_events::log_rx_drop(
+                                                                            &msg.id,
+                                                                            "onion_relay",
+                                                                            "next_hop_key_invalid",
+                                                                        );
                                                                     }
+                                                                } else {
+                                                                    crate::message_events::log_rx_drop(
+                                                                        &msg.id,
+                                                                        "onion_relay",
+                                                                        "next_hop_not_hex",
+                                                                    );
                                                                 }
                                                             } else {
                                                                 tracing::info!(
@@ -1107,6 +1123,11 @@ impl MeshService {
                                                         }
                                                     }
                                                 } else {
+                                                    crate::message_events::log_rx_drop(
+                                                        "unknown",
+                                                        "bridge_dispatch",
+                                                        "core_not_initialized",
+                                                    );
                                                     eprintln!(
                                                         "[IronCore] [ERROR] receive_message SKIPPED from {}: core not initialized",
                                                         peer_id
@@ -1171,15 +1192,26 @@ impl MeshService {
                                                         })
                                                 };
                                                 if let Some(request) = registration_request {
-                                                    if let Err(err) =
-                                                        handle.register_identity(peer_id, request).await
-                                                    {
-                                                        tracing::warn!(
-                                                            "Failed to register local identity with {}: {:?}",
-                                                            peer_id,
-                                                            err
-                                                        );
-                                                    }
+                                                    // MUST NOT be awaited inline: this loop is the sole
+                                                    // consumer of the swarm event channel, and a
+                                                    // registration round trip to a slow or silent
+                                                    // peer stalled it for minutes. While stalled,
+                                                    // every inbound MessageReceived queued behind it
+                                                    // (Pixel 2026-10-08: Drift Data frames from the
+                                                    // swarm never reached receive_message). Detach it
+                                                    // with a hard timeout.
+                                                    let reg_handle = handle.clone();
+                                                    spawn_registration(
+                                                        &registration_gate,
+                                                        peer_id.to_string(),
+                                                        REGISTRATION_ATTEMPT_TIMEOUT,
+                                                        REGISTRATION_RETRY_BASE,
+                                                        move || {
+                                                            let h = reg_handle.clone();
+                                                            let req = request.clone();
+                                                            async move { h.register_identity(peer_id, req).await }
+                                                        },
+                                                    );
                                                 }
                                                 tracing::info!(
                                                     "Peer identified via Swarm: {} (agent: {})",
@@ -3402,6 +3434,129 @@ pub struct HistoryStats {
 /// reachable only by pubkey queries (residual, matches the core store's
 /// behavior). `filter_identity_id` is precomputed once per query (Ed25519
 /// curve validation + blake3), never per record.
+/// Upper bound for one background identity-registration attempt.
+const REGISTRATION_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// First retry delay after a failed or timed-out registration attempt.
+const REGISTRATION_RETRY_BASE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Ceiling for the exponential retry delay.
+const REGISTRATION_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Coalescing per-peer single-flight for detached identity registration.
+///
+/// There is deliberately no global cap: concurrency is bounded by the number
+/// of distinct peers, each of which holds one parked task (a timer and a
+/// pending reply), not a thread. A duplicate request for a peer that already
+/// has a registration in flight merges into it and wakes it for an immediate
+/// retry instead of competing for a slot or being dropped.
+#[derive(Clone, Default)]
+struct RegistrationGate {
+    in_flight: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>>,
+}
+
+impl RegistrationGate {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    #[cfg(test)]
+    fn pending(&self) -> usize {
+        self.in_flight.lock().len()
+    }
+
+    /// Event-driven retry trigger (inbound from `peer`, connect, identify).
+    /// Wakes a registration that is waiting out its backoff. Returns true when
+    /// one was in flight.
+    fn kick(&self, peer: &str) -> bool {
+        match self.in_flight.lock().get(peer) {
+            Some(notify) => {
+                notify.notify_one();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Last 8 characters of a peer id, for compact log lines.
+fn short_peer(peer: &str) -> String {
+    let skip = peer.chars().count().saturating_sub(8);
+    peer.chars().skip(skip).collect()
+}
+
+/// Run a registration round trip off the swarm-event drain loop. Returns
+/// immediately. Each attempt is bounded by `timeout`; a timeout or error is
+/// never a drop: it logs `[RX-DEFER]` and retries with exponential backoff
+/// (`retry_base` doubling up to `REGISTRATION_RETRY_MAX`) until it succeeds,
+/// waking early on `RegistrationGate::kick`. Returns true when a new task was
+/// started, false when the request coalesced into one already in flight (which
+/// is kicked to retry now).
+fn spawn_registration<F, Fut, E>(
+    gate: &RegistrationGate,
+    peer: String,
+    timeout: std::time::Duration,
+    retry_base: std::time::Duration,
+    make_attempt: F,
+) -> bool
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), E>> + Send + 'static,
+    E: fmt::Debug,
+{
+    let notify = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut map = gate.in_flight.lock();
+        if let Some(existing) = map.get(&peer) {
+            existing.notify_one();
+            return false;
+        }
+        map.insert(peer.clone(), notify.clone());
+    }
+    let in_flight = gate.in_flight.clone();
+    tokio::spawn(async move {
+        let mut delay = retry_base;
+        let mut attempt: u32 = 0;
+        loop {
+            attempt = attempt.saturating_add(1);
+            match tokio::time::timeout(timeout, make_attempt()).await {
+                Ok(Ok(())) => break,
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        "[RX-DEFER] register_identity peer={} attempt={} err={:?} retry_ms={}",
+                        short_peer(&peer),
+                        attempt,
+                        err,
+                        delay.as_millis()
+                    );
+                }
+                Err(_) => {
+                    let pending = in_flight.lock().len();
+                    tracing::info!(
+                        "[RX-STALL] register_identity peer={} timeout_ms={} pending={}",
+                        short_peer(&peer),
+                        timeout.as_millis(),
+                        pending
+                    );
+                    tracing::info!(
+                        "[RX-DEFER] register_identity peer={} attempt={} retry_ms={}",
+                        short_peer(&peer),
+                        attempt,
+                        delay.as_millis()
+                    );
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = notify.notified() => {}
+            }
+            delay = (delay * 2).min(REGISTRATION_RETRY_MAX);
+        }
+        in_flight.lock().remove(&peer);
+    });
+    true
+}
+
 fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
     if record_peer.eq_ignore_ascii_case(filter) {
         return true;
@@ -4634,6 +4789,131 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn wait_idle(gate: &super::RegistrationGate) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while gate.pending() != 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "registrations never drained"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn burst_far_beyond_old_cap_loses_no_registration() {
+        let gate = super::RegistrationGate::new();
+        let done = std::sync::Arc::new(AtomicUsize::new(0));
+        let n = 200;
+        for i in 0..n {
+            let d = done.clone();
+            assert!(super::spawn_registration(
+                &gate,
+                format!("peer-{i}"),
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_millis(5),
+                move || {
+                    let d = d.clone();
+                    async move {
+                        d.fetch_add(1, Ordering::SeqCst);
+                        Ok::<(), String>(())
+                    }
+                },
+            ));
+        }
+        wait_idle(&gate).await;
+        assert_eq!(done.load(Ordering::SeqCst), n);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn same_identity_requests_coalesce() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let mk = |a: std::sync::Arc<AtomicUsize>| {
+            move || {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    // Fail once so the task stays in flight long enough to coalesce.
+                    if n < 1 {
+                        Err("not yet".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        };
+        let long = std::time::Duration::from_secs(30);
+        assert!(super::spawn_registration(
+            &gate,
+            "peer-x".into(),
+            long,
+            long,
+            mk(attempts.clone())
+        ));
+        tokio::task::yield_now().await;
+        assert!(
+            !super::spawn_registration(&gate, "peer-x".into(), long, long, mk(attempts.clone())),
+            "duplicate must merge into the in-flight registration"
+        );
+        assert_eq!(gate.pending(), 1);
+        // The coalesced request kicked the 30s backoff, so the retry runs now.
+        wait_idle(&gate).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn timeout_defers_then_later_retry_succeeds() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        assert!(super::spawn_registration(
+            &gate,
+            "peer-slow".into(),
+            std::time::Duration::from_millis(30),
+            std::time::Duration::from_millis(10),
+            move || {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if n == 0 {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok::<(), String>(())
+                }
+            },
+        ));
+        wait_idle(&gate).await;
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "timeout must retry, not drop"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn kick_wakes_backoff_and_unknown_peer_is_noop() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        let long = std::time::Duration::from_secs(60);
+        super::spawn_registration(&gate, "peer-k".into(), long, long, move || {
+            let n = a.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    Err("down".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(gate.kick("peer-k"));
+        assert!(!gate.kick("peer-none"));
+        wait_idle(&gate).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
