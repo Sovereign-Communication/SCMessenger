@@ -3691,6 +3691,22 @@ impl SwarmHandle {
     }
 }
 
+/// Identify-confirmed peer: record it in the optimized routing engine.
+///
+/// Optimized `peer_seen` also binds the peer's canonical key-derived hint to
+/// it, so a connected, identified peer is directly routable without any
+/// announcement. Kept as a function so the identify arm's wiring is testable.
+fn bind_identified_peer_to_routing(
+    routing_engine_handle: &Arc<parking_lot::RwLock<Option<OptimizedRoutingEngine>>>,
+    peer_id_bytes: [u8; 32],
+    transport_type: RoutingTransportType,
+) {
+    let mut guard = routing_engine_handle.write();
+    if let Some(engine) = guard.as_mut() {
+        engine.peer_seen(peer_id_bytes, transport_type);
+    }
+}
+
 /// Create a default (empty) routing engine handle for use by callers that
 /// don't have an IronCore instance (e.g. CLI, WASM). The handle will be
 /// seeded with the local peer ID when the swarm starts.
@@ -6648,15 +6664,11 @@ pub async fn start_swarm_with_config(
                                 // mode as the transport type basis since identity requires a
                                 // server-capable connection.
                                 let transport_type = transport_type_to_routing_transport(kad::Mode::Server);
-                                {
-                                    let mut guard = routing_engine_handle.write();
-                                    if let Some(ref mut engine) = guard.as_mut() {
-                                        // Optimized `peer_seen` also binds the peer's canonical
-                                        // key-derived hint to it, so a connected, identified
-                                        // peer is directly routable without any announcement.
-                                        engine.peer_seen(peer_id_bytes, transport_type);
-                                    }
-                                }
+                                bind_identified_peer_to_routing(
+                                    &routing_engine_handle,
+                                    peer_id_bytes,
+                                    transport_type,
+                                );
                                 // Update routing engine with peer hints from identify info
                                 // (peers announce what hints they can reach)
 
@@ -10543,6 +10555,40 @@ use libp2p::{gossipsub, request_response};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn identify_wiring_binds_peer_direct_hint() {
+        let handle: std::sync::Arc<parking_lot::RwLock<Option<super::OptimizedRoutingEngine>>> =
+            std::sync::Arc::new(parking_lot::RwLock::new(Some(
+                super::OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]),
+            )));
+        let peer = [0x42u8; 32];
+        // Same call the Identify Received arm makes; no announcement, no contact.
+        super::bind_identified_peer_to_routing(&handle, peer, super::RoutingTransportType::TCP);
+        let direct_hint = crate::identity::keys::routing_hint_from_public_key(&peer);
+        let mut guard = handle.write();
+        let Some(engine) = guard.as_mut() else {
+            panic!("engine must remain installed");
+        };
+        let bound = engine
+            .base_engine_mut()
+            .local_cell_mut()
+            .get_peer(&peer)
+            .map(|p| p.reachable_hints.contains(&direct_hint));
+        assert_eq!(bound, Some(true), "identify must bind the canonical hint");
+    }
+
+    #[test]
+    fn identify_wiring_without_engine_is_a_noop() {
+        let handle: std::sync::Arc<parking_lot::RwLock<Option<super::OptimizedRoutingEngine>>> =
+            std::sync::Arc::new(parking_lot::RwLock::new(None));
+        super::bind_identified_peer_to_routing(
+            &handle,
+            [1u8; 32],
+            super::RoutingTransportType::TCP,
+        );
+        assert!(handle.read().is_none());
+    }
+
     use super::{
         addr_targets_self, build_mdns_dial_addr, build_routable_relay_addrs, classify_deny_cause,
         endpoint_transport_string, extract_ed25519_public_key_from_peer_id, extract_ip_component,

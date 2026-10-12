@@ -133,8 +133,6 @@ const MAX_FFI_LOG_LINE_LEN: usize = 8 * 1024;
 const MAX_FFI_PRIVACY_JSON_LEN: usize = 64 * 1024;
 /// Largest invite token accepted before bincode decoding.
 const MAX_FFI_INVITE_TOKEN_LEN: usize = 16 * 1024;
-/// Most routing hints accepted in one `routing_update_peer_hints` call.
-const MAX_FFI_ROUTING_HINTS: usize = 64;
 
 /// Platform-supplied handles are opaque, so the only decidable checks are:
 /// non-blank, bounded, and free of control characters. Fails closed.
@@ -3242,10 +3240,6 @@ impl IronCore {
     /// length-bounded and parsed to 32 bytes before it touches the engine, and
     /// adaptive-TTL state is keyed by the canonical hex form.
     pub fn routing_update_peer_hints(&self, peer_id_hex: String, hints: Vec<Vec<u8>>) {
-        if hints.len() > MAX_FFI_ROUTING_HINTS {
-            tracing::warn!("[WARN] routing_update_peer_hints ignored: oversized hint list");
-            return;
-        }
         let Some(peer_id) = validate_routing_peer_id("routing_update_peer_hints", &peer_id_hex)
         else {
             return;
@@ -3253,9 +3247,17 @@ impl IronCore {
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
             engine.record_message_activity(&hex::encode(peer_id));
+            // No static count cap: the stored list is bounded by the number of
+            // DISTINCT well-formed 8-byte hints (duplicates and malformed
+            // entries are dropped), and the caller's own allocation already
+            // bounds the work. The direct hint below is appended last and is
+            // never displaced.
+            let mut seen_hints: std::collections::HashSet<[u8; 8]> =
+                std::collections::HashSet::new();
             let parsed_hints: Vec<[u8; 8]> = hints
                 .into_iter()
                 .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
+                .filter(|hint| seen_hints.insert(*hint))
                 .collect();
             // The peer's own direct hint is always kept: `update_peer_hints`
             // replaces the list, and an announcement must not make a connected
@@ -3580,7 +3582,13 @@ impl IronCore {
                             .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
                     });
                 let Some(target_key) = target_key else {
-                    return vec![vec![target_peer_id]];
+                    // Unresolvable target: there is no real route to report, so
+                    // return no path rather than inventing one.
+                    tracing::debug!(
+                        event = "best_paths_unresolved_target",
+                        "swarm_get_best_paths: target is not a 32-byte key or PeerId; no path"
+                    );
+                    return Vec::new();
                 };
                 let hint = crate::identity::keys::routing_hint_from_public_key(&target_key);
                 let msg_id: [u8; 16] = *uuid::Uuid::new_v4().as_bytes();
@@ -3610,7 +3618,7 @@ impl IronCore {
                 paths.truncate(count as usize);
                 paths
             }
-            None => vec![vec![target_peer_id]],
+            None => Vec::new(),
         }
     }
 
@@ -7310,6 +7318,48 @@ mod tests {
     }
 
     #[test]
+    fn best_paths_for_unresolvable_target_is_empty_not_invented() {
+        let core = hint_test_core_with_local_engine();
+        assert!(core
+            .swarm_get_best_paths("not-a-peer-id".to_string(), 3)
+            .is_empty());
+        let no_engine = IronCore::new();
+        *no_engine.routing_engine.write() = None;
+        assert!(no_engine
+            .swarm_get_best_paths(hex::encode(hint_test_pubkey()), 3)
+            .is_empty());
+    }
+
+    #[test]
+    fn announcement_with_duplicates_stores_each_hint_once_plus_direct() {
+        let core = hint_test_core_with_local_engine();
+        let peer = hint_test_pubkey();
+        core.routing_engine
+            .write()
+            .as_mut()
+            .unwrap()
+            .peer_seen(peer, crate::routing::TransportType::TCP);
+        let dup = vec![0xAB; 8];
+        core.routing_update_peer_hints(
+            hex::encode(peer),
+            vec![dup.clone(), dup.clone(), dup, vec![1u8; 3]],
+        );
+        let direct = crate::identity::keys::routing_hint_from_public_key(&peer);
+        let mut guard = core.routing_engine.write();
+        let hints = guard
+            .as_mut()
+            .unwrap()
+            .base_engine_mut()
+            .local_cell_mut()
+            .get_peer(&peer)
+            .map(|p| p.reachable_hints.clone())
+            .unwrap_or_default();
+        assert_eq!(hints.iter().filter(|h| **h == [0xAB; 8]).count(), 1);
+        assert!(hints.contains(&direct));
+        assert_eq!(hints.len(), 2);
+    }
+
+    #[test]
     fn announcement_never_drops_direct_hint_regardless_of_list_size() {
         // No static cap may displace the direct hint: even a maximal
         // announcement leaves the peer routable.
@@ -7320,7 +7370,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .peer_seen(peer, crate::routing::TransportType::TCP);
-        let many: Vec<Vec<u8>> = (0..MAX_FFI_ROUTING_HINTS as u32)
+        let many: Vec<Vec<u8>> = (0..100_000u32)
             .map(|i| {
                 let mut h = i.to_le_bytes().to_vec();
                 h.extend_from_slice(&[0xEE; 4]);
@@ -8145,7 +8195,7 @@ mod tests {
         }
         let peer = hex::encode([7u8; 32]);
         core.routing_peer_seen(peer.clone(), long.clone());
-        core.routing_update_peer_hints(peer, vec![vec![0u8; 8]; MAX_FFI_ROUTING_HINTS + 1]);
+        core.routing_update_peer_hints(peer, vec![vec![0u8; 8]; 100_000]);
         let _ = core.routing_summary();
     }
 
