@@ -5652,6 +5652,7 @@ fn ironcore_error_variant(e: &IronCoreError) -> &'static str {
         IronCoreError::Internal => "internal",
         IronCoreError::CorruptionDetected => "corruption_detected",
         IronCoreError::DialSelf => "dial_self",
+        IronCoreError::DialSkipped => "dial_skipped",
         IronCoreError::NoAddresses => "no_addresses",
         IronCoreError::ConnectionLimit => "connection_limit",
         IronCoreError::MultiaddrNotSupported => "multiaddr_not_supported",
