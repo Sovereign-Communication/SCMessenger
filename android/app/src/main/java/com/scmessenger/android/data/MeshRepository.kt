@@ -617,6 +617,9 @@ open class MeshRepository(
     // Transport Manager for BLE/WiFi transport control
     @Volatile private var transportManager: TransportManager? = null
 
+    // Logs [TRANSPORT] availability per transport at start/on change + peer counts every 5 min
+    @Volatile private var transportStatusMonitor: com.scmessenger.android.transport.TransportStatusMonitor? = null
+
     // Topic Manager for gossipsub topic subscription and filtering
     @Volatile private var topicManager: TopicManager? = null
 
@@ -1352,6 +1355,18 @@ open class MeshRepository(
      * TransportManager directly so restart-after-stop self-heals the same
      * way the BLE components already do.
      */
+    private fun startTransportStatusMonitor() = synchronized(serviceLifecycleLock) {
+        if (transportStatusMonitor != null) return@synchronized
+        val monitor = com.scmessenger.android.transport.TransportStatusMonitor(
+            context = context,
+            localPeerCounts = { transportManager?.peerCountsByKind().orEmpty() },
+            swarmPeerCount = { swarmBridge?.getPeers()?.size ?: 0 },
+        )
+        transportStatusMonitor = monitor
+        // start() contains its own failures (logged); it does not throw.
+        monitor.start()
+    }
+
     private fun ensureTransportManager() {
         if (transportManager != null) return
         transportManager = TransportManager(
@@ -2827,6 +2842,7 @@ open class MeshRepository(
                         wifiDirectEnabled = settings.wifiDirectEnabled
                     )
                     transportManager?.startAll(enableMdns = settings.internetEnabled)
+                    startTransportStatusMonitor()
                 } catch (e: Exception) {
                     Timber.w(e, "TransportManager startAll failed; continuing with individual transports")
                 }
@@ -4449,6 +4465,9 @@ open class MeshRepository(
         //
         // cleanup() calls stopAll() first, so the WiFi Aware detach above is
         // preserved.
+        kotlin.runCatching { transportStatusMonitor?.stop() }
+            .onFailure { Timber.w(it, "Failed to stop TransportStatusMonitor; continuing teardown") }
+        transportStatusMonitor = null
         kotlin.runCatching { transportManager?.cleanup() }
             .onFailure { Timber.w(it, "Failed to clean up TransportManager (BLE/WiFi Aware/WiFi Direct/mDNS)") }
 
@@ -12011,6 +12030,7 @@ open class MeshRepository(
                     externalAddressesSnapshot = external
                     listeningAddressesSnapshot = listeners
                     Timber.d("Refreshed address snapshots: listeners=$listeners, external=$external")
+                    com.scmessenger.android.transport.TransportStatus.reportListeners(listeners)
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to refresh address snapshots: ${e.message}")

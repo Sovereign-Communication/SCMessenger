@@ -4,8 +4,8 @@
   "regenerate_with": "python scripts/check_wiring.py --write-findings wiring-audit/FINDINGS.md",
   "scan": {
     "base": "2bf9a46d",
-    "reported": 32,
-    "note": "32 = the #437 baseline (28 C1_ZERO_CALLERS + 4 C4_TRANSITIVE_DEAD). The 33rd finding, MeshRepository.importSeedAddresses, was deleted by #469 T3 together with the unsigned join bundle it served. Every one has exactly one disposition below, and the generator fails if that stops being true."
+    "reported": 33,
+    "note": "33 = the #437 baseline of 32 (28 C1_ZERO_CALLERS + 4 C4_TRANSITIVE_DEAD) plus LogDeduper.trackedKeyCount (a test-only diagnostics accessor added by feat/transport-observability, called only from LogDeduperTest). The earlier MeshRepository.importSeedAddresses finding was deleted by #469 T3 together with the unsigned join bundle it served. Every one has exactly one disposition below, and the generator fails if that stops being true."
   },
   "dispositions": [
     {
@@ -209,6 +209,12 @@
       "classification": "collateral-removed",
       "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt",
       "rationale": "orphaned once its only two users were deleted"
+    },
+    {
+      "symbol": "LogDeduper.trackedKeyCount",
+      "classification": "unwired",
+      "file": "android/app/src/main/java/com/scmessenger/android/utils/LogDeduper.kt",
+      "rationale": "Test-only diagnostics accessor (its own doc says \"for tests and diagnostics\"). LogDeduperTest asserts age and memory-pressure eviction through it; no production code reads it. Recorded rather than hidden: it is an observability seam, not a missing user-facing feature, and should either gain a diagnostics caller or move behind a test-only accessor when the detector supports one."
     }
   ],
   "root_causes": [
