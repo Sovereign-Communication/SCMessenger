@@ -1535,44 +1535,6 @@ impl LedgerManager {
         self.export_seed_entries_for(limit, SeedExportAudience::Untrusted)
     }
 
-    /// Merge seed entries learned out-of-band (invite / QR) into the ledger.
-    /// Returns the number of entries that were newly added.
-    ///
-    /// MERGE POLICY (deliberate -- seed data is attacker-suppliable):
-    /// - Dedupe key is the `/p2p/`-stripped multiaddr, matching the CLI
-    ///   ledger's key convention (`cli/src/ledger.rs::strip_peer_id`).
-    /// - A seed carries no identity and no counters, so there is nothing to
-    ///   merge into an existing entry: a known address is left completely
-    ///   untouched. `success_count`, `failure_count`, `last_seen`, `peer_id`,
-    ///   `public_key` and `nickname` all keep their current values. An invite
-    ///   is not evidence that a peer was reachable at any particular time, and
-    ///   it is certainly not evidence about who is listening there.
-    /// - New entries are added with `success_count = 0` and no identity fields.
-    ///   That means they are deliberately NOT returned by
-    ///   [`Self::dialable_addresses`] (which requires `success_count > 0`) nor
-    ///   by [`Self::get_preferred_relays`]: an unproven address handed to us by
-    ///   whoever held the invite must not masquerade as an address we have
-    ///   actually reached. They surface through [`Self::seed_addresses`]
-    ///   instead -- see the reasoning on that method. The first successful
-    ///   connection promotes the entry via [`Self::record_connection`], and
-    ///   [`Self::annotate_identity`] attaches the identity learned from
-    ///   Identify at that point.
-    /// - Entries whose multiaddr does not parse, is empty, carries no transport
-    ///   component, or is not routable
-    ///   ([`crate::transport::addr_filter::is_dialable_multiaddr`]) are
-    ///   dropped, and the whole batch is capped at
-    ///   [`MAX_SEED_LEDGER_ENTRIES`].
-    ///
-    /// Uses [`NetworkMode::Local`], i.e. RFC1918 peers stay importable: an
-    /// invite is the LAN/mesh cold-start path and a node has no reliable way to
-    /// know its own network context from inside the store layer. Callers that
-    /// do know (a cellular-only node) should use
-    /// [`Self::import_seed_entries_with_mode`].
-    pub fn import_seed_entries(&self, entries: Vec<SeedLedgerEntry>) -> u32 {
-        let _save_guard = self.save_lock.lock();
-        self.import_seed_entries_locked(entries, NetworkMode::Local)
-    }
-
     // UNIFICATION_V2_TRANSPORT: same freshness+reliability ordering as
     // dialable_addresses — proven relays float by recency; deep deprioritize
     // (not prune) keeps ephemeral peers tail-ranked until failure threshold.
@@ -1617,6 +1579,48 @@ impl LedgerManager {
 /// [`NetworkMode`] or exist purely to keep the swarm event loop bounded, and
 /// neither concept belongs in the mobile binding.
 impl LedgerManager {
+    // Rust-only since #469 T3 (PR 501): the only callers are core
+    // (`IronCore::redeem_invite_qr`) and the CLI. Mobile shells redeem a signed
+    // SCI1 invite through `redeem_invite_qr`; no platform ever called this
+    // export once the unsigned JSON join-bundle path was removed.
+    /// Merge seed entries learned out-of-band (invite / QR) into the ledger.
+    /// Returns the number of entries that were newly added.
+    ///
+    /// MERGE POLICY (deliberate -- seed data is attacker-suppliable):
+    /// - Dedupe key is the `/p2p/`-stripped multiaddr, matching the CLI
+    ///   ledger's key convention (`cli/src/ledger.rs::strip_peer_id`).
+    /// - A seed carries no identity and no counters, so there is nothing to
+    ///   merge into an existing entry: a known address is left completely
+    ///   untouched. `success_count`, `failure_count`, `last_seen`, `peer_id`,
+    ///   `public_key` and `nickname` all keep their current values. An invite
+    ///   is not evidence that a peer was reachable at any particular time, and
+    ///   it is certainly not evidence about who is listening there.
+    /// - New entries are added with `success_count = 0` and no identity fields.
+    ///   That means they are deliberately NOT returned by
+    ///   [`Self::dialable_addresses`] (which requires `success_count > 0`) nor
+    ///   by [`Self::get_preferred_relays`]: an unproven address handed to us by
+    ///   whoever held the invite must not masquerade as an address we have
+    ///   actually reached. They surface through [`Self::seed_addresses`]
+    ///   instead -- see the reasoning on that method. The first successful
+    ///   connection promotes the entry via [`Self::record_connection`], and
+    ///   [`Self::annotate_identity`] attaches the identity learned from
+    ///   Identify at that point.
+    /// - Entries whose multiaddr does not parse, is empty, carries no transport
+    ///   component, or is not routable
+    ///   ([`crate::transport::addr_filter::is_dialable_multiaddr`]) are
+    ///   dropped, and the whole batch is capped at
+    ///   [`MAX_SEED_LEDGER_ENTRIES`].
+    ///
+    /// Uses [`NetworkMode::Local`], i.e. RFC1918 peers stay importable: an
+    /// invite is the LAN/mesh cold-start path and a node has no reliable way to
+    /// know its own network context from inside the store layer. Callers that
+    /// do know (a cellular-only node) should use
+    /// [`Self::import_seed_entries_with_mode`].
+    pub fn import_seed_entries(&self, entries: Vec<SeedLedgerEntry>) -> u32 {
+        let _save_guard = self.save_lock.lock();
+        self.import_seed_entries_locked(entries, NetworkMode::Local)
+    }
+
     /// Teach the ledger this node's own identity, so the runtime write paths can
     /// refuse to store the node as one of its own peers (tier_a A8 / issue I-06).
     ///
