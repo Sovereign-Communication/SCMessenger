@@ -59,7 +59,7 @@ class LogFileSupportTest {
         File(tmp.root, "mesh.log.2").writeText("two")
         val problems = mutableListOf<String>()
 
-        assertTrue(rotateLogFiles(log, 4, problems::add))
+        assertTrue(rotateLogFiles(log, 4) { problems.add(it) })
         assertTrue(problems.isEmpty())
         assertFalse(log.exists())
         assertEquals("current", File(tmp.root, "mesh.log.1").readText())
