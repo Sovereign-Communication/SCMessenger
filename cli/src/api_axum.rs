@@ -291,16 +291,18 @@ async fn handle_send_message(
     let ble_ok = crate::ble_mesh::send_ble_message(&peer_id.to_string(), &prepared.envelope_data)
         .await
         .is_ok();
-    let swarm_ok = ctx
-        .swarm_handle
-        .send_message(peer_id, prepared.envelope_data, None, None)
-        .await
-        .is_ok();
-    if swarm_ok {
-        // Only the swarm path is a true transport ACK (BLE gatt write is
-        // fire-and-forget). Release the outbox entry (R2) strictly on it.
-        core.mark_message_sent(prepared.message_id.clone());
-    }
+    // Releases the outbox entry (R2) only on a direct-link ACK; BLE gatt is
+    // fire-and-forget and a relayed Ok is only custody acceptance.
+    let swarm_ok = crate::api::swarm_send_releasing_on_direct_ack(
+        &ctx.swarm_handle,
+        core,
+        peer_id,
+        prepared.envelope_data,
+        None,
+        prepared.message_id.clone(),
+    )
+    .await
+    .is_ok();
     let sent = ble_ok || swarm_ok;
 
     if !sent {
