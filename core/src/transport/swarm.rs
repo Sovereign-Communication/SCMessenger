@@ -11430,8 +11430,8 @@ mod tests {
         for (i, (_, remote)) in conns.iter().enumerate() {
             tracker.add_connection(
                 PeerId::random(),
-                remote.parse().unwrap(),
-                "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+                remote.parse().expect("test remote multiaddr"),
+                "/ip4/0.0.0.0/tcp/0".parse().expect("test local multiaddr"),
                 format!("c{i}"),
             );
         }
@@ -11439,7 +11439,8 @@ mod tests {
     }
 
     fn skip(tracker: &crate::transport::observation::ConnectionTracker, addr: &str) -> bool {
-        super::address_only_dial_skip_reason(&addr.parse().unwrap(), None, false, tracker).is_some()
+        let addr = addr.parse().expect("test dial multiaddr");
+        super::address_only_dial_skip_reason(&addr, None, false, tracker).is_some()
     }
 
     #[tokio::test]
