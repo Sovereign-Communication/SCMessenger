@@ -192,7 +192,7 @@
 			children = (
 				DDEB569E2F3FE0BD00387CC8 /* CoreDelegateImpl.swift */,
 				DDEB569F2F3FE0BD00387CC8 /* IosPlatformBridge.swift */,
-t			CDA200112F90000100387CC8 /* NetworkReportGate.swift */,
+				CDA200112F90000100387CC8 /* NetworkReportGate.swift */,
 				DDEB56A02F3FE0BD00387CC8 /* MeshBackgroundService.swift */,
 				DDEB56A12F3FE0BD00387CC8 /* MeshEventBus.swift */,
 				DDEB56A22F3FE0BD00387CC8 /* NotificationManager.swift */,
