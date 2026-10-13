@@ -134,8 +134,6 @@ class TransportStatusMonitor internal constructor(
         TransportStatus.reset()
     }
 
-    fun probeAll() = hooks.probeAll()
-
     private suspend fun logPeerCounts() {
         val swarm = runCatching { swarmPeerCount() }.getOrDefault(-1)
         val local = localPeerCounts()
