@@ -298,6 +298,9 @@ pub struct MeshService {
     relay_budget: std::sync::Arc<Mutex<u32>>,
     swarm_headless_mode: std::sync::Arc<Mutex<Option<bool>>>,
     current_device_profile: Mutex<Option<DeviceProfile>>,
+    /// Last (has_wifi, has_cellular) reported by the platform, so only a
+    /// genuine change is forwarded to the swarm as a revival wake.
+    last_network: Mutex<Option<(bool, bool)>>,
     device_state: RwLock<Option<DeviceState>>,
     auto_adjust: Arc<AutoAdjustEngine>,
     wifi_aware_bridge: Arc<Mutex<Option<Arc<PlatformWifiAwareBridge>>>>,
@@ -330,6 +333,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -362,6 +366,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -398,6 +403,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -1782,7 +1788,7 @@ impl MeshService {
         self.update_device_state(profile);
     }
 
-    pub fn on_network_changed(&self, has_wifi: bool, _has_cellular: bool) {
+    pub fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
         let mut profile = self
             .current_device_profile
             .lock()
@@ -1791,6 +1797,22 @@ impl MeshService {
         profile.has_wifi = has_wifi;
         // profile doesn't have has_cellular yet, but we've ingested it.
         self.update_device_state(profile);
+
+        // Revival wake: a genuine interface change (for example the Wi-Fi to
+        // cellular handover) is a reason to expect previously unreachable
+        // peers may now be reachable. The first report only records the
+        // baseline; repeated identical reports are not events. The swarm
+        // rate limits wakes per source, so a flapping platform callback
+        // cannot hold addresses at the backoff floor.
+        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
+        if let Some((prev_wifi, prev_cellular)) = previous {
+            if prev_wifi != has_wifi {
+                self.dispatch_network_event(crate::transport::NetworkEvent::WifiChanged);
+            }
+            if prev_cellular != has_cellular {
+                self.dispatch_network_event(crate::transport::NetworkEvent::CellularChanged);
+            }
+        }
     }
 
     pub fn on_motion_changed(&self, motion: MotionState) {
@@ -2259,6 +2281,18 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// Fan one local network event out to both revival queues: the swarm's
+    /// dial-policy backoff (non-blocking command send) and the IronCore
+    /// reconnect queue. The core handle is cloned out so the `core` mutex is
+    /// not held while waking; nothing here awaits.
+    fn dispatch_network_event(&self, event: crate::transport::NetworkEvent) {
+        self.swarm_bridge.notify_network_event(event);
+        let core = self.core.lock().clone();
+        if let Some(core) = core {
+            core.wake_reconnects_on_network_event(event);
+        }
+    }
+
     /// WP2: record a verified platform data link in the shared routing engine.
     ///
     /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
@@ -4111,6 +4145,70 @@ fn get_global_runtime() -> tokio::runtime::Handle {
     handle
 }
 
+/// True when a swarm dial error string is the core guard's neutral
+/// `skipped:` reply (see `SwarmCommand::Dial` handling in the swarm loop).
+fn dial_error_is_skip(err: &str) -> bool {
+    err.trim_start().starts_with("skipped:")
+}
+
+/// Bridge-level outcome of a swarm dial `skipped:` reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialSkipOutcome {
+    /// Exact socket / peer id already connected: genuine connectivity evidence.
+    AlreadyConnected,
+    /// Self / own address / rate-limited probe: no evidence either way.
+    Neutral,
+}
+
+/// Classify a swarm dial error string. `None` means it is a real failure.
+fn classify_dial_skip(err: &str) -> Option<DialSkipOutcome> {
+    if !dial_error_is_skip(err) {
+        return None;
+    }
+    if err.contains(crate::transport::swarm::DIAL_SKIP_CONNECTED_MARKER) {
+        Some(DialSkipOutcome::AlreadyConnected)
+    } else {
+        Some(DialSkipOutcome::Neutral)
+    }
+}
+
+/// Map a swarm dial result onto the FFI contract: `Ok` only for real
+/// dispatch or an already-connected skip; `DialSkipped` for non-evidence
+/// skips; the usual typed errors otherwise.
+fn map_dial_result(dial_result: anyhow::Result<()>) -> Result<(), crate::IronCoreError> {
+    if let Err(e) = &dial_result {
+        match classify_dial_skip(&e.to_string()) {
+            Some(DialSkipOutcome::AlreadyConnected) => {
+                tracing::debug!("Dial skipped (already connected): {}", e);
+                return Ok(());
+            }
+            Some(DialSkipOutcome::Neutral) => {
+                tracing::debug!("Dial skipped by swarm guard (no evidence): {}", e);
+                return Err(crate::IronCoreError::DialSkipped);
+            }
+            None => {}
+        }
+    }
+    dial_result.map_err(|e| {
+        let err_str = e.to_string().to_lowercase();
+        if err_str.contains("dialing self") || err_str.contains("dialself") {
+            crate::IronCoreError::DialSelf
+        } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
+            crate::IronCoreError::NoAddresses
+        } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
+            // TODO(#521): live today (behaviour.rs connection_limits); revisit
+            // and drop this mapping if #521 removes the deny path.
+            crate::IronCoreError::ConnectionLimit
+        } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported") {
+            crate::IronCoreError::MultiaddrNotSupported
+        } else if err_str.contains("io") {
+            crate::IronCoreError::IoError
+        } else {
+            crate::IronCoreError::NetworkError
+        }
+    })
+}
+
 #[uniffi::export]
 impl SwarmBridge {
     #[uniffi::constructor]
@@ -4277,23 +4375,11 @@ impl SwarmBridge {
         let addr =
             Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
 
-        handle.dial(addr).await.map_err(|e| {
-            let err_str = e.to_string().to_lowercase();
-            if err_str.contains("dialing self") || err_str.contains("dialself") {
-                crate::IronCoreError::DialSelf
-            } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
-                crate::IronCoreError::NoAddresses
-            } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
-                crate::IronCoreError::ConnectionLimit
-            } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported")
-            {
-                crate::IronCoreError::MultiaddrNotSupported
-            } else if err_str.contains("io") {
-                crate::IronCoreError::IoError
-            } else {
-                crate::IronCoreError::NetworkError
-            }
-        })
+        // A "skipped:" reply is a deliberate non-dispatch by the swarm guard.
+        // Already-connected skips (exact socket / peer id) are Ok: genuine
+        // connectivity evidence. Self / own-address / rate-limited skips are
+        // the typed `DialSkipped` error: neither success nor failure.
+        map_dial_result(handle.dial(addr).await)
     }
 
     pub async fn get_peers(&self) -> Vec<String> {
@@ -4468,6 +4554,16 @@ impl SwarmBridge {
     /// This must be called after starting the swarm to wire up network operations.
     pub fn set_handle(&self, handle: SwarmHandle) {
         *self.handle.lock() = Some(handle);
+    }
+
+    /// Forward a platform network event to the swarm's dial policy so waiting
+    /// peers get a (rate-limited) revival wake. Non-blocking; a no-op when no
+    /// swarm is running.
+    pub fn notify_network_event(&self, event: crate::transport::NetworkEvent) {
+        let handle = self.handle.lock().clone();
+        if let Some(handle) = handle {
+            handle.notify_network_event(event);
+        }
     }
 
     /// Internal helper to get the runtime handle for spawning
@@ -4918,6 +5014,91 @@ mod tests {
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
 
+    #[test]
+    fn dial_error_is_skip_matches_only_the_neutral_prefix() {
+        assert!(dial_error_is_skip(
+            "skipped: host already connected -- respond over existing link"
+        ));
+        assert!(dial_error_is_skip(
+            "skipped: target is self (local peer id)"
+        ));
+        assert!(!dial_error_is_skip("Dial failed: connection refused"));
+        assert!(!dial_error_is_skip("marked as dead, skipped: later"));
+    }
+
+    #[test]
+    fn dial_skip_ffi_contract_ok_only_for_connected_evidence() {
+        // Exact socket / peer id connected: Ok (evidence).
+        for msg in [
+            "skipped: exact socket already connected -- respond over existing link",
+            "skipped: peer already connected -- respond over existing link",
+        ] {
+            assert!(map_dial_result(Err(anyhow::anyhow!(msg))).is_ok(), "{msg}");
+        }
+        // Self / own address / rate-limited probe: typed DialSkipped.
+        for msg in [
+            "skipped: target is self (local peer id)",
+            "skipped: address is our own listener/external/interface addr -- self-dial",
+            "skipped: host already has a live direct link in this path class; different-port probe skipped",
+        ] {
+            assert!(
+                matches!(
+                    map_dial_result(Err(anyhow::anyhow!(msg))),
+                    Err(crate::IronCoreError::DialSkipped)
+                ),
+                "{msg}"
+            );
+        }
+        // Real failures keep their typed mapping and are never DialSkipped.
+        // (Message avoids the substring "io": the generic mapping treats it as IoError.)
+        assert!(matches!(
+            map_dial_result(Err(anyhow::anyhow!("Dial failed: refused by peer"))),
+            Err(crate::IronCoreError::NetworkError)
+        ));
+        assert!(map_dial_result(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn swarm_skip_reasons_classify_as_expected() {
+        assert_eq!(
+            classify_dial_skip(
+                "skipped: exact socket already connected -- respond over existing link"
+            ),
+            Some(DialSkipOutcome::AlreadyConnected)
+        );
+        assert_eq!(
+            classify_dial_skip("skipped: target is self (local peer id)"),
+            Some(DialSkipOutcome::Neutral)
+        );
+        assert_eq!(classify_dial_skip("Network error"), None);
+    }
+
+    #[test]
+    fn hostile_dial_error_strings_are_never_classified_as_skips() {
+        // Only the swarm's own `skipped:`-prefixed replies are skips. An error
+        // that merely mentions the marker or the prefix mid-string, or is
+        // empty/oversized, is a real failure (or unclassified), never a skip.
+        for msg in [
+            "Dial failed: respond over existing link",
+            "libp2p error: skipped: target is self",
+            "",
+            "   ",
+        ] {
+            assert_eq!(classify_dial_skip(msg), None, "{msg:?}");
+            assert!(!matches!(
+                map_dial_result(Err(anyhow::anyhow!(msg.to_string()))),
+                Err(crate::IronCoreError::DialSkipped)
+            ));
+        }
+        let oversized = "x".repeat(1 << 20);
+        assert_eq!(classify_dial_skip(&oversized), None);
+        // The marker only upgrades a real skip to AlreadyConnected.
+        assert_eq!(
+            classify_dial_skip("skipped: odd reason respond over existing link"),
+            Some(DialSkipOutcome::AlreadyConnected)
+        );
+    }
+
     // -----------------------------------------------------------------------
     // DeviceState / BehaviorAdjustment tests
     // -----------------------------------------------------------------------
@@ -4938,6 +5119,55 @@ mod tests {
     /// S5: a malformed key must produce an empty string, not an all-zero
     /// 60-digit number that looks like a real (matching) safety number a
     /// user could mistakenly "verify".
+    #[test]
+    fn network_change_wakes_core_reconnect_queue() {
+        use crate::transport::abstraction::{TransportEvent, TransportType};
+        use crate::transport::NetworkEvent;
+
+        let core = Arc::new(crate::IronCore::new());
+        let peer = [7u8; 32];
+        {
+            let manager = core.transport_manager_for_test();
+            let manager = manager.read();
+            manager.add_target_peer(peer, vec![1]);
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer,
+                transport: TransportType::BLE,
+                addr: vec![1],
+            });
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer,
+                transport: TransportType::BLE,
+            });
+            for _ in 0..12 {
+                manager.record_reconnect_failure(&peer);
+            }
+        }
+
+        let service = super::MeshService::new(super::MeshServiceConfig {
+            discovery_interval_ms: 5_000,
+            battery_floor_pct: 20,
+        });
+        *service.core.lock() = Some(core.clone());
+
+        // The first report only records the baseline; it is not an event.
+        service.on_network_changed(true, false);
+        assert!(core.peers_needing_reconnect().is_empty());
+
+        // A Wi-Fi to cellular handover is a genuine change: it wakes the
+        // backed-off entry, spending its one-shot credit for this source.
+        service.on_network_changed(false, true);
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::WifiChanged),
+            0,
+            "the handover must already have woken the queued peer"
+        );
+        // The wake bounds the wait to the base interval, so the peer is due
+        // long before its 12-failure backoff would have elapsed.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(core.peers_needing_reconnect().len(), 1);
+    }
+
     #[test]
     fn test_safety_number_returns_empty_string_on_malformed_keys() {
         assert_eq!(safety_number("not-hex".to_string(), "junk".to_string()), "");

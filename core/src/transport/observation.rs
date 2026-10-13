@@ -7,7 +7,39 @@ use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use web_time::{SystemTime, UNIX_EPOCH};
+
+/// Current Unix time in seconds, or None if the clock reads before the epoch.
+/// Never panics; logs once at debug level on failure.
+fn unix_now_secs() -> Option<u64> {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => Some(d.as_secs()),
+        Err(_) => {
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::debug!("system clock before UNIX_EPOCH; skipping time-based bookkeeping");
+            }
+            None
+        }
+    }
+}
+
+/// Upper bound on components of an identify-observed address we are willing
+/// to inspect (ip, transport, quic/ws suffix, p2p id fit well inside this).
+const MAX_OBSERVED_ADDR_COMPONENTS: usize = 6;
+
+/// Whether a peer-reported socket can name our external endpoint at all.
+/// Rejects the placeholder and non-unicast classes: unspecified ip, port 0,
+/// multicast, and IPv4 broadcast. Loopback and private ranges are accepted:
+/// same-host and LAN peers legitimately observe us there.
+pub fn is_plausible_external_socket(socket: &SocketAddr) -> bool {
+    let ip = socket.ip();
+    if ip.is_unspecified() || ip.is_multicast() || socket.port() == 0 {
+        return false;
+    }
+    !matches!(ip, std::net::IpAddr::V4(v4) if v4.is_broadcast())
+}
 
 /// Observation of our address from a peer
 #[derive(Debug, Clone)]
@@ -98,10 +130,7 @@ impl AddressObserver {
             return;
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs();
+        let now = unix_now_secs().unwrap_or(0);
 
         self.observations
             .entry(observer)
@@ -145,13 +174,23 @@ impl AddressObserver {
 
     /// Remove observations older than max_age_secs
     pub fn expire_old_observations(&mut self, max_age_secs: u64) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs();
+        self.expire_at(unix_now_secs(), max_age_secs);
+    }
 
-        self.observations
-            .retain(|_, obs| now - obs.timestamp < max_age_secs);
+    /// Expiry against an explicit clock reading; `None` (pre-epoch or failed
+    /// clock) skips expiry for this tick.
+    fn expire_at(&mut self, now: Option<u64>, max_age_secs: u64) {
+        let Some(now) = now else {
+            // Pre-epoch or failed clock: skip expiry for this tick.
+            return;
+        };
+
+        self.observations.retain(|_, obs| {
+            // Backward clock step: clamp future-stamped entries to now so
+            // they count as fresh and still expire later.
+            obs.timestamp = obs.timestamp.min(now);
+            now.saturating_sub(obs.timestamp) < max_age_secs
+        });
 
         self.recalculate_consensus();
     }
@@ -258,10 +297,7 @@ impl ConnectionTracker {
         local_addr: Multiaddr,
         connection_id: String,
     ) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_secs();
+        let now = unix_now_secs().unwrap_or(0);
 
         self.connections.entry(peer_id).or_default().insert(
             connection_id.clone(),
@@ -320,6 +356,52 @@ impl ConnectionTracker {
             .collect()
     }
 
+    /// Extract the socket of an identify-OBSERVED address, refusing relayed
+    /// forms. When a peer sees us through a relay circuit, the observed
+    /// address is `/ip4/<RELAY>/tcp/<port>/p2p/<relay>/p2p-circuit`: its
+    /// ip/port name the RELAY's socket, not ours. `extract_socket_addr`
+    /// ignores the circuit marker and would hand the relay's endpoint to the
+    /// AddressObserver as our own external address (3-node run 2026-10-08:
+    /// AWS 18.234.62.247:9001 became "our" external addr, so every dial to
+    /// AWS was skipped as a self-dial).
+    pub fn extract_direct_observed_socket_addr(addr: &Multiaddr) -> Option<SocketAddr> {
+        use libp2p::multiaddr::Protocol;
+
+        // Peer-supplied input: bound the component count, accept exactly one
+        // ip and one transport port (the lenient extractor keeps the LAST of
+        // each, so a hostile `/ip4/a/tcp/1/ip4/b/tcp/2` would pick the
+        // attacker's tail), and refuse relayed forms.
+        let mut ip = None;
+        let mut port = None;
+        for (index, protocol) in addr.iter().enumerate() {
+            if index >= MAX_OBSERVED_ADDR_COMPONENTS {
+                return None;
+            }
+            match protocol {
+                Protocol::P2pCircuit => return None,
+                Protocol::Ip4(a) => {
+                    if ip.replace(std::net::IpAddr::V4(a)).is_some() {
+                        return None;
+                    }
+                }
+                Protocol::Ip6(a) => {
+                    if ip.replace(std::net::IpAddr::V6(a)).is_some() {
+                        return None;
+                    }
+                }
+                Protocol::Tcp(p) | Protocol::Udp(p) => {
+                    if port.is_some() {
+                        return None;
+                    }
+                    port = Some(p);
+                }
+                _ => {}
+            }
+        }
+        let socket = SocketAddr::new(ip?, port?);
+        is_plausible_external_socket(&socket).then_some(socket)
+    }
+
     /// Extract SocketAddr from a Multiaddr (best effort)
     pub fn extract_socket_addr(addr: &Multiaddr) -> Option<SocketAddr> {
         use libp2p::multiaddr::Protocol;
@@ -347,6 +429,35 @@ impl ConnectionTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expire_clamps_future_stamps_after_backward_clock_step() {
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
+        for obs in observer.observations.values_mut() {
+            obs.timestamp = 5_000;
+        }
+        // Clock stepped back to 1_000: the 5_000 stamp is in the future.
+        observer.expire_at(Some(1_000), 300);
+        let remaining = observer.all_observations();
+        assert_eq!(remaining.len(), 1, "future stamp is treated as fresh");
+        assert_eq!(remaining[0].timestamp, 1_000, "timestamp clamped to now");
+        // The clamped entry still expires once time moves on.
+        observer.expire_at(Some(1_300), 300);
+        assert!(observer.all_observations().is_empty());
+    }
+
+    #[test]
+    fn pre_epoch_clock_skips_expiry_without_panic() {
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.5:9001".parse().unwrap());
+        for obs in observer.observations.values_mut() {
+            obs.timestamp = 0;
+        }
+        observer.expire_at(None, 1);
+        assert_eq!(observer.all_observations().len(), 1, "expiry skipped");
+        assert!(unix_now_secs().is_some());
+    }
 
     #[test]
     fn address_observer_contract() {
@@ -507,6 +618,87 @@ mod tests {
         assert_eq!(
             observer.primary_external_address(),
             Some("203.0.113.5:9001".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn hostile_observed_addresses_are_rejected() {
+        let rejected = [
+            "/ip4/0.0.0.0/tcp/9001",
+            "/ip6/::/tcp/9001",
+            "/ip4/203.0.113.7/tcp/0",
+            "/ip4/224.0.0.1/tcp/9001",
+            "/ip6/ff02::1/tcp/9001",
+            "/ip4/255.255.255.255/tcp/9001",
+            "/ip4/203.0.113.7/ip4/198.51.100.9/tcp/9001",
+            "/ip4/203.0.113.7/tcp/1/tcp/2",
+            "/ip4/203.0.113.7/udp/9001/udp/9002",
+            "/dns4/example.com/tcp/9001",
+            "/ip4/203.0.113.7",
+            "/tcp/9001",
+            "/ip4/203.0.113.7/tcp/9001/p2p-circuit",
+            "/ip4/1.1.1.1/tcp/1/ws/ws/ws/ws/ws",
+        ];
+        for text in rejected {
+            let addr: Multiaddr = text.parse().unwrap();
+            assert!(
+                ConnectionTracker::extract_direct_observed_socket_addr(&addr).is_none(),
+                "{text}"
+            );
+        }
+        for text in [
+            "/ip4/203.0.113.7/tcp/9001",
+            "/ip4/192.168.0.5/tcp/9001",
+            "/ip4/127.0.0.1/tcp/9001",
+            "/ip4/203.0.113.7/udp/9001/quic-v1",
+            "/ip6/2001:db8::1/tcp/9001",
+        ] {
+            let addr: Multiaddr = text.parse().unwrap();
+            assert!(
+                ConnectionTracker::extract_direct_observed_socket_addr(&addr).is_some(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn expiry_survives_future_timestamps() {
+        // A clock step backwards leaves a timestamp in the future; expiry
+        // must not underflow (debug panic / release wraparound).
+        let mut observer = AddressObserver::new();
+        observer.record_observation(PeerId::random(), "203.0.113.7:9001".parse().unwrap());
+        for obs in observer.observations.values_mut() {
+            obs.timestamp = u64::MAX;
+        }
+        observer.expire_old_observations(60);
+        assert_eq!(observer.all_observations().len(), 1);
+        observer.expire_old_observations(0);
+        assert!(observer.all_observations().is_empty());
+    }
+
+    #[test]
+    fn observation_map_is_bounded_by_expiry() {
+        let mut observer = AddressObserver::new();
+        for _ in 0..500 {
+            observer.record_observation(PeerId::random(), "203.0.113.7:9001".parse().unwrap());
+        }
+        assert_eq!(observer.all_observations().len(), 500);
+        observer.expire_old_observations(0);
+        assert!(observer.all_observations().is_empty());
+        assert!(observer.external_addresses().is_empty());
+    }
+
+    #[test]
+    fn observed_circuit_address_is_not_a_direct_socket() {
+        let relayed: Multiaddr =
+            "/ip4/18.234.62.247/tcp/9001/p2p/12D3KooWGvCWJNoWnReNCT1q2LWb2gTbeBTa5sjxF49wZX3u2y31/p2p-circuit"
+                .parse()
+                .unwrap();
+        assert!(ConnectionTracker::extract_direct_observed_socket_addr(&relayed).is_none());
+        let direct: Multiaddr = "/ip4/147.81.41.188/tcp/9001".parse().unwrap();
+        assert_eq!(
+            ConnectionTracker::extract_direct_observed_socket_addr(&direct),
+            Some("147.81.41.188:9001".parse().unwrap())
         );
     }
 

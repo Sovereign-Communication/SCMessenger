@@ -4965,6 +4965,20 @@ impl IronCore {
         self.transport_manager.read().peers_needing_reconnect()
     }
 
+    #[cfg(test)]
+    pub(crate) fn transport_manager_for_test(&self) -> Arc<RwLock<TransportManager>> {
+        self.transport_manager.clone()
+    }
+
+    /// Wake backed-off reconnect-queue peers on a genuine local network
+    /// event (interface change, foreground, and the like). Peer-loss events
+    /// wake nothing. Synchronous and non-blocking: only brief
+    /// `parking_lot` locks are taken, none held across an await. Returns how
+    /// many queued peers were woken.
+    pub fn wake_reconnects_on_network_event(&self, event: crate::transport::NetworkEvent) -> usize {
+        self.transport_manager.read().on_network_event(&event)
+    }
+
     /// Reset all circuit breakers in the bootstrap manager.
     /// Called on network type change (e.g., WiFi to cellular) to allow
     /// immediate reconnection attempts to previously-failing relays.
@@ -5684,6 +5698,7 @@ fn ironcore_error_variant(e: &IronCoreError) -> &'static str {
         IronCoreError::Internal => "internal",
         IronCoreError::CorruptionDetected => "corruption_detected",
         IronCoreError::DialSelf => "dial_self",
+        IronCoreError::DialSkipped => "dial_skipped",
         IronCoreError::NoAddresses => "no_addresses",
         IronCoreError::ConnectionLimit => "connection_limit",
         IronCoreError::MultiaddrNotSupported => "multiaddr_not_supported",
@@ -6174,6 +6189,53 @@ mod tests {
         // plaintext message by prepare_message_internal.
         // This test documents the expected behavior; full validation requires
         // checking the encoded message (which is in the integration tests).
+    }
+
+    #[test]
+    fn network_event_wakes_backed_off_reconnects_through_core() {
+        use crate::transport::abstraction::{TransportEvent, TransportType};
+        use crate::transport::NetworkEvent;
+
+        let core = IronCore::new();
+        let peer = [9u8; 32];
+        {
+            let manager = core.transport_manager.read();
+            manager.add_target_peer(peer, vec![1]);
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer,
+                transport: TransportType::BLE,
+                addr: vec![1],
+            });
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer,
+                transport: TransportType::BLE,
+            });
+            for _ in 0..12 {
+                manager.record_reconnect_failure(&peer);
+            }
+        }
+        assert!(core.peers_needing_reconnect().is_empty());
+
+        // Peer-loss and remote-triggerable events wake nothing.
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::AllPeersLost),
+            0
+        );
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::NewPeerConnected),
+            0
+        );
+        // A local network change wakes the backed-off peer, coalesced.
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::WifiChanged),
+            1
+        );
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::WifiChanged),
+            0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(core.peers_needing_reconnect().len(), 1);
     }
 
     #[test]

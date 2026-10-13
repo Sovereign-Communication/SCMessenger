@@ -10,6 +10,8 @@ pub mod abuse;
 pub mod blocked_bridge;
 pub mod contacts_bridge;
 pub mod crypto;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod discovery_bridge;
 pub mod drift;
 pub mod dspy;
 pub mod error;
@@ -71,6 +73,12 @@ pub enum IronCoreError {
     IoError,
     #[error("Onion routing disabled")]
     OnionRoutingDisabled,
+    /// The core dial guard deliberately did not dispatch the dial (target is
+    /// self, our own address, or an already-connected host probe). Not a connectivity
+    /// failure and not evidence of connectivity: callers must book no failure,
+    /// no backoff, no success.
+    #[error("Dial skipped")]
+    DialSkipped,
 }
 
 pub use crypto::{decrypt_message, encrypt_message};
