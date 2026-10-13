@@ -44,6 +44,21 @@ internal fun <T> offerDropOldest(queue: BlockingQueue<T>, item: T, ledger: LogLo
     return false
 }
 
+/** Filesystem steps used by [rotateLogFiles]; a seam so tests can force a step to fail deterministically. */
+internal interface LogFileOps {
+    fun exists(file: File): Boolean
+    fun delete(file: File): Boolean
+    fun rename(from: File, to: File): Boolean
+    fun truncate(file: File)
+}
+
+internal object RealLogFileOps : LogFileOps {
+    override fun exists(file: File): Boolean = file.exists()
+    override fun delete(file: File): Boolean = file.delete()
+    override fun rename(from: File, to: File): Boolean = from.renameTo(to)
+    override fun truncate(file: File) = file.writeText("")
+}
+
 /**
  * Rotates `name` -> `name.1` -> ... -> `name.<maxHistory>`, oldest dropped. Every
  * filesystem step that fails is reported through [onProblem]. If the current
@@ -51,21 +66,26 @@ internal fun <T> offerDropOldest(queue: BlockingQueue<T>, item: T, ledger: LogLo
  * bound. Returns true when the current file is now empty or absent, false when
  * it may still hold its old content (the caller must then re-measure it).
  */
-internal fun rotateLogFiles(logFile: File, maxHistory: Int, onProblem: (String) -> Unit): Boolean {
+internal fun rotateLogFiles(
+    logFile: File,
+    maxHistory: Int,
+    ops: LogFileOps = RealLogFileOps,
+    onProblem: (String) -> Unit,
+): Boolean {
     val dir = logFile.parentFile
     for (i in maxHistory - 1 downTo 1) {
         val current = File(dir, "${logFile.name}.$i")
         val next = File(dir, "${logFile.name}.${i + 1}")
-        if (!current.exists()) continue
-        if (next.exists() && !next.delete()) onProblem("could not delete ${next.name}")
-        if (!current.renameTo(next)) onProblem("could not rename ${current.name} to ${next.name}")
+        if (!ops.exists(current)) continue
+        if (ops.exists(next) && !ops.delete(next)) onProblem("could not delete ${next.name}")
+        if (!ops.rename(current, next)) onProblem("could not rename ${current.name} to ${next.name}")
     }
     val first = File(dir, "${logFile.name}.1")
-    if (first.exists() && !first.delete()) onProblem("could not delete ${first.name}")
-    if (logFile.renameTo(first)) return true
+    if (ops.exists(first) && !ops.delete(first)) onProblem("could not delete ${first.name}")
+    if (ops.rename(logFile, first)) return true
     onProblem("could not rename ${logFile.name} to ${first.name}; truncating in place")
     return try {
-        logFile.writeText("")
+        ops.truncate(logFile)
         true
     } catch (e: Exception) {
         onProblem("could not truncate ${logFile.name}: ${e.javaClass.simpleName}")

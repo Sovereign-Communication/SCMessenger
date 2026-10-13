@@ -72,13 +72,16 @@ class LogFileSupportTest {
         val log = tmp.newFile("mesh.log")
         log.writeText("current")
         File(tmp.root, "mesh.log.1").writeText("one")
-        // A non-empty directory squats on the .2 slot: it can be neither deleted nor replaced.
-        val squatter = tmp.newFolder("mesh.log.2")
-        File(squatter, "child").writeText("x")
+        File(tmp.root, "mesh.log.2").writeText("two")
+        // Force the delete of the .3 slot's occupant to fail via the file-ops seam, independent of OS behaviour.
+        File(tmp.root, "mesh.log.3").writeText("three")
+        val failingOps = object : LogFileOps by RealLogFileOps {
+            override fun delete(file: File): Boolean = if (file.name == "mesh.log.3") false else file.delete()
+        }
         val problems = mutableListOf<String>()
 
-        rotateLogFiles(log, 4, problems::add)
+        rotateLogFiles(log, 4, failingOps, problems::add)
 
-        assertTrue(problems.any { it.contains("could not delete mesh.log.2") })
+        assertTrue(problems.any { it.contains("could not delete mesh.log.3") })
     }
 }
