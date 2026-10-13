@@ -32,7 +32,13 @@ class MdnsServiceDiscovery(
     private val onDataReceived: (peerId: String, data: ByteArray) -> Unit,
     private val onPeerDisconnected: ((peerId: String) -> Unit)? = null,
     private val onLanPeerResolved: ((peerId: String, host: String, port: Int, multiaddr: String) -> Unit)? = null,
-    private val getLocalPeerId: (() -> String?)? = null
+    private val getLocalPeerId: (() -> String?)? = null,
+    /**
+     * #469 T8: delay source from the core discovery scheduler. When set, a
+     * failed discovery start is retried on the scheduler's cadence forever
+     * (aggressive after an event, decaying, never giving up).
+     */
+    private val cadence: com.scmessenger.android.transport.discovery.ScanCadence? = null
 ) {
     private var nsdManager: NsdManager? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
@@ -84,7 +90,8 @@ class MdnsServiceDiscovery(
     private val discoveredPeers = ConcurrentHashMap<String, NsdServiceInfo>()
 
     // Retry state for discovery and registration failures
-    private var discoveryRetryCount = 0
+    // Written by NSD callback threads and by restartDiscovery(): atomic.
+    private val discoveryRetryCount = java.util.concurrent.atomic.AtomicInteger(0)
     private var registrationRetryCount = 0
     private val maxRetries = 3
 
@@ -98,7 +105,12 @@ class MdnsServiceDiscovery(
     private val handler = Handler(Looper.getMainLooper())
 
     // Interop assertion constant: must match libp2p-mdns default exactly.
-    companion object { const val EXPECTED_SERVICE_TYPE = "_p2p._udp" }
+    companion object {
+        const val EXPECTED_SERVICE_TYPE = "_p2p._udp"
+
+        /** Settle time between stopping and restarting NSD discovery (not a scan interval). */
+        private const val RESTART_SETTLE_MS = 500L
+    }
 
     /**
      * Validates that a peer ID string is a plausible Ed25519 libp2p PeerId.
@@ -161,7 +173,7 @@ class MdnsServiceDiscovery(
     fun onDiscoveryStarted(regType: String) {
         isDiscovering = true
         lastFailureReason = null
-        discoveryRetryCount = 0
+        discoveryRetryCount.set(0)
         Timber.i("mDNS discovery started for type: $regType (running=$isRunning)")
     }
 
@@ -380,9 +392,9 @@ class MdnsServiceDiscovery(
     fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
         isDiscovering = false
         lastFailureReason = "DISCOVERY_START_FAILED:$errorCode"
-        discoveryRetryCount++
-        Timber.e("mDNS discovery start failed: type=$serviceType errorCode=$errorCode (retry=$discoveryRetryCount/$maxRetries)")
-        TransportStatus.report("mdns", "error", "discovery_start_failed code=$errorCode retry=$discoveryRetryCount")
+        val retryCount = discoveryRetryCount.incrementAndGet()
+        Timber.e("mDNS discovery start failed: type=$serviceType errorCode=$errorCode (retry=$retryCount)")
+        TransportStatus.report("mdns", "error", "discovery_start_failed code=$errorCode retry=$retryCount")
 
         // Error code 4 = FAILURE_ALREADY_ACTIVE: discovery is already running
         // from a previous attempt. Stop it first before retrying.
@@ -396,17 +408,50 @@ class MdnsServiceDiscovery(
             isDiscovering = false
         }
 
-        if (discoveryRetryCount <= maxRetries) {
-            val backoffMs = 1000L * (1L shl (discoveryRetryCount - 1)) // 1s, 2s, 4s
-            handler.postDelayed({
-                if (isRunning && !isDiscovering) {
-                    Timber.d("Retrying mDNS discovery after start failure (attempt $discoveryRetryCount)")
-                    startDiscovery()
-                }
-            }, backoffMs)
-        } else {
-            Timber.e("mDNS discovery start failed after $maxRetries retries -- giving up")
+        // Never give up (#469 decision 4): the retry delay comes from the
+        // scheduler when present, else doubles from 1s with a shift bound so
+        // the delay stays finite. A network event resets via restartDiscovery().
+        val backoffMs = cadence?.nextDelayMs()
+            ?: (1000L * (1L shl (retryCount - 1).coerceIn(0, 5)))
+        handler.postDelayed({
+            if (isRunning && !isDiscovering) {
+                Timber.d("Retrying mDNS discovery after start failure (attempt $retryCount)")
+                startDiscovery()
+            }
+        }, backoffMs)
+    }
+
+    /**
+     * Core discovery scheduler reset the LAN lane (Wi-Fi changed, app
+     * foregrounded, ...): drop the current NSD session and start a fresh one
+     * now, so a stale session bound to the old network cannot linger.
+     */
+    fun restartDiscovery() {
+        // Called from whichever thread reported the platform event. The NSD
+        // stop/start pair is confined to the main-looper handler (the same
+        // thread as every other retry post), and `isRunning` is re-checked
+        // there so a stop() that won the race cannot be undone.
+        handler.post { restartDiscoveryOnHandler() }
+    }
+
+    private fun restartDiscoveryOnHandler() {
+        if (!isRunning) return
+        Timber.i("[DISCOVERY] transport=lan reset: restarting mDNS discovery")
+        discoveryRetryCount.set(0)
+        try {
+            if (isDiscovering) {
+                discoveryListener?.let { nsdManager?.stopServiceDiscovery(it) }
+                isDiscovering = false
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "mDNS: stop during restartDiscovery failed")
+            isDiscovering = false
         }
+        // NsdManager completes the stop asynchronously; a short settle delay
+        // avoids FAILURE_ALREADY_ACTIVE (code 4) on the new session.
+        handler.postDelayed({
+            if (isRunning && !isDiscovering) startDiscovery()
+        }, RESTART_SETTLE_MS)
     }
 
     /**
@@ -613,6 +658,9 @@ class MdnsServiceDiscovery(
         }
 
         isRunning = false
+        // Cancel the scheduled retry / restart posts (#469 T8) so a stopped
+        // session cannot restart discovery or pin this object via the Handler.
+        handler.removeCallbacksAndMessages(null)
 
         try {
             multicastLock?.let {

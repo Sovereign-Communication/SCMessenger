@@ -50,6 +50,10 @@
 		CDA100022F80000100387CC8 /* MeshBackgroundServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */; };
 		CDA100032F80000100387CC8 /* NotificationVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */; };
 		CDA100042F80000100387CC8 /* ReceiptUnificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */; };
+		CDA100302F80000100387CC8 /* DiscoveryGuards.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100202F80000100387CC8 /* DiscoveryGuards.swift */; };
+		CDA100312F80000100387CC8 /* DiscoveryTransportGuardsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100212F80000100387CC8 /* DiscoveryTransportGuardsTests.swift */; };
+		CDA100322F80000100387CC8 /* InviteRedemptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100222F80000100387CC8 /* InviteRedemptionTests.swift */; };
+		CDA100332F80000100387CC8 /* DiscoveryDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100232F80000100387CC8 /* DiscoveryDriverTests.swift */; };
 		CDA200012F80000200387CC8 /* NotificationLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA200112F80000200387CC8 /* NotificationLogger.swift */; };
 		CDA200022F80000200387CC8 /* NotificationBackgroundProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA200122F80000200387CC8 /* NotificationBackgroundProcessor.swift */; };
 /* End PBXBuildFile section */
@@ -113,6 +117,10 @@
 		CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshBackgroundServiceTests.swift; sourceTree = "<group>"; };
 		CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationVerificationTests.swift; sourceTree = "<group>"; };
 		CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptUnificationTests.swift; sourceTree = "<group>"; };
+		CDA100202F80000100387CC8 /* DiscoveryGuards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryGuards.swift; sourceTree = "<group>"; };
+		CDA100212F80000100387CC8 /* DiscoveryTransportGuardsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryTransportGuardsTests.swift; sourceTree = "<group>"; };
+		CDA100222F80000100387CC8 /* InviteRedemptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteRedemptionTests.swift; sourceTree = "<group>"; };
+		CDA100232F80000100387CC8 /* DiscoveryDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryDriverTests.swift; sourceTree = "<group>"; };
 		CDA200112F80000200387CC8 /* NotificationLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationLogger.swift; sourceTree = "<group>"; };
 		CDA200122F80000200387CC8 /* NotificationBackgroundProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationBackgroundProcessor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -203,6 +211,7 @@
 				DDEB56A52F3FE0BD00387CC8 /* BLEL2CAPManager.swift */,
 				DDEB56A62F3FE0BD00387CC8 /* BLEPeripheralManager.swift */,
 				DDEB56A72F3FE0BD00387CC8 /* MeshBLEConstants.swift */,
+				CDA100202F80000100387CC8 /* DiscoveryGuards.swift */,
 				DDAA70012F77700100387CC8 /* LocalTransportFallback.swift */,
 				DDEB56A82F3FE0BD00387CC8 /* MultipeerTransport.swift */,
 				DDAA70032F77701100387CC8 /* mDNSServiceDiscovery.swift */,
@@ -341,6 +350,9 @@
 				CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */,
 				DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */,
 				CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */,
+				CDA100212F80000100387CC8 /* DiscoveryTransportGuardsTests.swift */,
+				CDA100222F80000100387CC8 /* InviteRedemptionTests.swift */,
+				CDA100232F80000100387CC8 /* DiscoveryDriverTests.swift */,
 			);
 			name = SCMessengerTests;
 			path = ../SCMessengerTests;
@@ -495,6 +507,7 @@
 				DDEB56DC2F3FE0BD00387CC8 /* TopicManager.swift in Sources */,
 				DDEB56DD2F3FE0BD00387CC8 /* ContentView.swift in Sources */,
 				DDEB56DE2F3FE0BD00387CC8 /* MeshBLEConstants.swift in Sources */,
+				CDA100302F80000100387CC8 /* DiscoveryGuards.swift in Sources */,
 				DDEB56DF2F3FE0BD00387CC8 /* IosPlatformBridge.swift in Sources */,
 				DDEB56E02F3FE0BD00387CC8 /* ContactsListView.swift in Sources */,
 				DDEB56E12F3FE0BD00387CC8 /* DiagnosticsView.swift in Sources */,
@@ -516,6 +529,9 @@
 				CDA100032F80000100387CC8 /* NotificationVerificationTests.swift in Sources */,
 				DDEB57012F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift in Sources */,
 				CDA100042F80000100387CC8 /* ReceiptUnificationTests.swift in Sources */,
+				CDA100312F80000100387CC8 /* DiscoveryTransportGuardsTests.swift in Sources */,
+				CDA100322F80000100387CC8 /* InviteRedemptionTests.swift in Sources */,
+				CDA100332F80000100387CC8 /* DiscoveryDriverTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
