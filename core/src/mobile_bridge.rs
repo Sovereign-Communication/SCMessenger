@@ -298,6 +298,9 @@ pub struct MeshService {
     relay_budget: std::sync::Arc<Mutex<u32>>,
     swarm_headless_mode: std::sync::Arc<Mutex<Option<bool>>>,
     current_device_profile: Mutex<Option<DeviceProfile>>,
+    /// Last (has_wifi, has_cellular) reported by the platform, so only a
+    /// genuine change is forwarded to the swarm as a revival wake.
+    last_network: Mutex<Option<(bool, bool)>>,
     device_state: RwLock<Option<DeviceState>>,
     auto_adjust: Arc<AutoAdjustEngine>,
     wifi_aware_bridge: Arc<Mutex<Option<Arc<PlatformWifiAwareBridge>>>>,
@@ -330,6 +333,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -362,6 +366,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -398,6 +403,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -1829,7 +1835,7 @@ impl MeshService {
         self.update_device_state(profile);
     }
 
-    pub fn on_network_changed(&self, has_wifi: bool, _has_cellular: bool) {
+    pub fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
         let mut profile = self
             .current_device_profile
             .lock()
@@ -1838,6 +1844,22 @@ impl MeshService {
         profile.has_wifi = has_wifi;
         // profile doesn't have has_cellular yet, but we've ingested it.
         self.update_device_state(profile);
+
+        // Revival wake: a genuine interface change (for example the Wi-Fi to
+        // cellular handover) is a reason to expect previously unreachable
+        // peers may now be reachable. The first report only records the
+        // baseline; repeated identical reports are not events. The swarm
+        // rate limits wakes per source, so a flapping platform callback
+        // cannot hold addresses at the backoff floor.
+        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
+        if let Some((prev_wifi, prev_cellular)) = previous {
+            if prev_wifi != has_wifi {
+                self.dispatch_network_event(crate::transport::NetworkEvent::WifiChanged);
+            }
+            if prev_cellular != has_cellular {
+                self.dispatch_network_event(crate::transport::NetworkEvent::CellularChanged);
+            }
+        }
     }
 
     pub fn on_motion_changed(&self, motion: MotionState) {
@@ -2306,6 +2328,18 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// Fan one local network event out to both revival queues: the swarm's
+    /// dial-policy backoff (non-blocking command send) and the IronCore
+    /// reconnect queue. The core handle is cloned out so the `core` mutex is
+    /// not held while waking; nothing here awaits.
+    fn dispatch_network_event(&self, event: crate::transport::NetworkEvent) {
+        self.swarm_bridge.notify_network_event(event);
+        let core = self.core.lock().clone();
+        if let Some(core) = core {
+            core.wake_reconnects_on_network_event(event);
+        }
+    }
+
     /// WP2: record a verified platform data link in the shared routing engine.
     ///
     /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
@@ -4587,6 +4621,16 @@ impl SwarmBridge {
         *self.handle.lock() = Some(handle);
     }
 
+    /// Forward a platform network event to the swarm's dial policy so waiting
+    /// peers get a (rate-limited) revival wake. Non-blocking; a no-op when no
+    /// swarm is running.
+    pub fn notify_network_event(&self, event: crate::transport::NetworkEvent) {
+        let handle = self.handle.lock().clone();
+        if let Some(handle) = handle {
+            handle.notify_network_event(event);
+        }
+    }
+
     /// Internal helper to get the runtime handle for spawning
     pub fn get_runtime_handle(&self) -> tokio::runtime::Handle {
         self.captured_handle
@@ -5140,6 +5184,55 @@ mod tests {
     /// S5: a malformed key must produce an empty string, not an all-zero
     /// 60-digit number that looks like a real (matching) safety number a
     /// user could mistakenly "verify".
+    #[test]
+    fn network_change_wakes_core_reconnect_queue() {
+        use crate::transport::abstraction::{TransportEvent, TransportType};
+        use crate::transport::NetworkEvent;
+
+        let core = Arc::new(crate::IronCore::new());
+        let peer = [7u8; 32];
+        {
+            let manager = core.transport_manager_for_test();
+            let manager = manager.read();
+            manager.add_target_peer(peer, vec![1]);
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer,
+                transport: TransportType::BLE,
+                addr: vec![1],
+            });
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer,
+                transport: TransportType::BLE,
+            });
+            for _ in 0..12 {
+                manager.record_reconnect_failure(&peer);
+            }
+        }
+
+        let service = super::MeshService::new(super::MeshServiceConfig {
+            discovery_interval_ms: 5_000,
+            battery_floor_pct: 20,
+        });
+        *service.core.lock() = Some(core.clone());
+
+        // The first report only records the baseline; it is not an event.
+        service.on_network_changed(true, false);
+        assert!(core.peers_needing_reconnect().is_empty());
+
+        // A Wi-Fi to cellular handover is a genuine change: it wakes the
+        // backed-off entry, spending its one-shot credit for this source.
+        service.on_network_changed(false, true);
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::WifiChanged),
+            0,
+            "the handover must already have woken the queued peer"
+        );
+        // The wake bounds the wait to the base interval, so the peer is due
+        // long before its 12-failure backoff would have elapsed.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(core.peers_needing_reconnect().len(), 1);
+    }
+
     #[test]
     fn test_safety_number_returns_empty_string_on_malformed_keys() {
         assert_eq!(safety_number("not-hex".to_string(), "junk".to_string()), "");
