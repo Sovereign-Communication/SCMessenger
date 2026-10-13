@@ -746,9 +746,12 @@ d1234567"
         assert_eq!(rx_drop_gate_in(&mut map, "overflow2", t0), None);
         assert_eq!(rx_drop_gate_in(&mut map, "overflow3", t0), None);
         assert_eq!(map.len(), RX_DROP_LIMITER_MAX_KEYS + 1);
+        // At `later` every tracked key is stale, so rx_drop_gate_in would
+        // reclaim a slot (see the reclaim test) rather than reach the overflow
+        // slot. Drive the overflow slot directly to check its loss report.
         let later = t0 + RX_DROP_LOG_INTERVAL;
         assert_eq!(
-            rx_drop_gate_in(&mut map, "overflow4", later),
+            rx_drop_gate_overflow(&mut map, later),
             Some(2),
             "suppressed overflow lines are reported on the next emission"
         );
