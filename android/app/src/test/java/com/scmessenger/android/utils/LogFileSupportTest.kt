@@ -73,15 +73,18 @@ class LogFileSupportTest {
         log.writeText("current")
         File(tmp.root, "mesh.log.1").writeText("one")
         File(tmp.root, "mesh.log.2").writeText("two")
-        // Force the delete of the .3 slot's occupant to fail via the file-ops seam, independent of OS behaviour.
         File(tmp.root, "mesh.log.3").writeText("three")
+        // With maxHistory=4 the first step (i=3) moves .3 onto .4, so the delete that
+        // can fail is the one of the existing .4. Force it to fail via the file-ops
+        // seam, independent of OS behaviour.
+        File(tmp.root, "mesh.log.4").writeText("four")
         val failingOps = object : LogFileOps by RealLogFileOps {
-            override fun delete(file: File): Boolean = if (file.name == "mesh.log.3") false else file.delete()
+            override fun delete(file: File): Boolean = if (file.name == "mesh.log.4") false else file.delete()
         }
         val problems = mutableListOf<String>()
 
         rotateLogFiles(log, 4, failingOps, problems::add)
 
-        assertTrue(problems.any { it.contains("could not delete mesh.log.3") })
+        assertTrue(problems.any { it.contains("could not delete mesh.log.4") })
     }
 }
