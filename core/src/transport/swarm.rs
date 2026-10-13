@@ -4078,6 +4078,7 @@ impl SwarmHandle {
 /// Optimized `peer_seen` also binds the peer's canonical key-derived hint to
 /// it, so a connected, identified peer is directly routable without any
 /// announcement. Kept as a function so the identify arm's wiring is testable.
+#[cfg(not(target_arch = "wasm32"))]
 fn bind_identified_peer_to_routing(
     routing_engine_handle: &Arc<parking_lot::RwLock<Option<OptimizedRoutingEngine>>>,
     peer_id_bytes: [u8; 32],
@@ -11147,7 +11148,7 @@ use libp2p::identify;
 use libp2p::mdns;
 use libp2p::{gossipsub, request_response};
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     #[test]
     fn identify_wiring_binds_peer_direct_hint() {

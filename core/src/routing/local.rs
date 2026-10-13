@@ -253,7 +253,12 @@ impl LocalCell {
     /// from its reliability: trusted peers may announce often, unproven or
     /// failing peers rarely.
     fn announce_min_interval(reliability: f64) -> u64 {
-        let r = reliability.max(0.0).min(1.0);
+        // NaN maps to 0.0 (least trusted), as the max/min chain did.
+        let r = if reliability.is_nan() {
+            0.0
+        } else {
+            reliability.clamp(0.0, 1.0)
+        };
         1 + ((1.0 - r) * ANNOUNCE_INTERVAL_SPAN_SECS) as u64
     }
 
@@ -674,11 +679,17 @@ mod tests {
         let budget = LocalCell::peer_hint_budget(cell.get_peer(&peer).unwrap().reliability_score);
         assert!(cell.get_peer(&peer).unwrap().reachable_hints.len() <= budget);
         assert!(cell.announced_total <= cell.global_hint_budget());
-        assert_eq!(cell.indexed_hint_count(), budget);
+        // One peer's budget (68) exceeds the global budget (64): enforcement
+        // evicts down to the low-water mark, not to the per-peer budget.
+        assert!(cell.indexed_hint_count() <= budget);
+        assert_eq!(cell.indexed_hint_count(), cell.hint_low_water());
         assert_index_consistent(&cell);
         // Lookup is index-bound: a flooded-out hint has no holders.
         assert!(cell.peers_for_hint(&make_hint(99_999)).is_empty());
-        assert_eq!(cell.peers_for_hint(&make_hint(0)).len(), 1);
+        // Equal reliability and announce time evict the lowest hints first,
+        // so the highest hint the peer was allowed to keep survives.
+        assert!(cell.peers_for_hint(&make_hint(0)).is_empty());
+        assert_eq!(cell.peers_for_hint(&make_hint(budget as u32 - 1)).len(), 1);
     }
 
     #[test]
@@ -802,7 +813,7 @@ mod tests {
         for n in 1..=5u8 {
             for i in 0..80u32 {
                 let at = 100 + 10 * ((i + n as u32) % 3) as u64;
-                seed_entry(&mut cell, &make_peer_id(n), make_hint(i % 50 + 1000), at);
+                seed_entry(&mut cell, &make_peer_id(n), make_hint(i + 1000), at);
             }
         }
         assert_index_consistent(&cell);
@@ -912,9 +923,11 @@ mod tests {
             LocalCell::announce_min_interval(0.0)
         );
         let (mut flooder_ok, mut normal_ok) = (0u32, 0u32);
+        let mut flooder_last = 0u32;
         for t in 0..60u64 {
             if cell.update_peer_hints_at(&flooder, vec![make_hint(t as u32)], 1_000 + t) {
                 flooder_ok += 1;
+                flooder_last = t as u32;
             }
             if t % 2 == 0
                 && cell.update_peer_hints_at(&normal, vec![make_hint(5_000 + t as u32)], 1_000 + t)
@@ -931,7 +944,9 @@ mod tests {
         assert_eq!(normal_ok, 30);
         // A coalesced announce leaves the stored hints untouched.
         let held = &cell.get_peer(&flooder).unwrap().reachable_hints;
-        assert!(held.contains(&make_hint(0)) && !held.contains(&make_hint(1)));
+        assert!(
+            held.contains(&make_hint(flooder_last)) && !held.contains(&make_hint(flooder_last + 1))
+        );
         // Once its window has elapsed the flooder is heard again.
         assert!(cell.update_peer_hints_at(&flooder, vec![make_hint(777)], 1_200));
         assert_index_consistent(&cell);
