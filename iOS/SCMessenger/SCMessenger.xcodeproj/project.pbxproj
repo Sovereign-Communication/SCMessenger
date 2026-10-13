@@ -46,6 +46,8 @@
 		DDEB56052F3FE0BD00387CC8 /* BackupPassphraseValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56042F3FE0BD00387CC8 /* BackupPassphraseValidator.swift */; };
 		DDEB56072F3FE0BD00387CC8 /* IdentityBackupSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB56062F3FE0BD00387CC8 /* IdentityBackupSheets.swift */; };
 		DDEB57012F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */; };
+		CDA200012F90000100387CC8 /* NetworkReportGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA200112F90000100387CC8 /* NetworkReportGate.swift */; };
+		CDA200022F90000100387CC8 /* NetworkReportGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA200122F90000100387CC8 /* NetworkReportGateTests.swift */; };
 		CDA100012F80000100387CC8 /* BackupPassphraseValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100112F80000100387CC8 /* BackupPassphraseValidatorTests.swift */; };
 		CDA100022F80000100387CC8 /* MeshBackgroundServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */; };
 		CDA100032F80000100387CC8 /* NotificationVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */; };
@@ -108,6 +110,8 @@
 		DDEB56042F3FE0BD00387CC8 /* BackupPassphraseValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupPassphraseValidator.swift; sourceTree = "<group>"; };
 		DDEB56062F3FE0BD00387CC8 /* IdentityBackupSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityBackupSheets.swift; sourceTree = "<group>"; };
 		DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxRetryPolicyTests.swift; sourceTree = "<group>"; };
+		CDA200112F90000100387CC8 /* NetworkReportGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkReportGate.swift; sourceTree = "<group>"; };
+		CDA200122F90000100387CC8 /* NetworkReportGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkReportGateTests.swift; sourceTree = "<group>"; };
 		DDEB57032F3FE0BD00387CC8 /* SCMessengerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SCMessengerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDA100112F80000100387CC8 /* BackupPassphraseValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupPassphraseValidatorTests.swift; sourceTree = "<group>"; };
 		CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshBackgroundServiceTests.swift; sourceTree = "<group>"; };
@@ -216,6 +220,7 @@
 				DDEB56AA2F3FE0BD00387CC8 /* Theme.swift */,
 				DDEB56002F3FE0BD00387CC8 /* QRCodeGenerator.swift */,
 				DDEB56042F3FE0BD00387CC8 /* BackupPassphraseValidator.swift */,
+				CDA200112F90000100387CC8 /* NetworkReportGate.swift */,
 				CDA200112F80000200387CC8 /* NotificationLogger.swift */,
 			);
 			path = Utils;
@@ -340,6 +345,7 @@
 				CDA100122F80000100387CC8 /* MeshBackgroundServiceTests.swift */,
 				CDA100132F80000100387CC8 /* NotificationVerificationTests.swift */,
 				DDEB57002F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift */,
+				CDA200122F90000100387CC8 /* NetworkReportGateTests.swift */,
 				CDA100142F80000100387CC8 /* ReceiptUnificationTests.swift */,
 			);
 			name = SCMessengerTests;
@@ -501,6 +507,7 @@
 				DDEB56012F3FE0BD00387CC8 /* QRCodeGenerator.swift in Sources */,
 				DDEB56032F3FE0BD00387CC8 /* VerifySafetyNumberSheet.swift in Sources */,
 				DDEB56052F3FE0BD00387CC8 /* BackupPassphraseValidator.swift in Sources */,
+				CDA200012F90000100387CC8 /* NetworkReportGate.swift in Sources */,
 				DDEB56072F3FE0BD00387CC8 /* IdentityBackupSheets.swift in Sources */,
 				CDA200012F80000200387CC8 /* NotificationLogger.swift in Sources */,
 				CDA200022F80000200387CC8 /* NotificationBackgroundProcessor.swift in Sources */,
@@ -515,6 +522,7 @@
 				CDA100022F80000100387CC8 /* MeshBackgroundServiceTests.swift in Sources */,
 				CDA100032F80000100387CC8 /* NotificationVerificationTests.swift in Sources */,
 				DDEB57012F3FE0BD00387CC8 /* OutboxRetryPolicyTests.swift in Sources */,
+				CDA200022F90000100387CC8 /* NetworkReportGateTests.swift in Sources */,
 				CDA100042F80000100387CC8 /* ReceiptUnificationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
