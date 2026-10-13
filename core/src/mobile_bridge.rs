@@ -8076,4 +8076,160 @@ mod tests {
             .spawn(|| {});
         assert!(note_rx_stall_watchdog_spawn(ok));
     }
+
+    // -----------------------------------------------------------------------
+    // PR #556: network-change echo and ordering
+    // -----------------------------------------------------------------------
+
+    /// Recording platform bridge that behaves like a real platform: when the
+    /// core echoes a network state different from the one the platform just
+    /// reported, it reports the echoed state back (the ping-pong path).
+    struct NetRecorder {
+        service: std::sync::Weak<MeshService>,
+        reported: (bool, bool),
+        echoes: parking_lot::Mutex<Vec<(bool, bool)>>,
+        callbacks_into_core: std::sync::atomic::AtomicUsize,
+    }
+
+    struct NetRecorderHandle(std::sync::Arc<NetRecorder>);
+
+    impl PlatformBridge for NetRecorderHandle {
+        fn on_battery_changed(&self, _battery_pct: u8, _is_charging: bool) {}
+        fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
+            self.0.echoes.lock().push((has_wifi, has_cellular));
+            if (has_wifi, has_cellular) != self.0.reported {
+                self.0
+                    .callbacks_into_core
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if let Some(service) = self.0.service.upgrade() {
+                    service.on_network_changed(has_wifi, has_cellular);
+                }
+            }
+        }
+        fn on_motion_changed(&self, _motion: MotionState) {}
+        fn on_ble_data_received(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_entering_background(&self) {}
+        fn on_entering_foreground(&self) {}
+        fn send_ble_packet(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_proximity_data_received(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn send_proximity_packet(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn wifi_aware_publish(&self, _service_name: String, _service_info: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_subscribe(&self, _service_name: String) -> bool {
+            false
+        }
+        fn wifi_aware_create_data_path(&self, _peer_id: String, _pmk: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_stop(&self) {}
+        fn wifi_direct_discover_peers(&self) -> bool {
+            false
+        }
+        fn wifi_direct_stop_discovery(&self) {}
+        fn wifi_direct_connect(&self, _device_address: String) -> bool {
+            false
+        }
+        fn wifi_direct_create_group(&self, _group_name: String) -> bool {
+            false
+        }
+        fn wifi_direct_remove_group(&self) {}
+    }
+
+    fn net_recorder_fixture(
+        reported: (bool, bool),
+    ) -> (std::sync::Arc<MeshService>, std::sync::Arc<NetRecorder>) {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let recorder = std::sync::Arc::new(NetRecorder {
+            service: std::sync::Arc::downgrade(&service),
+            reported,
+            echoes: parking_lot::Mutex::new(Vec::new()),
+            callbacks_into_core: std::sync::atomic::AtomicUsize::new(0),
+        });
+        service.set_platform_bridge(Some(Box::new(NetRecorderHandle(recorder.clone()))));
+        (service, recorder)
+    }
+
+    #[test]
+    fn network_changed_echoes_real_cellular_flag_to_bridge() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let (service, recorder) = net_recorder_fixture((false, true));
+
+        service.on_network_changed(false, true);
+
+        let echoes = recorder.echoes.lock().clone();
+        assert_eq!(
+            echoes,
+            vec![(false, true)],
+            "the echo must carry the real has_cellular flag, not a hardcoded false"
+        );
+    }
+
+    #[test]
+    fn network_changed_records_last_network_before_echo_and_events() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let (service, recorder) = net_recorder_fixture((false, true));
+
+        service.on_network_changed(false, true);
+        assert_eq!(
+            *service.last_network.lock(),
+            Some((false, true)),
+            "last_network must hold the reported state after the call"
+        );
+
+        // An identical second report is not a change: no network event is
+        // derived from it, and the echo repeats the same values rather than
+        // flipping the cellular flag.
+        let previous = *service.last_network.lock();
+        assert!(
+            network_change_events(previous, (false, true)).is_empty(),
+            "an identical report must derive no network event"
+        );
+        service.on_network_changed(false, true);
+
+        let echoes = recorder.echoes.lock().clone();
+        assert_eq!(
+            echoes,
+            vec![(false, true), (false, true)],
+            "a repeated report must echo the same values, never a flipped flag"
+        );
+        assert_eq!(
+            *service.last_network.lock(),
+            Some((false, true)),
+            "last_network must be unchanged by an identical report"
+        );
+    }
+
+    #[test]
+    fn network_echo_does_not_call_back_into_on_network_changed() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let (service, recorder) = net_recorder_fixture((false, true));
+
+        service.on_network_changed(false, true);
+
+        assert_eq!(
+            recorder
+                .callbacks_into_core
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the echo matched the platform report, so the platform must not report back"
+        );
+        assert_eq!(
+            recorder.echoes.lock().len(),
+            1,
+            "exactly one echo per report: no ping-pong"
+        );
+    }
 }
