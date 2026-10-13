@@ -394,6 +394,7 @@ class MdnsServiceDiscovery(
         lastFailureReason = "DISCOVERY_START_FAILED:$errorCode"
         val retryCount = discoveryRetryCount.incrementAndGet()
         Timber.e("mDNS discovery start failed: type=$serviceType errorCode=$errorCode (retry=$retryCount)")
+        TransportStatus.report("mdns", "error", "discovery_start_failed code=$errorCode retry=$retryCount")
 
         // Error code 4 = FAILURE_ALREADY_ACTIVE: discovery is already running
         // from a previous attempt. Stop it first before retrying.
@@ -561,6 +562,7 @@ class MdnsServiceDiscovery(
             val msg = "mDNS start aborted: missing required permissions (NEARBY_WIFI_DEVICES/LOCATION)"
             Timber.w(msg)
             lastFailureReason = "PERMISSION_DENIED"
+            TransportStatus.report("mdns", "unavailable", "missing permissions NEARBY_WIFI_DEVICES or location")
             return
         }
 
@@ -589,10 +591,12 @@ class MdnsServiceDiscovery(
             nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
             if (nsdManager == null) {
                 Timber.e("NsdManager not available")
+                TransportStatus.report("mdns", "unavailable", "NsdManager not available")
                 return
             }
 
             isRunning = true
+            TransportStatus.report("mdns", "listening", "nsd discovery and registration starting")
 
             // P0: Force-unregister any stale registration from a previous app session
             // before registering fresh. NsdManager holds registrations across app
