@@ -4,8 +4,8 @@
   "regenerate_with": "python scripts/check_wiring.py --write-findings wiring-audit/FINDINGS.md",
   "scan": {
     "base": "2bf9a46d",
-    "reported": 33,
-    "note": "33 = the #437 baseline of 32 (28 C1_ZERO_CALLERS + 4 C4_TRANSITIVE_DEAD) plus 1 added by integrate/train-20261004: MeshRepository.importSeedAddresses, an unwired parity seam the train's own source comment admits has no call site (\"No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1\"). Every one has exactly one disposition below, and the generator fails if that stops being true."
+    "reported": 32,
+    "note": "32 = the #437 baseline (28 C1_ZERO_CALLERS + 4 C4_TRANSITIVE_DEAD). The 33rd finding, MeshRepository.importSeedAddresses, was deleted by #469 T3 together with the unsigned join bundle it served. Every one has exactly one disposition below, and the generator fails if that stops being true."
   },
   "dispositions": [
     {
@@ -209,12 +209,6 @@
       "classification": "collateral-removed",
       "file": "android/app/src/main/java/com/scmessenger/android/transport/WifiAwareTransport.kt",
       "rationale": "orphaned once its only two users were deleted"
-    },
-    {
-      "symbol": "MeshRepository.importSeedAddresses",
-      "classification": "unwired",
-      "file": "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
-      "rationale": "Added by the train as an explicit parity seam and the source says so: \"No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.\" MeshRepositorySeedImportTest calls it directly, so the code is exercised while the app never reaches it. iOS calls the same-named function from JoinMeshView.swift:168; Android's JoinMeshScreen.kt does not. This is the decideCommand shape: tests green, feature absent."
     }
   ],
   "root_causes": [
