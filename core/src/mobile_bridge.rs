@@ -926,6 +926,9 @@ impl MeshService {
                         rt.block_on(async move {
                             let mut startup_signal = Some(startup_tx);
                             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
+                            // [RX-STALL] drain-loop watchdog state (see the thread
+                            // spawned just before the drain loop below).
+                            let drain_watch_tx = event_tx.downgrade();
 
                             // This site already cloned out of the guard rather than
                             // holding it; stated directly now so it reads the same
@@ -1021,8 +1024,52 @@ impl MeshService {
                                             }
                                         });
                                     }
+                                    // [RX-STALL] watchdog. The drain loop runs on a
+                                    // current_thread runtime and its handlers are
+                                    // synchronous, so a stalled handler also stalls any
+                                    // task on this runtime: the watchdog is a plain OS
+                                    // thread. It holds only a WeakSender, so it does not
+                                    // keep the channel open and exits once the swarm drops.
+                                    let drain_started = std::time::Instant::now();
+                                    let drain_progress_ms =
+                                        Arc::new(std::sync::atomic::AtomicU64::new(0));
+                                    {
+                                        let progress = Arc::clone(&drain_progress_ms);
+                                        let weak_tx = drain_watch_tx;
+                                        let spawn_result = std::thread::Builder::new()
+                                            .name("rx-stall-watchdog".to_string())
+                                            .spawn(move || loop {
+                                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                                let Some(tx) = weak_tx.upgrade() else { break };
+                                                let backlog =
+                                                    tx.max_capacity().saturating_sub(tx.capacity());
+                                                drop(tx);
+                                                let idle_ms = (drain_started.elapsed().as_millis() as u64)
+                                                    .saturating_sub(
+                                                        progress.load(std::sync::atomic::Ordering::Relaxed),
+                                                    );
+                                                if backlog > 0 && idle_ms >= 30_000 {
+                                                    tracing::warn!(
+                                                        "{}",
+                                                        crate::message_events::fmt_rx_stall_drain(
+                                                            idle_ms, backlog
+                                                        )
+                                                    );
+                                                }
+                                            });
+                                        // The watchdog is diagnostics only; the drain loop is
+                                        // fully functional without it. The failure is logged
+                                        // with context and the node degrades to "no stall
+                                        // reports" rather than aborting startup.
+                                        let _watchdog_running =
+                                            note_rx_stall_watchdog_spawn(spawn_result);
+                                    }
                                     let registration_gate = RegistrationGate::new();
                                     while let Some(event) = event_rx.recv().await {
+                                        drain_progress_ms.store(
+                                            drain_started.elapsed().as_millis() as u64,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
                                         match event {
                                             crate::transport::SwarmEvent::MessageReceived {
                                                 peer_id,
@@ -1085,14 +1132,14 @@ impl MeshService {
                                                                         s.messages_relayed += 1;
                                                                     } else {
                                                                         crate::message_events::log_rx_drop(
-                                                                            &msg.id,
+                                                                            Some(&msg.id),
                                                                             "onion_relay",
                                                                             "next_hop_key_invalid",
                                                                         );
                                                                     }
                                                                 } else {
                                                                     crate::message_events::log_rx_drop(
-                                                                        &msg.id,
+                                                                        Some(&msg.id),
                                                                         "onion_relay",
                                                                         "next_hop_not_hex",
                                                                     );
@@ -1130,7 +1177,7 @@ impl MeshService {
                                                     }
                                                 } else {
                                                     crate::message_events::log_rx_drop(
-                                                        "unknown",
+                                                        None,
                                                         "bridge_dispatch",
                                                         "core_not_initialized",
                                                     );
@@ -3509,6 +3556,24 @@ impl RegistrationGate {
                 true
             }
             None => false,
+        }
+    }
+}
+
+/// Outcome handling for the `[RX-STALL]` watchdog thread spawn. Returns true
+/// when the watchdog is running. On failure it logs the error with context and
+/// returns false: the caller then continues without stall reports (a defined
+/// degraded state), it never aborts the drain loop.
+fn note_rx_stall_watchdog_spawn(result: std::io::Result<std::thread::JoinHandle<()>>) -> bool {
+    match result {
+        Ok(_handle) => true,
+        Err(e) => {
+            tracing::warn!(
+                "[RX-STALL] watchdog thread spawn failed (kind={:?}); continuing without stall reports: {}",
+                e.kind(),
+                e
+            );
+            false
         }
     }
 }
@@ -7934,5 +7999,19 @@ mod tests {
                 "{name}: spellings of one id must not mint extra peers"
             );
         }
+    }
+
+    #[test]
+    fn rx_stall_watchdog_spawn_failure_degrades_without_panicking() {
+        let failed: std::io::Result<std::thread::JoinHandle<()>> = Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "thread limit reached",
+        ));
+        assert!(!note_rx_stall_watchdog_spawn(failed));
+
+        let ok = std::thread::Builder::new()
+            .name("rx-stall-watchdog-test".to_string())
+            .spawn(|| {});
+        assert!(note_rx_stall_watchdog_spawn(ok));
     }
 }
