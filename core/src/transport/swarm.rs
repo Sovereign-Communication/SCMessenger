@@ -65,6 +65,77 @@ use web_time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 use web_time::{Duration, Instant, UNIX_EPOCH};
 
+/// Static variant name of a relay control message for `[RX] forwarded` markers.
+/// Never formats message contents.
+fn relay_message_kind(msg: &crate::relay::protocol::RelayMessage) -> &'static str {
+    use crate::relay::protocol::RelayMessage as R;
+    match msg {
+        R::Handshake { .. } => "handshake",
+        R::HandshakeAck { .. } => "handshake_ack",
+        R::StoreRequest { .. } => "store_request",
+        R::StoreAck { .. } => "store_ack",
+        R::PullRequest { .. } => "pull_request",
+        R::PullResponse { .. } => "pull_response",
+        R::PeerExchange { .. } => "peer_exchange",
+        R::PeerJoined { .. } => "peer_joined",
+        R::PeerLeft { .. } => "peer_left",
+        R::PeerListRequest => "peer_list_request",
+        R::PeerListResponse { .. } => "peer_list_response",
+        R::Ping => "ping",
+        R::Pong => "pong",
+        R::Disconnect { .. } => "disconnect",
+    }
+}
+
+/// Reject reason sent to a remote peer when an inbound message could not be
+/// handed to the internal event channel. The sender treats any
+/// `accepted: false` as a failed attempt and keeps the message in its outbox
+/// for retry (same reason string the sender already falls back to).
+const MESSAGE_FORWARD_FAILED_REASON: &str = "recipient_rejected";
+
+/// Hand an inbound `/sc/message` payload to the internal event channel and
+/// build the wire response. `accepted: true` is returned ONLY when the event
+/// was enqueued; if the receiver is gone the frame is lost locally, so the
+/// remote peer must be told `accepted: false` (it then retries) instead of
+/// believing the message was delivered.
+async fn forward_message_received(
+    event_tx: &mpsc::Sender<SwarmEvent2>,
+    peer: PeerId,
+    envelope_data: Vec<u8>,
+) -> Libp2pMessageResponse {
+    match event_tx
+        .send(SwarmEvent2::MessageReceived {
+            peer_id: peer,
+            envelope_data,
+        })
+        .await
+    {
+        Ok(()) => Libp2pMessageResponse {
+            accepted: true,
+            error: None,
+        },
+        Err(_) => {
+            // An awaited bounded send never reports "full" (it back-pressures);
+            // the only failure is a closed channel.
+            crate::message_events::log_rx_drop(None, "swarm_event_tx", "channel_closed");
+            Libp2pMessageResponse {
+                accepted: false,
+                error: Some(MESSAGE_FORWARD_FAILED_REASON.to_string()),
+            }
+        }
+    }
+}
+
+/// Log a failed `send_response` (the response channel closed, e.g. the
+/// connection dropped before we could answer). Never panics.
+fn log_message_response_failed(peer: &PeerId, context: &str) {
+    tracing::warn!(
+        "[WARNING] Failed to send /sc/message response to {} ({}): response channel closed",
+        peer,
+        context
+    );
+}
+
 /// Blocked peers must not reach any protocol that can disclose topology or
 /// consume relay/custody resources. Missing core state fails closed.
 fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -> bool {
@@ -5421,14 +5492,21 @@ pub async fn start_swarm_with_config(
                                         if sender_blocked {
                                             tracing::warn!("Blocked peer {} attempted to send message", peer);
                                             crate::message_events::log_rx_drop(
-                                                "unknown",
+                                                None,
                                                 "swarm_ingress",
                                                 "sender_blocked_or_core_unavailable",
                                             );
-                                            let _ = swarm.behaviour_mut().messaging.send_response(
-                                                channel,
-                                                Libp2pMessageResponse { accepted: false, error: Some("blocked".to_string()) },
-                                            );
+                                            if swarm
+                                                .behaviour_mut()
+                                                .messaging
+                                                .send_response(
+                                                    channel,
+                                                    Libp2pMessageResponse { accepted: false, error: Some("blocked".to_string()) },
+                                                )
+                                                .is_err()
+                                            {
+                                                log_message_response_failed(&peer, "sender_blocked");
+                                            }
                                             continue;
                                         }
 
@@ -5440,10 +5518,14 @@ pub async fn start_swarm_with_config(
                                         // root cause, HERMES_FARM_AUDIT 2026-07-16).
                                         let envelope_payload = match DriftFrame::from_bytes(&request.envelope_data) {
                                             Ok(frame) => {
-                                                tracing::debug!(
-                                                    "Received DriftFrame type: {:?} from {}",
-                                                    frame.frame_type,
-                                                    peer
+                                                // INFO (rate-limited: peers control frame volume) so an
+                                                // inbound frame is visible even when it dies later (RCA of a lost inbound frame). The
+                                                // envelope is still encrypted here, so there is no
+                                                // message id to report; length is a safe proxy.
+                                                crate::message_events::log_rx_drift_frame(
+                                                    &format!("{:?}", frame.frame_type),
+                                                    frame.payload.len(),
+                                                    &peer.to_string(),
                                                 );
                                                 frame.payload
                                             }
@@ -5472,11 +5554,18 @@ pub async fn start_swarm_with_config(
                                             match relay_msg {
                                                 crate::relay::protocol::RelayMessage::PeerJoined { peer_info } => {
                                                     if !known_relays.contains(&peer) {
-                                                        tracing::debug!("Discarding PeerJoined from non-relay peer {}", peer);
-                                                        let _ = swarm.behaviour_mut().messaging.send_response(
-                                                            channel,
-                                                            Libp2pMessageResponse { accepted: true, error: None },
-                                                        );
+                                                        crate::message_events::log_rx_drop(None, "control", "peer_joined_from_non_relay");
+                                                        if swarm
+                                                            .behaviour_mut()
+                                                            .messaging
+                                                            .send_response(
+                                                                channel,
+                                                                Libp2pMessageResponse { accepted: true, error: None },
+                                                            )
+                                                            .is_err()
+                                                        {
+                                                            log_message_response_failed(&peer, "peer_joined_non_relay");
+                                                        }
                                                         continue;
                                                     }
                                                     tracing::info!("Received PeerJoined: {} with {} addresses", peer_info.peer_id, peer_info.addresses.len());
@@ -5510,19 +5599,33 @@ pub async fn start_swarm_with_config(
                                                     if peer_info.addresses.len() > MAX_DISCOVERY_DIALS {
                                                         tracing::debug!("  Capped PeerJoined dials at {} (had {})", dialed, peer_info.addresses.len());
                                                     }
-                                                    let _ = swarm.behaviour_mut().messaging.send_response(
-                                                        channel,
-                                                        Libp2pMessageResponse { accepted: true, error: None },
-                                                    );
+                                                    if swarm
+                                                        .behaviour_mut()
+                                                        .messaging
+                                                        .send_response(
+                                                            channel,
+                                                            Libp2pMessageResponse { accepted: true, error: None },
+                                                        )
+                                                        .is_err()
+                                                    {
+                                                        log_message_response_failed(&peer, "peer_joined");
+                                                    }
                                                     continue;
                                                 }
                                                 crate::relay::protocol::RelayMessage::PeerListResponse { peers } => {
                                                     if !known_relays.contains(&peer) {
-                                                        tracing::debug!("Discarding PeerListResponse from non-relay peer {}", peer);
-                                                        let _ = swarm.behaviour_mut().messaging.send_response(
-                                                            channel,
-                                                            Libp2pMessageResponse { accepted: true, error: None },
-                                                        );
+                                                        crate::message_events::log_rx_drop(None, "control", "peer_list_response_from_non_relay");
+                                                        if swarm
+                                                            .behaviour_mut()
+                                                            .messaging
+                                                            .send_response(
+                                                                channel,
+                                                                Libp2pMessageResponse { accepted: true, error: None },
+                                                            )
+                                                            .is_err()
+                                                        {
+                                                            log_message_response_failed(&peer, "peer_list_non_relay");
+                                                        }
                                                         continue;
                                                     }
                                                     tracing::info!("Received peer list: {} peers", peers.len());
@@ -5561,46 +5664,63 @@ pub async fn start_swarm_with_config(
                                                             }
                                                         }
                                                     }
-                                                    let _ = swarm.behaviour_mut().messaging.send_response(
-                                                        channel,
-                                                        Libp2pMessageResponse { accepted: true, error: None },
-                                                    );
+                                                    if swarm
+                                                        .behaviour_mut()
+                                                        .messaging
+                                                        .send_response(
+                                                            channel,
+                                                            Libp2pMessageResponse { accepted: true, error: None },
+                                                        )
+                                                        .is_err()
+                                                    {
+                                                        log_message_response_failed(&peer, "peer_list");
+                                                    }
                                                     continue;
                                                 }
                                                 crate::relay::protocol::RelayMessage::PeerLeft { peer_id } => {
                                                     tracing::info!("Peer left: {}", peer_id);
-                                                    let _ = swarm.behaviour_mut().messaging.send_response(
-                                                        channel,
-                                                        Libp2pMessageResponse { accepted: true, error: None },
-                                                    );
+                                                    if swarm
+                                                        .behaviour_mut()
+                                                        .messaging
+                                                        .send_response(
+                                                            channel,
+                                                            Libp2pMessageResponse { accepted: true, error: None },
+                                                        )
+                                                        .is_err()
+                                                    {
+                                                        log_message_response_failed(&peer, "peer_left");
+                                                    }
                                                     continue;
                                                 }
-                                                _ => {
-                                                    // Other relay messages, fall through to normal handling
+                                                other => {
+                                                    // Other relay messages are NOT dropped: they fall
+                                                    // through to normal handling (MessageReceived).
+                                                    crate::message_events::log_rx_forwarded(
+                                                        relay_message_kind(&other),
+                                                    );
                                                 }
                                             }
                                         }
                                         }
 
-                                        // Received a message from a peer. A failed send means
-                                        // the bridge receiver is gone: the frame would be
-                                        // acked as accepted yet never processed, so log it.
-                                        if event_tx.send(SwarmEvent2::MessageReceived {
-                                            peer_id: peer,
-                                            envelope_data: envelope_payload,
-                                        }).await.is_err() {
-                                            crate::message_events::log_rx_drop(
-                                                "unknown",
-                                                "swarm_to_bridge",
-                                                "event_channel_closed",
-                                            );
+                                        // Received a message from a peer. If the bridge receiver is
+                                        // gone the frame is lost, so the peer is told
+                                        // `accepted: false` (it keeps the message and retries)
+                                        // rather than a false acceptance.
+                                        let response = forward_message_received(
+                                            &event_tx,
+                                            peer,
+                                            envelope_payload,
+                                        )
+                                        .await;
+                                        if swarm
+                                            .behaviour_mut()
+                                            .messaging
+                                            .send_response(channel, response)
+                                            .is_err()
+                                        {
+                                            log_message_response_failed(&peer, "message_received");
                                         }
-
-                                        // Send acceptance response
-                                        let _ = swarm.behaviour_mut().messaging.send_response(
-                                            channel,
-                                            Libp2pMessageResponse { accepted: true, error: None },
-                                        );
                                     }
                                     request_response::Message::Response { request_id, response } => {
                                         if let Some(dispatch) =
@@ -13578,6 +13698,118 @@ mod admission_trust_tests {
             .expect("validation present");
         let stamp = messaging.find("stamp_traffic").expect("stamp present");
         assert!(validated < stamp, "validation precedes the stamp");
+    }
+}
+
+/// Inbound `/sc/message` handling must never report `accepted: true` for a
+/// frame that could not be handed to the internal event channel.
+#[cfg(test)]
+mod message_ingress_response_tests {
+    use super::{forward_message_received, SwarmEvent2, MESSAGE_FORWARD_FAILED_REASON};
+    use libp2p::PeerId;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    #[derive(Clone, Default)]
+    struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for LogBuf {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Ok(mut inner) = self.0.lock() {
+                inner.extend_from_slice(buf);
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn open_channel_accepts_and_enqueues_event() {
+        let (tx, mut rx) = mpsc::channel::<SwarmEvent2>(4);
+        let peer = PeerId::random();
+        let resp = forward_message_received(&tx, peer, vec![1, 2, 3]).await;
+        assert!(resp.accepted);
+        assert!(resp.error.is_none());
+        match rx.try_recv() {
+            Ok(SwarmEvent2::MessageReceived {
+                peer_id,
+                envelope_data,
+            }) => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(envelope_data, vec![1, 2, 3]);
+            }
+            other => panic!("expected MessageReceived, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_channel_rejects_and_logs_rx_drop() {
+        let (tx, rx) = mpsc::channel::<SwarmEvent2>(4);
+        drop(rx);
+
+        let buf = LogBuf::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let resp = forward_message_received(&tx, PeerId::random(), vec![9]).await;
+
+        assert!(!resp.accepted, "closed channel must not be accepted");
+        assert_eq!(resp.error.as_deref(), Some(MESSAGE_FORWARD_FAILED_REASON));
+        let logged = String::from_utf8_lossy(&buf.0.lock().map(|g| g.clone()).unwrap_or_default())
+            .to_string();
+        assert!(
+            logged.contains("[RX-DROP]") && logged.contains("swarm_event_tx"),
+            "expected [RX-DROP] line, got: {logged}"
+        );
+    }
+
+    #[tokio::test]
+    async fn full_channel_is_never_accepted_before_event_is_enqueued() {
+        let (tx, mut rx) = mpsc::channel::<SwarmEvent2>(1);
+        tx.send(SwarmEvent2::PeerDiscovered(PeerId::random()))
+            .await
+            .ok();
+        // Channel is full: the awaited send back-pressures, so no response
+        // (and in particular no `accepted: true`) exists while the event is
+        // still unqueued.
+        let peer = PeerId::random();
+        let pending = tokio::time::timeout(
+            Duration::from_millis(50),
+            forward_message_received(&tx, peer, vec![7]),
+        )
+        .await;
+        assert!(pending.is_err(), "full channel must not yield a response");
+
+        // Once capacity frees up the message is enqueued and only then accepted.
+        let drain = tokio::spawn(async move {
+            let _ = rx.recv().await;
+            rx
+        });
+        let resp = forward_message_received(&tx, peer, vec![7]).await;
+        assert!(resp.accepted);
+        let mut rx = match drain.await {
+            Ok(rx) => rx,
+            Err(e) => panic!("drain task failed: {e}"),
+        };
+        assert!(matches!(
+            rx.recv().await,
+            Some(SwarmEvent2::MessageReceived { .. })
+        ));
     }
 }
 
