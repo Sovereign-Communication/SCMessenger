@@ -30,6 +30,10 @@ use libp2p::{
 use uuid::Uuid;
 use web_time::Duration;
 
+/// Protocol-level request timeout for address reflection (seconds). The
+/// requester-side await bound in `swarm.rs` is derived from this.
+pub const ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS: u64 = 10;
+
 /// The Iron Core network behaviour combining all protocols.
 #[derive(NetworkBehaviour)]
 pub struct IronCoreBehaviour {
@@ -399,7 +403,8 @@ impl IronCoreBehaviour {
                 StreamProtocol::new("/sc/address-reflection/1.0.0"),
                 ProtocolSupport::Full,
             )],
-            request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+            request_response::Config::default()
+                .with_request_timeout(Duration::from_secs(ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS)),
         );
 
         // Request-response for relay (mesh routing - Phase 3)
