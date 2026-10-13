@@ -1328,6 +1328,7 @@ open class MeshRepository(
             swarmPeerCount = { swarmBridge?.getPeers()?.size ?: 0 },
         )
         transportStatusMonitor = monitor
+        // start() contains its own failures (logged); it does not throw.
         monitor.start()
     }
 
@@ -4414,6 +4415,7 @@ open class MeshRepository(
         // cleanup() calls stopAll() first, so the WiFi Aware detach above is
         // preserved.
         kotlin.runCatching { transportStatusMonitor?.stop() }
+            .onFailure { Timber.w(it, "Failed to stop TransportStatusMonitor; continuing teardown") }
         transportStatusMonitor = null
         kotlin.runCatching { transportManager?.cleanup() }
             .onFailure { Timber.w(it, "Failed to clean up TransportManager (BLE/WiFi Aware/WiFi Direct/mDNS)") }

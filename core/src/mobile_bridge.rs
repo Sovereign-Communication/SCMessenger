@@ -1051,12 +1051,12 @@ impl MeshService {
                                                     );
                                                 }
                                             });
-                                        if let Err(e) = spawn_result {
-                                            tracing::warn!(
-                                                "[RX-STALL] watchdog thread spawn failed, continuing without it: {}",
-                                                e
-                                            );
-                                        }
+                                        // The watchdog is diagnostics only; the drain loop is
+                                        // fully functional without it. The failure is logged
+                                        // with context and the node degrades to "no stall
+                                        // reports" rather than aborting startup.
+                                        let _watchdog_running =
+                                            note_rx_stall_watchdog_spawn(spawn_result);
                                     }
                                     let registration_gate = RegistrationGate::new();
                                     while let Some(event) = event_rx.recv().await {
@@ -3522,6 +3522,24 @@ impl RegistrationGate {
                 true
             }
             None => false,
+        }
+    }
+}
+
+/// Outcome handling for the `[RX-STALL]` watchdog thread spawn. Returns true
+/// when the watchdog is running. On failure it logs the error with context and
+/// returns false: the caller then continues without stall reports (a defined
+/// degraded state), it never aborts the drain loop.
+fn note_rx_stall_watchdog_spawn(result: std::io::Result<std::thread::JoinHandle<()>>) -> bool {
+    match result {
+        Ok(_handle) => true,
+        Err(e) => {
+            tracing::warn!(
+                "[RX-STALL] watchdog thread spawn failed (kind={:?}); continuing without stall reports: {}",
+                e.kind(),
+                e
+            );
+            false
         }
     }
 }
@@ -7888,5 +7906,19 @@ mod tests {
                 "{name}: spellings of one id must not mint extra peers"
             );
         }
+    }
+
+    #[test]
+    fn rx_stall_watchdog_spawn_failure_degrades_without_panicking() {
+        let failed: std::io::Result<std::thread::JoinHandle<()>> = Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "thread limit reached",
+        ));
+        assert!(!note_rx_stall_watchdog_spawn(failed));
+
+        let ok = std::thread::Builder::new()
+            .name("rx-stall-watchdog-test".to_string())
+            .spawn(|| {});
+        assert!(note_rx_stall_watchdog_spawn(ok));
     }
 }

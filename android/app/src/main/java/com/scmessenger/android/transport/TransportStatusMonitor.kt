@@ -16,6 +16,7 @@ import android.net.wifi.WifiManager
 import android.net.wifi.aware.WifiAwareManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineDispatcher
@@ -73,8 +74,14 @@ class TransportStatusMonitor internal constructor(
     @Volatile private var active = false
     private var scope: CoroutineScope? = null
 
-    private val networkResource = registration { hooks.registerNetworkChange { if (active) hooks.probeCellular() } }
-    private val bluetoothResource = registration { hooks.registerBluetoothStateChange { if (active) hooks.probeBle() } }
+    // Callbacks run on OS threads: an exception escaping one would crash the
+    // process, so each probe is contained, logged, and reported as a transport error.
+    private val networkResource = registration("network-change") {
+        hooks.registerNetworkChange { if (active) safeProbe("cellular") { hooks.probeCellular() } }
+    }
+    private val bluetoothResource = registration("bluetooth-state") {
+        hooks.registerBluetoothStateChange { if (active) safeProbe("ble") { hooks.probeBle() } }
+    }
     private val periodicResource = ManagedResource(
         onOpen = {
             val s = CoroutineScope(SupervisorJob() + dispatcher)
@@ -82,8 +89,14 @@ class TransportStatusMonitor internal constructor(
             s.launch {
                 while (isActive) {
                     delay(peerCountIntervalMs)
-                    runCatching { logPeerCounts() }
-                        .onFailure { Timber.w(it, "TransportStatusMonitor: peer count failed") }
+                    try {
+                        logPeerCounts()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // One bad round must not end the periodic job.
+                        Timber.w(e, "TransportStatusMonitor: peer count failed; will retry next interval")
+                    }
                 }
             }
         },
@@ -94,7 +107,7 @@ class TransportStatusMonitor internal constructor(
     )
 
     /** A [ManagedResource] whose release lambda comes from the register call; failures are logged, never thrown. */
-    private fun registration(register: () -> () -> Unit): ManagedResource {
+    private fun registration(name: String, register: () -> () -> Unit): ManagedResource {
         var unregister: (() -> Unit)? = null
         return ManagedResource(
             onOpen = {
@@ -102,41 +115,99 @@ class TransportStatusMonitor internal constructor(
                     unregister = register()
                 } catch (e: Exception) {
                     // Not acquired, so nothing to release; a later start retries.
-                    Timber.w(e, "TransportStatusMonitor: registration failed")
+                    Timber.w(e, "TransportStatusMonitor: $name registration failed; a later start retries")
                 }
             },
             onClose = {
-                unregister?.let { u -> runCatching { u() } }
+                val u = unregister
                 unregister = null
+                if (u != null) {
+                    try {
+                        u()
+                    } catch (e: Exception) {
+                        // Already gone or never fully registered; nothing more to release.
+                        Timber.w(e, "TransportStatusMonitor: $name unregister failed")
+                    }
+                }
             },
         )
     }
 
+    /** Runs one probe; a failure is logged and recorded as a transport `error`, never propagated. */
+    private fun safeProbe(kind: String, probe: () -> Unit) {
+        try {
+            probe()
+        } catch (e: Exception) {
+            Timber.w(e, "TransportStatusMonitor: $kind probe failed")
+            TransportStatus.report(kind, "error", "probe failed ${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun openLogged(name: String, resource: ManagedResource) {
+        try {
+            resource.open()
+        } catch (e: Exception) {
+            // The resource stays closed; the others still open and a later start retries it.
+            Timber.w(e, "TransportStatusMonitor: could not open $name")
+        }
+    }
+
+    private fun closeLogged(name: String, resource: ManagedResource) {
+        try {
+            resource.close()
+        } catch (e: Exception) {
+            Timber.w(e, "TransportStatusMonitor: could not close $name")
+        }
+    }
+
+    /**
+     * Never throws. A failing initial probe or resource leaves the monitor in a
+     * defined state: running, with whatever resources did open, and every
+     * failure logged.
+     */
     @Synchronized
     fun start() {
         if (active) return
         active = true
-        hooks.probeAll()
-        networkResource.open()
-        bluetoothResource.open()
-        periodicResource.open()
+        try {
+            hooks.probeAll()
+        } catch (e: Exception) {
+            Timber.w(e, "TransportStatusMonitor: initial probe failed; change callbacks and peer counts still start")
+        }
+        openLogged("network callback", networkResource)
+        openLogged("bluetooth receiver", bluetoothResource)
+        openLogged("periodic job", periodicResource)
     }
 
+    /** Never throws; every resource is attempted even if an earlier release fails. */
     @Synchronized
     fun stop() {
         if (!active) return
         active = false
-        periodicResource.close()
-        bluetoothResource.close()
-        networkResource.close()
+        closeLogged("periodic job", periodicResource)
+        closeLogged("bluetooth receiver", bluetoothResource)
+        closeLogged("network callback", networkResource)
         // Forget remembered states so a restart logs the full picture again
         // instead of being swallowed by the change-only dedupe.
         TransportStatus.reset()
     }
 
     private suspend fun logPeerCounts() {
-        val swarm = runCatching { swarmPeerCount() }.getOrDefault(-1)
-        val local = localPeerCounts()
+        val swarm = try {
+            swarmPeerCount()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Counts are still logged; -1 marks the swarm total as unknown.
+            Timber.w(e, "TransportStatusMonitor: swarm peer count unavailable")
+            -1
+        }
+        val local = try {
+            localPeerCounts()
+        } catch (e: Exception) {
+            Timber.w(e, "TransportStatusMonitor: local peer counts unavailable")
+            emptyMap()
+        }
         for (kind in listOf("ble", "wifi_direct", "wifi_aware", "mdns")) {
             val n = local[kind] ?: 0
             val state = if (n > 0) "connected" else (TransportStatus.lastState(kind) ?: "available")

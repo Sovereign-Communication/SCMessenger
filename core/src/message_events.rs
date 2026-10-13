@@ -345,12 +345,52 @@ fn rx_drop_gate_in(map: &mut DropLimiter, key: &str, now: web_time::Instant) -> 
         return Some(n);
     }
     if map.len() >= RX_DROP_LIMITER_MAX_KEYS {
-        // Key space is attacker-influenced only through sanitized, fixed
-        // stage/reason literals; if it is somehow full, stay quiet.
-        return None;
+        // Table full. Never go silent: reclaim a slot from the entry idle the
+        // longest (it is past its interval, so it would emit on its next
+        // sighting anyway); if every tracked key is still inside its interval,
+        // fold this line into one shared overflow slot. The overflow slot is
+        // itself rate limited and counts what it suppresses, so the loss is
+        // reported on its next emission instead of vanishing.
+        let stale = map
+            .iter()
+            .filter(|(k, (last, _))| {
+                k.as_str() != RX_DROP_OVERFLOW_KEY
+                    && now.saturating_duration_since(*last) >= RX_DROP_LOG_INTERVAL
+            })
+            .min_by_key(|(_, (last, _))| *last)
+            .map(|(k, _)| k.clone());
+        match stale {
+            Some(k) => {
+                map.remove(&k);
+            }
+            None => return rx_drop_gate_overflow(map, now),
+        }
     }
     map.insert(key.to_string(), (now, 0));
     Some(0)
+}
+
+/// Reserved limiter key for lines that arrive while the key table is full of
+/// live entries. Occupies one slot beyond [`RX_DROP_LIMITER_MAX_KEYS`].
+const RX_DROP_OVERFLOW_KEY: &str = "~overflow";
+
+fn rx_drop_gate_overflow(map: &mut DropLimiter, now: web_time::Instant) -> Option<u64> {
+    match map.get_mut(RX_DROP_OVERFLOW_KEY) {
+        Some((last, suppressed)) => {
+            if now.saturating_duration_since(*last) < RX_DROP_LOG_INTERVAL {
+                *suppressed = suppressed.saturating_add(1);
+                return None;
+            }
+            let n = *suppressed;
+            *last = now;
+            *suppressed = 0;
+            Some(n)
+        }
+        None => {
+            map.insert(RX_DROP_OVERFLOW_KEY.to_string(), (now, 0));
+            Some(0)
+        }
+    }
 }
 
 /// `[RX-DROP] msg=<id|-> stage=<stage> reason=<reason>`
@@ -700,7 +740,32 @@ d1234567"
         for i in 0..RX_DROP_LIMITER_MAX_KEYS {
             assert!(rx_drop_gate_in(&mut map, &format!("k{}", i), t0).is_some());
         }
-        assert_eq!(rx_drop_gate_in(&mut map, "overflow", t0), None);
+        // Full of live keys: the new key is not tracked, but it is not silent
+        // either. It shares one rate-limited overflow slot that counts losses.
+        assert_eq!(rx_drop_gate_in(&mut map, "overflow", t0), Some(0));
+        assert_eq!(rx_drop_gate_in(&mut map, "overflow2", t0), None);
+        assert_eq!(rx_drop_gate_in(&mut map, "overflow3", t0), None);
+        assert_eq!(map.len(), RX_DROP_LIMITER_MAX_KEYS + 1);
+        let later = t0 + RX_DROP_LOG_INTERVAL;
+        assert_eq!(
+            rx_drop_gate_in(&mut map, "overflow4", later),
+            Some(2),
+            "suppressed overflow lines are reported on the next emission"
+        );
+        assert!(map.len() <= RX_DROP_LIMITER_MAX_KEYS + 1);
+    }
+
+    #[test]
+    fn rx_drop_gate_reclaims_stale_slot_when_full() {
+        let mut map = DropLimiter::new();
+        let t0 = web_time::Instant::now();
+        for i in 0..RX_DROP_LIMITER_MAX_KEYS {
+            assert!(rx_drop_gate_in(&mut map, &format!("k{}", i), t0).is_some());
+        }
+        let later = t0 + RX_DROP_LOG_INTERVAL;
+        assert_eq!(rx_drop_gate_in(&mut map, "fresh", later), Some(0));
+        assert!(map.contains_key("fresh"));
         assert_eq!(map.len(), RX_DROP_LIMITER_MAX_KEYS);
+        assert!(!map.contains_key(RX_DROP_OVERFLOW_KEY));
     }
 }

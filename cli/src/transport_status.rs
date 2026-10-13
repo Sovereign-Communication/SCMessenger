@@ -36,6 +36,14 @@ fn canonical_kind(kind: &str) -> Option<&'static str> {
 /// recorded for that kind. Returns true when a line was emitted.
 pub fn set_state(kind: &str, state: &str, detail: &str) -> bool {
     let Some(kind) = canonical_kind(kind) else {
+        // A caller bug, not a transport event: say so instead of dropping the
+        // update. The formatter renders the unknown kind as `kind=invalid` and
+        // sanitizes the detail, so this can not inject log lines.
+        tracing::warn!(
+            event = "transport_status_rejected",
+            "{}",
+            fmt_transport_status(kind, state, None, detail)
+        );
         return false;
     };
     {
@@ -78,27 +86,58 @@ pub fn classify_multiaddr(addr: &str) -> Option<&'static str> {
     None
 }
 
-/// Called when the swarm reports it is listening on `addr`.
-pub fn on_listening(addr: &str) {
-    if let Some(kind) = classify_multiaddr(addr) {
-        // Only the port goes into detail: the listen address itself can
-        // include a LAN IP.
-        let detail = match addr
-            .split('/')
-            .find(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()))
-        {
-            Some(port) => format!("listen_port_{}", port),
-            None => "listening".to_string(),
-        };
-        set_state(kind, "listening", &detail);
-    }
+/// Called when the swarm reports it is listening on `addr`. Returns false when
+/// the address maps to no transport kind (a warning is logged, no state kept).
+pub fn on_listening(addr: &str) -> bool {
+    let Some(kind) = classify_multiaddr(addr) else {
+        // Not an IP transport (or an address shape we do not know): the
+        // listener exists but no [TRANSPORT] state can be attributed to it.
+        // Make that visible; the address itself is not logged (LAN IP).
+        tracing::warn!(
+            event = "transport_status_unclassified",
+            "[TRANSPORT] listener address not classifiable into a transport kind, no state recorded (addr_len={})",
+            addr.len()
+        );
+        return false;
+    };
+    // Only the port goes into detail: the listen address itself can
+    // include a LAN IP.
+    let detail = match addr
+        .split('/')
+        .find(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()))
+    {
+        Some(port) => format!("listen_port_{}", port),
+        None => "listening".to_string(),
+    };
+    set_state(kind, "listening", &detail);
+    true
 }
 
 /// Called when a listener failed to bind or died.
 pub fn on_listener_failed(error: &str) {
-    // The failed listener's family is not carried by the event; report on
-    // tcp4 (the primary listener) with the reason, never claim it is up.
-    set_state("tcp4", "error", &format!("listener_failed:{}", error));
+    let (kind, detail) = listener_failure_target(error);
+    set_state(kind, "error", &detail);
+}
+
+/// Which transport a listener failure is reported against, and the detail.
+///
+/// The failed listener's family is not carried by the event, so the error text
+/// is searched for a multiaddr shape. When none is present the failure is
+/// reported on tcp4 (the primary listener) and the detail says the family is
+/// unknown, so a quic or tcp6 failure is never presented as a confirmed tcp4
+/// one. A failure is never reported as the transport being up.
+pub fn listener_failure_target(error: &str) -> (&'static str, String) {
+    let family = error
+        .split_whitespace()
+        .map(|tok| {
+            tok.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | '(' | ')' | '[' | ']' | ':'))
+        })
+        .filter(|tok| tok.starts_with('/'))
+        .find_map(classify_multiaddr);
+    match family {
+        Some(kind) => (kind, format!("listener_failed:{}", error)),
+        None => ("tcp4", format!("listener_failed_family_unknown:{}", error)),
+    }
 }
 
 /// Map a BLE probe result to `(state, detail)`.
@@ -218,13 +257,15 @@ pub fn spawn(
         );
     } else {
         tokio::spawn(async move {
-            let status = crate::ble_daemon::probe_and_log().await;
-            let (state, detail) = ble_probe_to_state(&status);
+            // Probe on its own task so a panic inside the probe is observed as
+            // a JoinError here instead of leaving `ble` without any state.
+            let joined = tokio::spawn(crate::ble_daemon::probe_and_log()).await;
+            let (state, detail) = ble_probe_join_to_state(joined);
             set_state("ble", state, &detail);
         });
     }
 
-    tokio::spawn(async move {
+    let counter = tokio::spawn(async move {
         let mut tick = tokio::time::interval(PEER_COUNT_INTERVAL);
         loop {
             tick.tick().await;
@@ -238,6 +279,40 @@ pub fn spawn(
             log_peer_counts(&counts, unclassified);
         }
     });
+    // The loop never returns. If it does end (panic, runtime shutdown) say so,
+    // otherwise per-transport counts would silently stop.
+    tokio::spawn(async move {
+        let joined = counter.await;
+        report_counter_exit(&joined);
+    });
+}
+
+/// Map the outcome of the BLE probe task to `(state, detail)`. A probe task
+/// that panicked or was cancelled is an `error`, never an absent state.
+pub fn ble_probe_join_to_state(
+    joined: Result<BleStatus, tokio::task::JoinError>,
+) -> (&'static str, String) {
+    match joined {
+        Ok(status) => ble_probe_to_state(&status),
+        Err(e) if e.is_panic() => ("error", "probe task panicked".to_string()),
+        Err(_) => ("error", "probe task cancelled".to_string()),
+    }
+}
+
+/// Log how the peer-count task ended. Returns true when it ended abnormally.
+pub fn report_counter_exit(joined: &Result<(), tokio::task::JoinError>) -> bool {
+    match joined {
+        Ok(()) => false,
+        Err(e) => {
+            tracing::error!(
+                event = "transport_peer_count_stopped",
+                "[TRANSPORT] periodic peer-count task ended, per-transport counts stop: panic={} err={}",
+                e.is_panic(),
+                e
+            );
+            true
+        }
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +363,68 @@ mod tests {
         assert_eq!(counts.get("tcp4"), Some(&2));
         assert_eq!(counts.get("quic"), Some(&1));
         assert_eq!(unclassified, 1);
+    }
+
+    #[test]
+    fn listener_failure_is_attributed_to_the_family_in_the_error() {
+        let (k, d) =
+            listener_failure_target("failed to bind /ip4/0.0.0.0/udp/9001/quic-v1: in use");
+        assert_eq!(k, "quic");
+        assert!(d.starts_with("listener_failed:"));
+        let (k, _) = listener_failure_target("failed to bind \"/ip6/::/tcp/9001\", denied");
+        assert_eq!(k, "tcp6");
+        let (k, d) = listener_failure_target("address already in use");
+        assert_eq!(k, "tcp4");
+        assert!(
+            d.starts_with("listener_failed_family_unknown:"),
+            "unknown family must not be presented as a confirmed tcp4 failure"
+        );
+    }
+
+    #[test]
+    fn rejected_kind_is_reported_and_not_recorded() {
+        assert!(!set_state("not_a_kind_x", "available", "evil\nline"));
+        assert!(!registry().contains_key("not_a_kind_x"));
+    }
+
+    #[test]
+    fn unclassifiable_listener_address_records_no_state() {
+        assert!(!on_listening("/p2p/12D3KooWNoTransportComponent"));
+        assert!(on_listening("/ip4/127.0.0.1/tcp/9001"));
+    }
+
+    #[tokio::test]
+    async fn ble_probe_panic_maps_to_error_state() {
+        let panicked = tokio::spawn(async {
+            if true {
+                panic!("probe exploded");
+            }
+            BleStatus::Disabled
+        })
+        .await;
+        let (s, d) = ble_probe_join_to_state(panicked);
+        assert_eq!((s, d.as_str()), ("error", "probe task panicked"));
+
+        let aborted = tokio::spawn(std::future::pending::<BleStatus>());
+        aborted.abort();
+        let (s, d) = ble_probe_join_to_state(aborted.await);
+        assert_eq!((s, d.as_str()), ("error", "probe task cancelled"));
+
+        let (s, _) = ble_probe_join_to_state(Ok(BleStatus::Disabled));
+        assert_eq!(s, "unavailable");
+    }
+
+    #[tokio::test]
+    async fn counter_task_exit_is_reported() {
+        let clean = tokio::spawn(async {}).await;
+        assert!(!report_counter_exit(&clean));
+        let panicked = tokio::spawn(async {
+            if true {
+                panic!("counter exploded");
+            }
+        })
+        .await;
+        assert!(report_counter_exit(&panicked));
     }
 
     #[test]
