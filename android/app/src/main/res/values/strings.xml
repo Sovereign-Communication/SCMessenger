@@ -267,14 +267,28 @@
 
     <!-- Join Mesh -->
     <string name="join_mesh_qr_title">Scan QR Code</string>
-    <string name="join_mesh_qr_description">Position the QR code within the frame</string>
-    <string name="join_mesh_parsing">Parsing join bundle&#8230;</string>
-    <string name="join_mesh_connecting">Connecting to mesh&#8230;</string>
-    <string name="join_mesh_connected">Connected!</string>
-    <string name="join_mesh_connection_failed">Connection Failed</string>
-    <string name="join_mesh_error_invalid_format">Invalid join bundle format</string>
-    <string name="join_mesh_error_no_peers">No bootstrap peers in bundle</string>
-    <string name="join_mesh_error_dial_failed">Failed to connect to any bootstrap peers</string>
+    <string name="join_mesh_qr_description">Scan an SCMessenger invite QR code, or paste an invite you received.</string>
+    <string name="join_mesh_paste_invite">Paste invite</string>
+    <string name="join_mesh_parsing">Verifying invite&#8230;</string>
+    <string name="join_mesh_connecting">Connecting to the mesh&#8230;</string>
+    <string name="join_mesh_connected">Invite accepted</string>
+    <string name="join_mesh_connected_detail">%1$d nodes added. Connecting now; discovery keeps going in the background.</string>
+    <string name="join_mesh_connection_failed">Invite not accepted</string>
+    <string name="join_mesh_error_empty">Nothing to redeem. Scan an invite QR code or paste the invite text.</string>
+    <string name="join_mesh_error_not_invite">That text does not contain an SCMessenger invite.</string>
+    <string name="join_mesh_error_invalid">This invite is invalid, expired, or was issued by this device.</string>
+    <string name="join_mesh_error_bad_signature">The invite signature could not be verified. Ask for a new invite.</string>
+    <string name="join_mesh_error_no_identity">Create your identity first, then redeem the invite.</string>
+    <string name="join_mesh_error_unknown">The invite could not be redeemed. Try again.</string>
+    <string name="join_mesh_create_button">Show my invite</string>
+    <string name="join_mesh_create_title">Invite someone</string>
+    <string name="join_mesh_create_description">Let another device scan this code to join through you. It expires in one hour.</string>
+    <string name="join_mesh_create_unavailable">This node has no reachable address yet. Discovery is still running; try again shortly.</string>
+    <string name="join_mesh_invite_qr_content_description">QR code for your SCMessenger invite</string>
+    <string name="join_mesh_copy_invite">Copy invite</string>
+    <string name="join_mesh_share_invite">Share invite</string>
+    <string name="join_mesh_invite_copied">Invite copied</string>
+    <string name="join_mesh_back">Back</string>
 
     <!-- Network Diagnostics Dialog -->
     <string name="network_diagnostics_title">Network Diagnostics</string>
