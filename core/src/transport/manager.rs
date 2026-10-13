@@ -1910,7 +1910,6 @@ mod tests {
     fn test_reconnect_wake_triggers() {
         use super::super::dial_policy::WakeTrigger;
         let triggers = [
-            WakeTrigger::InboundConnection,
             WakeTrigger::InboundDial,
             WakeTrigger::Identify,
             WakeTrigger::AddressLearned,

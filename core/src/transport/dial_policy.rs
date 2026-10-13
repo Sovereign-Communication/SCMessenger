@@ -5,7 +5,7 @@
 // `Dormant` state, which only means "the next attempt waits for a wake event
 // or for its jittered backoff to elapse". Retries never stop.
 //
-// Wake events ([`WakeTrigger`]): inbound connection or dial from the peer,
+// Wake events ([`WakeTrigger`]): an inbound dial from the peer,
 // identify, a newly learned address, a network-change event from the merged
 // discovery scheduler, or an outbound message queued for the peer. A wake
 // grants a ONE-SHOT credit: the next attempt is pulled forward to the backoff
@@ -55,8 +55,6 @@ const STABILITY_PRIOR: f64 = 0.5;
 /// Events that wake a dormant (or backed-off) peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WakeTrigger {
-    /// The peer (or its host) connected to us.
-    InboundConnection,
     /// The peer (or its host) attempted to dial us.
     InboundDial,
     /// Identify exchanged with the peer.
@@ -76,7 +74,6 @@ impl WakeTrigger {
     /// Stable name for the `[DIAL] wake` marker.
     pub fn as_str(self) -> &'static str {
         match self {
-            WakeTrigger::InboundConnection => "inbound_connection",
             WakeTrigger::InboundDial => "inbound_dial",
             WakeTrigger::Identify => "identify",
             WakeTrigger::AddressLearned => "address_learned",
@@ -483,6 +480,7 @@ impl DialPolicyManager {
 
     /// Backoff ceiling for one address, derived from that address's own
     /// observed connect stability (never from other peers' failures).
+    #[cfg(test)]
     pub fn ceiling_for(&self, addr_key: &str) -> Duration {
         self.peer_backoff
             .read()
@@ -1207,7 +1205,6 @@ mod tests {
     fn test_each_wake_trigger_wakes_a_dormant_peer() {
         use libp2p::identity::Keypair;
         let triggers = [
-            WakeTrigger::InboundConnection,
             WakeTrigger::InboundDial,
             WakeTrigger::Identify,
             WakeTrigger::AddressLearned,
@@ -1472,7 +1469,7 @@ mod tests {
             let mut total = 0usize;
             for _ in 0..300 {
                 total += shared.wake_peer(pid, WakeTrigger::Identify);
-                total += shared.wake_all(WakeTrigger::InboundConnection);
+                total += shared.wake_all(WakeTrigger::NetworkChange);
             }
             total
         })
@@ -1530,7 +1527,7 @@ mod tests {
                         }
                     }
                     1 => {
-                        shared.wake_peer(pid, WakeTrigger::InboundConnection);
+                        shared.wake_peer(pid, WakeTrigger::InboundDial);
                     }
                     2 => {
                         shared.wake_all(WakeTrigger::NetworkChange);
