@@ -29,6 +29,17 @@ class MeshApplication : Application() {
     /** Process-scoped network re-ensure registration; see [registerNetworkReensure]. */
     private var networkReensure: com.scmessenger.android.service.ManagedResource? = null
 
+    /** The planted file tree, kept so memory-pressure and terminate can release it. */
+    private var fileLoggingTree: com.scmessenger.android.utils.FileLoggingTree? = null
+
+    private fun newFileLoggingTree(): com.scmessenger.android.utils.FileLoggingTree =
+        com.scmessenger.android.utils.FileLoggingTree(this).also { fileLoggingTree = it }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        fileLoggingTree?.trimMemory()
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -49,12 +60,12 @@ class MeshApplication : Application() {
         // developer can inspect logs without logcat.
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
-            Timber.plant(com.scmessenger.android.utils.FileLoggingTree(this))
+            Timber.plant(newFileLoggingTree())
         } else {
             Timber.plant(ReleaseTree())
             // FileLoggingTree is also planted in release for diagnostics
             // export, but writes only WARN+ (it is gated by priority).
-            Timber.plant(com.scmessenger.android.utils.FileLoggingTree(this))
+            Timber.plant(newFileLoggingTree())
         }
 
         // Storage health and maintenance - run on background thread to avoid blocking
@@ -143,6 +154,8 @@ class MeshApplication : Application() {
         // onTerminate, and the process-scoped callback dies with them.
         networkReensure?.close()
         networkReensure = null
+        fileLoggingTree?.release()
+        fileLoggingTree = null
         applicationScope.cancel()
     }
 
