@@ -2883,16 +2883,6 @@ fn try_envelope_hint_dial(
     }
 }
 
-/// Convert libp2p Kademlia protocol mode to routing transport type.
-/// Maps the Kademlia query mode to the appropriate transport classification.
-#[cfg(not(target_arch = "wasm32"))]
-fn transport_type_to_routing_transport(mode: kad::Mode) -> RoutingTransportType {
-    match mode {
-        kad::Mode::Client => RoutingTransportType::QUIC,
-        kad::Mode::Server => RoutingTransportType::TCP,
-    }
-}
-
 /// Convert routing engine decision to ranked routes for dispatch.
 ///
 /// Uses confidence scores from the routing engine and transport quality
@@ -4073,20 +4063,23 @@ impl SwarmHandle {
     }
 }
 
-/// Identify-confirmed peer: record it in the optimized routing engine.
-///
-/// Optimized `peer_seen` also binds the peer's canonical key-derived hint to
-/// it, so a connected, identified peer is directly routable without any
-/// announcement. Kept as a function so the identify arm's wiring is testable.
+/// Identify-confirmed peer: record it through the canonical validated routing
+/// ingress, `IronCore::routing_peer_seen` -- the same entry the
+/// ConnectionEstablished arms use. That entry bounds and parses the peer id
+/// (oversized, unparseable and all-zero ids are dropped, fail closed) before
+/// it reaches the engine, whose `peer_seen` binds the peer's canonical
+/// key-derived hint, so a connected, identified peer is directly routable
+/// without any announcement. Hint binding is not subject to the log rate limit.
+/// A dropped core handle is a no-op. Kept as a function so the identify arm's
+/// wiring is testable.
 #[cfg(not(target_arch = "wasm32"))]
 fn bind_identified_peer_to_routing(
-    routing_engine_handle: &Arc<parking_lot::RwLock<Option<OptimizedRoutingEngine>>>,
-    peer_id_bytes: [u8; 32],
-    transport_type: RoutingTransportType,
+    core_handle: &Option<Weak<crate::IronCore>>,
+    peer_id: &PeerId,
+    transport: &str,
 ) {
-    let mut guard = routing_engine_handle.write();
-    if let Some(engine) = guard.as_mut() {
-        engine.peer_seen(peer_id_bytes, transport_type);
+    if let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) {
+        core.routing_peer_seen(peer_id.to_string(), transport.to_string());
     }
 }
 
@@ -7161,16 +7154,11 @@ pub async fn start_swarm_with_config(
                                 dial_policy_manager.reset_peer_backoff(peer_id);
 
                                 // MYCORRHIZAL ROUTING: Update routing engine with peer discovery
-                                let peer_id_bytes = extract_peer_id_bytes(&peer_id.to_bytes());
-                                // When identity protocol confirms a peer, use the Kademlia server
-                                // mode as the transport type basis since identity requires a
-                                // server-capable connection.
-                                let transport_type = transport_type_to_routing_transport(kad::Mode::Server);
-                                bind_identified_peer_to_routing(
-                                    &routing_engine_handle,
-                                    peer_id_bytes,
-                                    transport_type,
-                                );
+                                // through the canonical validated ingress
+                                // (`IronCore::routing_peer_seen`). Identity requires a
+                                // server-capable connection, so the sighting is a direct
+                                // TCP one.
+                                bind_identified_peer_to_routing(&core_handle, &peer_id, "tcp");
                                 // Update routing engine with peer hints from identify info
                                 // (peers announce what hints they can reach)
 
@@ -11150,16 +11138,29 @@ use libp2p::{gossipsub, request_response};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    fn core_with_engine() -> Arc<crate::IronCore> {
+        let core = Arc::new(crate::IronCore::new());
+        *core.routing_engine_handle().write() =
+            Some(super::OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        core
+    }
+
+    fn peer_from_key_bytes(key: [u8; 32]) -> libp2p::PeerId {
+        let mut raw = vec![0x00u8, 0x20];
+        raw.extend_from_slice(&key);
+        libp2p::PeerId::from_bytes(&raw).expect("identity multihash peer id")
+    }
+
     #[test]
-    fn identify_wiring_binds_peer_direct_hint() {
-        let handle: std::sync::Arc<parking_lot::RwLock<Option<super::OptimizedRoutingEngine>>> =
-            std::sync::Arc::new(parking_lot::RwLock::new(Some(
-                super::OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]),
-            )));
-        let peer = [0x42u8; 32];
+    fn identify_wiring_binds_peer_direct_hint_via_validated_ingress() {
+        let core = core_with_engine();
+        let core_handle = Some(Arc::downgrade(&core));
+        let key = [0x42u8; 32];
+        let peer = peer_from_key_bytes(key);
         // Same call the Identify Received arm makes; no announcement, no contact.
-        super::bind_identified_peer_to_routing(&handle, peer, super::RoutingTransportType::TCP);
-        let direct_hint = crate::identity::keys::routing_hint_from_public_key(&peer);
+        super::bind_identified_peer_to_routing(&core_handle, &peer, "tcp");
+        let direct_hint = crate::identity::keys::routing_hint_from_public_key(&key);
+        let handle = core.routing_engine_handle();
         let mut guard = handle.write();
         let Some(engine) = guard.as_mut() else {
             panic!("engine must remain installed");
@@ -11167,21 +11168,38 @@ mod tests {
         let bound = engine
             .base_engine_mut()
             .local_cell_mut()
-            .get_peer(&peer)
+            .get_peer(&key)
             .map(|p| p.reachable_hints.contains(&direct_hint));
         assert_eq!(bound, Some(true), "identify must bind the canonical hint");
     }
 
     #[test]
-    fn identify_wiring_without_engine_is_a_noop() {
-        let handle: std::sync::Arc<parking_lot::RwLock<Option<super::OptimizedRoutingEngine>>> =
-            std::sync::Arc::new(parking_lot::RwLock::new(None));
-        super::bind_identified_peer_to_routing(
-            &handle,
-            [1u8; 32],
-            super::RoutingTransportType::TCP,
+    fn identify_wiring_rejects_peer_failing_validation() {
+        let core = core_with_engine();
+        let core_handle = Some(Arc::downgrade(&core));
+        // An all-zero key is rejected by the canonical ingress and must not be bound.
+        let bad = peer_from_key_bytes([0u8; 32]);
+        super::bind_identified_peer_to_routing(&core_handle, &bad, "tcp");
+        let handle = core.routing_engine_handle();
+        let mut guard = handle.write();
+        let Some(engine) = guard.as_mut() else {
+            panic!("engine must remain installed");
+        };
+        assert_eq!(
+            engine.base_engine_mut().local_cell_mut().peer_count(),
+            0,
+            "a peer failing validation must not be bound"
         );
-        assert!(handle.read().is_none());
+    }
+
+    #[test]
+    fn identify_wiring_without_core_or_engine_is_a_noop() {
+        let peer = peer_from_key_bytes([1u8; 32]);
+        super::bind_identified_peer_to_routing(&None, &peer, "tcp");
+        let core = Arc::new(crate::IronCore::new());
+        let core_handle = Some(Arc::downgrade(&core));
+        super::bind_identified_peer_to_routing(&core_handle, &peer, "tcp");
+        assert!(core.routing_engine_handle().read().is_none());
     }
 
     use super::{
