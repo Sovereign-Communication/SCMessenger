@@ -23,11 +23,7 @@ jobs:
   # runner is never acquired just to learn it has nothing to do.
   changes:
     name: Detect changed areas
-    # Runner selection: vars.CI_RUNNER=blacksmith with `light` in vars.CI_RUNNER_BLACKSMITH_JOBS
-    # moves this light gate job to blacksmith-2vcpu-ubuntu-2404 (trusted events only;
-    # PRs also need `pr`). Fork PRs and everything else stay ubuntu-latest. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',light,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       rust_relevant: ${{ steps.platform.outputs.rust_relevant }}
@@ -40,11 +36,7 @@ jobs:
   handoff-scope:
     name: Handoff ownership scope
     # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    # Runner selection: vars.CI_RUNNER=blacksmith with `light` in vars.CI_RUNNER_BLACKSMITH_JOBS
-    # moves this light gate job to blacksmith-2vcpu-ubuntu-2404 (trusted events only;
-    # PRs also need `pr`). Fork PRs and everything else stay ubuntu-latest. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',light,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,11 +75,7 @@ jobs:
   naming-policy:
     name: Naming policy
     # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    # Runner selection: vars.CI_RUNNER=blacksmith with `light` in vars.CI_RUNNER_BLACKSMITH_JOBS
-    # moves this light gate job to blacksmith-2vcpu-ubuntu-2404 (trusted events only;
-    # PRs also need `pr`). Fork PRs and everything else stay ubuntu-latest. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',light,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -137,11 +125,7 @@ jobs:
     # Required check: always run so it reports a real result; a failed `changes`
     # job must fail this check, not skip it (a skipped required check is green).
     if: ${{ !cancelled() }}
-    # Runner selection: vars.CI_RUNNER=blacksmith with `light` in vars.CI_RUNNER_BLACKSMITH_JOBS
-    # moves this light gate job to blacksmith-2vcpu-ubuntu-2404 (trusted events only;
-    # PRs also need `pr`). Fork PRs and everything else stay ubuntu-latest. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',light,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Fail closed if change detection failed
@@ -182,11 +166,7 @@ jobs:
   orchestration:
     name: Orchestration control plane
     # Python only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    # Runner selection: vars.CI_RUNNER=blacksmith with `light` in vars.CI_RUNNER_BLACKSMITH_JOBS
-    # moves this light gate job to blacksmith-2vcpu-ubuntu-2404 (trusted events only;
-    # PRs also need `pr`). Fork PRs and everything else stay ubuntu-latest. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',light,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # Runs on every pull request and every push, on the default merge checkout.
@@ -214,12 +194,9 @@ jobs:
     # diff can change the Rust workspace.
     # matrix.* is not available at job level; non-ubuntu legs are gated per step.
     if: ${{ !cancelled() }}
-    # Blacksmith scope: vars.CI_RUNNER_BLACKSMITH_JOBS (default 'test', push only; add 'pr' for PRs).
-    # Only the ubuntu leg is selectable via vars.CI_RUNNER (blacksmith|oci|hosted);
-    # unset = ubuntu-latest as before. Matrix value stays 'ubuntu-latest' so the
-    # required check name 'Test (ubuntu-latest)' is unchanged. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md. Rollback: CI_RUNNER=hosted or delete it.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',test,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-4vcpu-ubuntu-2404' || matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
+    # Matrix value stays 'ubuntu-latest' so the required check name
+    # 'Test (ubuntu-latest)' is unchanged.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -265,14 +242,7 @@ jobs:
     name: Docs
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    # Runner selection: repo variable vars.CI_RUNNER = blacksmith | oci | hosted.
-    # Unset keeps the legacy USE_OCI_RUNNER behaviour. Only trusted events (push,
-    # same-repo PR) get blacksmith/oci; fork PRs always get ubuntu-latest.
-    # Blacksmith scope (free tier = 3000 2vCPU-min/mo; 4vCPU burns 2x): vars.CI_RUNNER_BLACKSMITH_JOBS
-    # comma list of test,docs,ffi,forgery,pr (default 'test'; push-to-main only unless 'pr').
-    # Rollback: set CI_RUNNER=hosted, or delete the variable. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',docs,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-4vcpu-ubuntu-2404' || (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
@@ -293,14 +263,7 @@ jobs:
     name: FFI Surface Contract
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    # Runner selection: repo variable vars.CI_RUNNER = blacksmith | oci | hosted.
-    # Unset keeps the legacy USE_OCI_RUNNER behaviour. Only trusted events (push,
-    # same-repo PR) get blacksmith/oci; fork PRs always get ubuntu-latest.
-    # Blacksmith scope (free tier = 3000 2vCPU-min/mo; 4vCPU burns 2x): vars.CI_RUNNER_BLACKSMITH_JOBS
-    # comma list of test,docs,ffi,forgery,pr (default 'test'; push-to-main only unless 'pr').
-    # Rollback: set CI_RUNNER=hosted, or delete the variable. See
-    # docs/runbooks/CI_RUNNER_SELECTION.md.
-    runs-on: ${{ vars.CI_RUNNER == 'blacksmith' && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',ffi,') && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(format(',{0},', vars.CI_RUNNER_BLACKSMITH_JOBS || 'test'), ',pr,'))) && 'blacksmith-4vcpu-ubuntu-2404' || (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
