@@ -3,11 +3,12 @@
 <!-- HANDOFF-SCOPE-BEGIN -->
 scope: SCMessenger
 owner: Sovereign-Communication/SCMessenger
-purpose: SCMessenger-only execution queue for the v0.5.1 release
+purpose: SCMessenger-only findings and remediation handoff
 foreign_material: NONE
 boundary: No foreign-repository findings, evidence, status, or remediation are included.
 <!-- HANDOFF-SCOPE-END -->
 
+**Repository:** SCMessenger
 **Status:** ACTIVE
 **Priority:** P0
 **Lane:** Freebuff (orchestration lane, push and merge rights per D3)
