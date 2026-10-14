@@ -1541,7 +1541,11 @@ mod tests {
         for n in 0..40usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
-        assert_eq!(b.ledger.occupancy().0, 40, "protected paths are never shed early");
+        assert_eq!(
+            b.ledger.occupancy().0,
+            40,
+            "protected paths are never shed early"
+        );
         assert!(drain(&mut b).is_empty());
         // One arrival after every grace window has closed sheds the excess
         // (41 paths against a bound of 4) in one pass, logged once per reason.
