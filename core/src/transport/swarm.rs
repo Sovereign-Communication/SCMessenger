@@ -199,21 +199,113 @@ fn peer_standing(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -
         .unwrap_or(PeerStanding::UNKNOWN)
 }
 
+/// Largest future skew accepted on an envelope's `created_at`, in seconds.
+const ENVELOPE_MAX_FUTURE_SKEW_SECS: u32 = 300;
+/// Oldest `created_at` that still earns a traffic bit. Matches the default
+/// envelope TTL, so anything older is expired in any case.
+const ENVELOPE_MAX_AGE_SECS: u32 = 7 * 24 * 3600;
+/// Recent contact-signed message IDs remembered for replay rejection.
+const RECENT_ENVELOPE_IDS_CAP: usize = 4096;
+
+/// Bounded record of message IDs that already earned a contact-signed traffic
+/// bit. A captured envelope replayed inside the window must not earn it again.
+struct RecentEnvelopeIds {
+    seen: HashSet<[u8; 16]>,
+    order: std::collections::VecDeque<[u8; 16]>,
+}
+
+impl RecentEnvelopeIds {
+    fn new() -> Self {
+        Self {
+            seen: HashSet::new(),
+            order: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Records `id` and returns true when it was not already remembered.
+    fn first_seen(&mut self, id: [u8; 16]) -> bool {
+        if !self.seen.insert(id) {
+            return false;
+        }
+        self.order.push_back(id);
+        if self.order.len() > RECENT_ENVELOPE_IDS_CAP {
+            if let Some(oldest) = self.order.pop_front() {
+                self.seen.remove(&oldest);
+            }
+        }
+        true
+    }
+}
+
+/// Whether an envelope's timestamps are usable at `now` (unix seconds): not
+/// dated beyond the skew window, not older than the TTL window, and not past
+/// its own expiry (`ttl_expiry == 0` never expires).
+fn envelope_is_fresh(created_at: u32, ttl_expiry: u32, now: u32) -> bool {
+    if created_at > now.saturating_add(ENVELOPE_MAX_FUTURE_SKEW_SECS) {
+        return false;
+    }
+    if now.saturating_sub(created_at) > ENVELOPE_MAX_AGE_SECS {
+        return false;
+    }
+    ttl_expiry == 0 || ttl_expiry > now
+}
+
+/// Whether a signature-verified envelope earns the contact-signed traffic bit:
+/// the signer must be a saved contact, the envelope must be fresh, and its
+/// message ID must not have earned the bit recently. The replay record is
+/// written last, so only envelopes that pass every other check fill it.
+fn contact_envelope_earns_traffic(
+    message_id: [u8; 16],
+    created_at: u32,
+    ttl_expiry: u32,
+    signer_is_contact: bool,
+    now: u32,
+    recent: &mut RecentEnvelopeIds,
+) -> bool {
+    signer_is_contact
+        && envelope_is_fresh(created_at, ttl_expiry, now)
+        && recent.first_seen(message_id)
+}
+
+fn unix_now_secs() -> u32 {
+    // A clock before the epoch yields 0, which fails the skew check closed.
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u32::try_from(d.as_secs()).ok())
+        .unwrap_or(0)
+}
+
 /// True when the signer of a Drift envelope (signature verified) is a saved
-/// contact. A self-signed envelope from a stranger is not "a known identity".
-fn envelope_signed_by_known_contact(core: &crate::IronCore, envelope_data: &[u8]) -> bool {
+/// contact, the envelope is fresh, and it is not a replay of one that already
+/// earned the bit. A self-signed envelope from a stranger is not "a known
+/// identity".
+fn envelope_signed_by_known_contact(
+    core: &crate::IronCore,
+    envelope_data: &[u8],
+    recent: &mut RecentEnvelopeIds,
+) -> bool {
     let Ok(envelope) = crate::drift::DriftEnvelope::from_bytes(envelope_data) else {
         return false;
     };
     if envelope.verify().is_err() {
         return false;
     }
-    core.contact_manager
+    let signer_is_contact = core
+        .contact_manager
         .read()
         .get_by_public_key(&hex::encode(envelope.sender_public_key))
         .ok()
         .flatten()
-        .is_some()
+        .is_some();
+    contact_envelope_earns_traffic(
+        envelope.message_id,
+        envelope.created_at,
+        envelope.ttl_expiry,
+        signer_is_contact,
+        unix_now_secs(),
+        recent,
+    )
 }
 
 /// Admission traffic validation for an inbound message request. Receipt alone
@@ -228,11 +320,17 @@ fn envelope_signed_by_known_contact(core: &crate::IronCore, envelope_data: &[u8]
 /// so a flood of requests on one path costs one probe, and the number of paths
 /// is itself bounded by the derived total. Peers with authenticated history
 /// never reach the probe, so honest traffic is unaffected.
+///
+/// The signed-by-contact fallback also requires a fresh envelope (bounded
+/// `created_at` skew and unexpired TTL) and rejects a message ID that already
+/// earned the bit recently, so a captured envelope cannot be replayed to
+/// re-earn traffic credit.
 fn inbound_message_is_validated(
     core_handle: &Option<Weak<crate::IronCore>>,
     peer_id: PeerId,
     envelope_data: &[u8],
     may_probe_stranger: impl FnOnce() -> bool,
+    recent_envelopes: &mut RecentEnvelopeIds,
 ) -> bool {
     let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) else {
         return false;
@@ -253,7 +351,121 @@ fn inbound_message_is_validated(
         Ok(frame) => frame.payload,
         Err(_) => envelope_data.to_vec(),
     };
-    envelope_signed_by_known_contact(&core, &payload)
+    envelope_signed_by_known_contact(&core, &payload, recent_envelopes)
+}
+
+#[cfg(test)]
+mod contact_envelope_gate_tests {
+    use super::*;
+
+    const NOW: u32 = 1_800_000_000;
+
+    fn id(n: u64) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        out[..8].copy_from_slice(&n.to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn freshness_rejects_future_skew_beyond_window() {
+        assert!(envelope_is_fresh(
+            NOW + ENVELOPE_MAX_FUTURE_SKEW_SECS,
+            0,
+            NOW
+        ));
+        assert!(!envelope_is_fresh(
+            NOW + ENVELOPE_MAX_FUTURE_SKEW_SECS + 1,
+            0,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn freshness_rejects_created_at_older_than_ttl_window() {
+        assert!(envelope_is_fresh(NOW - ENVELOPE_MAX_AGE_SECS, 0, NOW));
+        assert!(!envelope_is_fresh(NOW - ENVELOPE_MAX_AGE_SECS - 1, 0, NOW));
+    }
+
+    #[test]
+    fn freshness_honours_own_expiry() {
+        // ttl_expiry == 0 means no expiry; a future expiry is still live.
+        assert!(envelope_is_fresh(NOW, 0, NOW));
+        assert!(envelope_is_fresh(NOW, NOW + 1, NOW));
+        // An expiry at or before now is expired.
+        assert!(!envelope_is_fresh(NOW, NOW, NOW));
+        assert!(!envelope_is_fresh(NOW - 10, NOW - 1, NOW));
+    }
+
+    #[test]
+    fn recent_ids_reject_repeat_and_evict_oldest_at_cap() {
+        let mut recent = RecentEnvelopeIds::new();
+        assert!(recent.first_seen(id(0)));
+        assert!(!recent.first_seen(id(0)));
+        for n in 1..=RECENT_ENVELOPE_IDS_CAP as u64 {
+            assert!(recent.first_seen(id(n)));
+        }
+        assert_eq!(recent.seen.len(), RECENT_ENVELOPE_IDS_CAP);
+        assert_eq!(recent.order.len(), RECENT_ENVELOPE_IDS_CAP);
+        // id(0) was the oldest and has been evicted, so it is accepted again.
+        assert!(recent.first_seen(id(0)));
+        // The newest entry is still remembered.
+        assert!(!recent.first_seen(id(RECENT_ENVELOPE_IDS_CAP as u64)));
+    }
+
+    #[test]
+    fn replayed_contact_envelope_earns_traffic_once() {
+        let mut recent = RecentEnvelopeIds::new();
+        assert!(contact_envelope_earns_traffic(
+            id(7),
+            NOW,
+            0,
+            true,
+            NOW,
+            &mut recent
+        ));
+        assert!(!contact_envelope_earns_traffic(
+            id(7),
+            NOW,
+            0,
+            true,
+            NOW,
+            &mut recent
+        ));
+    }
+
+    #[test]
+    fn non_contact_or_stale_envelopes_do_not_fill_replay_record() {
+        let mut recent = RecentEnvelopeIds::new();
+        // A stranger-signed envelope earns nothing and is not recorded.
+        assert!(!contact_envelope_earns_traffic(
+            id(9),
+            NOW,
+            0,
+            false,
+            NOW,
+            &mut recent
+        ));
+        assert!(recent.seen.is_empty());
+        // A stale envelope earns nothing and is not recorded.
+        assert!(!contact_envelope_earns_traffic(
+            id(9),
+            NOW - ENVELOPE_MAX_AGE_SECS - 1,
+            0,
+            true,
+            NOW,
+            &mut recent
+        ));
+        assert!(recent.seen.is_empty());
+        // The same ID, once fresh and from a contact, still earns the bit.
+        assert!(contact_envelope_earns_traffic(
+            id(9),
+            NOW,
+            0,
+            true,
+            NOW,
+            &mut recent
+        ));
+    }
 }
 
 /// Refresh the admission standing of a peer that just produced validated
@@ -4743,6 +4955,7 @@ pub async fn start_swarm_with_config(
 
         // Track peers we've already exchanged ledgers with (avoid spamming)
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
+        let mut recent_envelopes = RecentEnvelopeIds::new();
         // Keep the current request ID per peer so a stale failure from an
         // earlier path cannot re-arm a newer, successful exchange.
         let mut pending_ledger_exchanges: HashMap<
@@ -5458,7 +5671,7 @@ pub async fn start_swarm_with_config(
                                     request_response::Message::Request { request, .. } => {
                                         inbound_message_is_validated(&core_handle, peer, &request.envelope_data, || {
                                             swarm.behaviour_mut().admission.may_probe_stranger(&connection_id, web_time::Instant::now())
-                                        })
+                                        }, &mut recent_envelopes)
                                     }
                                     request_response::Message::Response { request_id, response } => {
                                         // An `accepted` reply from a peer we chose as a
@@ -9640,6 +9853,7 @@ pub async fn start_swarm_with_config(
         }
 
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
+        let mut recent_envelopes = RecentEnvelopeIds::new();
         let mut pending_ledger_exchanges: HashMap<
             PeerId,
             libp2p::request_response::OutboundRequestId,
@@ -10013,7 +10227,7 @@ pub async fn start_swarm_with_config(
                                 {
                                     if inbound_message_is_validated(&core_handle, *peer, &request.envelope_data, || {
                                         swarm.behaviour_mut().admission.may_probe_stranger(connection_id, web_time::Instant::now())
-                                    }) {
+                                    }, &mut recent_envelopes) {
                                         swarm.behaviour_mut().admission.stamp_traffic(peer, connection_id, web_time::Instant::now());
                                         refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, *peer);
                                     }

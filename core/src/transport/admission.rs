@@ -354,6 +354,8 @@ pub struct AdmissionBehaviour {
     mem_at: Instant,
     rss_at: Instant,
     shed_log: RateGate,
+    /// Rate-limits the `over-bound-soft` marker (eviction could not reach the bound).
+    soft_bound_log: RateGate,
     /// Closes to hand to the swarm on the next poll.
     to_close: VecDeque<(PeerId, ConnectionId)>,
     /// Connections that closed because we evicted them, until the swarm loop
@@ -406,6 +408,7 @@ impl AdmissionBehaviour {
             mem_at: now,
             rss_at: now,
             shed_log: RateGate::new(),
+            soft_bound_log: RateGate::new(),
             to_close: VecDeque::new(),
             evicted_closed: HashMap::new(),
             resources: ResourceModel::new(),
@@ -985,7 +988,12 @@ impl AdmissionBehaviour {
             return (open >= 1).then_some("known-pool");
         }
         let general = self.pending_inbound.saturating_sub(self.pending_known);
-        if general >= cap {
+        // Zero headroom: a source on a /24 with no pending connection still gets
+        // one slot, so a roaming contact on a new network is not refused during
+        // fd exhaustion. A second source from an already-pending /24 is shed.
+        let new_prefix =
+            src.is_some_and(|ip| !self.pending_by_prefix.contains_key(&source_prefix(ip)));
+        if general >= cap && !(cap == 0 && new_prefix) {
             return Some("cap");
         }
         let ip = src?;
@@ -1005,15 +1013,37 @@ impl AdmissionBehaviour {
     /// connection that triggered the check) is never chosen.
     fn enforce_total(&mut self, now: Instant, keep: Option<ConnectionId>) {
         let occupancy = self.occupancy();
-        self.derived = self
-            .resources
-            .derive(&self.snapshot, occupancy, (self.scaler)());
+        // The floor counts protected paths (authenticated or carrying traffic),
+        // which the bound can never evict, so the derived bound cannot sit
+        // below what the ledger must keep.
+        self.derived = self.resources.derive(
+            &self.snapshot,
+            self.occupancy_for_pressure(),
+            (self.scaler)(),
+        );
         let Some(derived) = self.derived else {
             return;
         };
-        if occupancy.total > derived.limits.total || occupancy.fd > derived.limits.fd {
-            let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
-            self.queue(evictions, now);
+        if occupancy.total <= derived.limits.total && occupancy.fd <= derived.limits.fd {
+            return;
+        }
+        let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
+        self.queue(evictions, now);
+        // A peer's last path is pinned while authenticated, trafficked or in
+        // grace, so the bound can stay exceeded. Report it as a soft bound
+        // rather than evicting those peers.
+        let after = self.occupancy();
+        if after.total > derived.limits.total || after.fd > derived.limits.fd {
+            if let Some(suppressed) = self.soft_bound_log.permit(now, LOG_INTERVAL) {
+                tracing::warn!(
+                    "[CONN] over-bound-soft total={} bound={} fd={} fd_bound={} suppressed={}",
+                    after.total,
+                    derived.limits.total,
+                    after.fd,
+                    derived.limits.fd,
+                    suppressed
+                );
+            }
         }
     }
 
@@ -2265,5 +2295,30 @@ mod tests {
         let mut b = AdmissionBehaviour::new();
         assert!(matches!(b.poll(&mut cx), Poll::Pending));
         assert!(b.timer.is_none(), "nothing tracked, nothing to wake for");
+    }
+
+    #[test]
+    fn zero_headroom_admits_one_pending_per_new_slash24() {
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        // Zero headroom, nothing pending: a source on a new /24 gets its slot.
+        let first = src_ip(1, 1);
+        assert_eq!(b.pending_refusal(0, Some(first)), None);
+        b.track_pending(cid(1), now, true, Some(first));
+        // A second source from the same, already-pending /24 is shed.
+        assert_eq!(b.pending_refusal(0, Some(src_ip(2, 1))), Some("cap"));
+        // A different /24 still gets its own slot.
+        assert_eq!(b.pending_refusal(0, Some(src_ip(3, 2))), None);
+        // Without a source address, zero headroom admits nothing.
+        assert_eq!(b.pending_refusal(0, None), Some("cap"));
+    }
+
+    #[test]
+    fn positive_cap_still_sheds_a_new_slash24_once_full() {
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        b.track_pending(cid(1), now, true, Some(src_ip(1, 1)));
+        // The general cap of 1 is full: the zero-headroom slot does not apply.
+        assert_eq!(b.pending_refusal(1, Some(src_ip(1, 2))), Some("cap"));
     }
 }
