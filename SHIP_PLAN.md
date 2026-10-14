@@ -12,7 +12,7 @@ decisions of 2026-10-14: `v0.5.0` stays tagged (`df3bd3af4`) and is never
 rewritten; all remaining work lands on main and ships as **v0.5.1**; PRs merge
 when green (exact-head CI, no conflicts, Rule-8 where required); the Freebuff
 lane orchestrates with push and merge rights; preserve snapshot `e4050f8` stays
-NEVER MERGE (useful parts only via cars MT-05 and MT-07). Trackers: #452, #567.
+NEVER MERGE (useful parts only via car MT-05; MT-07 already landed as #413). Trackers: #452, #567.
 The 2026-09-29 pointer below is SUPERSEDED (kept as history).
 
 **2026-10-06 STATUS NOTE (authoritative where it conflicts with the sections below):**

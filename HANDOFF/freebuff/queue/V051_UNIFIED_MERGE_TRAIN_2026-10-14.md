@@ -20,10 +20,10 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 
 ## 1. Operator decisions (2026-10-14, from the operator directly)
 
-- **D1.** `v0.5.0` is already tagged on origin (`df3bd3af4`, 2026-10-05) and is never rewritten. The unified release target is **v0.5.1**: land ALL remaining work (residual open PRs tracked by #452, the queue cars, and the useful parts of the preserve snapshot) on main, then tag v0.5.1. At queue creation main still reads 0.4.1 (`Cargo.toml:12`, `android/build.gradle:24-25`); the bump to 0.5.1 is car F-1 below, superseding PR #471.
+- **D1.** `v0.5.0` is already tagged on origin (lightweight tag on `df3bd3af4`, committed 2026-10-05 -10:00, which is 2026-10-06 UTC; `integrate: consolidate 55 train PRs (0.5.0)`) and is never rewritten. The unified release target is **v0.5.1**: land ALL remaining work (residual open PRs tracked by #452, the open queue cars, and the useful parts of the preserve snapshot) on main, then tag v0.5.1. At queue creation main still reads 0.4.1 (`Cargo.toml:12`, `android/build.gradle:24-25`); the bump to 0.5.1 is car F-1 below, superseding PR #471.
 - **D2.** Merge policy: a PR merges when green: CI green on the exact head SHA, no conflicts, and required reviews / Rule-8 adversarial review satisfied for `core/src/{crypto,transport,routing,privacy}/`. Land everything, one car at a time, in dependency order.
 - **D3.** The Freebuff lane is the orchestration lane for this train, with full permission to push branches and merge PRs to main once they are green per D2. Protected-path cars still need `crypto-security-auditor` / Rule-8 sign-off before merge.
-- **D4.** Preserve snapshot `e4050f8` (branches `preserve/shared-checkout-20261003` and `-ekmihd`) is a NEVER MERGE backup. Its useful parts land only as separate cars cut from current main: MT-05 (D9/D1 vendored `libp2p-swarm-0.48.0` fix, Rule-8 gated) and MT-07 (OUTBOX-SWEEP-001). Desktop-only branches `wip/session-close-20260929`, `archive/recovery/*` and the ~90-path staged candidate must be verified and pushed by the operator from the desktop (issue #567); this lane does not touch them.
+- **D4.** Preserve snapshot `e4050f8` (branches `preserve/shared-checkout-20261003` and `-ekmihd`) is a NEVER MERGE backup. Its useful parts land only as separate cars cut from current main: MT-05 (D9/D1 vendored `libp2p-swarm-0.48.0` fix, Rule-8 gated); MT-07 (OUTBOX-SWEEP-001) already landed as #413. Desktop-only branches `wip/session-close-20260929`, `archive/recovery/*` and the ~90-path staged candidate must be verified and pushed by the operator from the desktop (issue #567); this lane does not touch them.
 
 ## 2. Gates for every car
 
@@ -35,45 +35,50 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 6. No force-push to main; no rewrite of existing tags; merge one car at a time, then re-verify main is green before the next.
 7. Cars never merge the preserve snapshot or any branch containing it.
 
-## 3. Carry-over cars (still open from the V040_V050 file)
+## 3. Carry-over cars (status of the V040_V050 file's cars)
 
-| Car | Scope | PRs | Gate | Disposition |
+Verified against origin/main (2677ea38) and PR state on 2026-10-14:
+
+| Car | Scope | PRs | Gate | Status |
 |---|---|---|---|---|
-| MT-05 | D9 + D1 transport, vendored `libp2p-swarm-0.48.0` fix | #372 vs #489 | R8 | decide |
-| MT-06 | Android lifecycle (#351, #367, port from #364) | verify which landed | android-qa | decide |
-| MT-07 | Periodic outbox sweep (OUTBOX-SWEEP-001, #364 remainder) | #364 vs #489 | R8 (swarm.rs) | decide |
+| MT-03 | P0 umbrella WP1-WP4 | #383, #352, #349, #355, #356 | n/a | DONE: all merged (#383 11b30c85f 2026-10-03; #352, #349, #355, #356 merged 2026-10-06 in the 0.5.0 integration) |
+| MT-06 | Android lifecycle (AND-SS-001, STOP-TEARDOWN-TIMEOUT-001) | #351, #367 | android-qa | DONE: #351 and #367 were CLOSED UNMERGED; the work landed instead as #432 (30caacc36, AND-SS-001 serialize start/stop), #515 (bounded stop path) and #519 (re-ensure FGS); `StopStartFloodTest.kt` is on main. Residual #364 lifecycle diff not checked here |
+| MT-07 | Periodic outbox sweep (OUTBOX-SWEEP-001) | #413 | R8 (swarm.rs) | DONE: #413 merged 2026-10-09 (f7b8fc22f); `sweep_outbox_over_swarm` is in `core/src/transport/swarm.rs` on main |
+| MT-04 | D6 routing feed on ConnectionEstablished | unknown | R8 | UNVERIFIED: likely covered by MT-03 WP2 (commit 3c899062 `v050-wp2-routing-feed-all-transports`); #514 is observability only. First step: grep main for the feed and mark done or open a car |
+| MT-05 | D9 + D1 transport, vendored `libp2p-swarm-0.48.0` fix | #372 vs #489 | R8 | OPEN: main has no `vendor/` directory and no `per_peer_cap.rs`; decide |
+| MT-08..MT-12 | #359 remainder; defect tickets; tooling; housekeeping; drift guard | #359 (closed unmerged) | per item | UNVERIFIED: not checked against main in this pass |
 | P0-8 BK-01 | Back up everything to GitHub | operator tool | operator | operator-gated |
 
-Decision needed for MT-05 / MT-07: #489 ("conn-cap v2 -- supersedes #372 and #364") overlaps both, and #521 states it supersedes the #489 caps. Resolution order: (a) Freebuff compares diffs of #372, #364, #489, #521 and posts a one-table overlap report on #452; (b) operator picks the surviving set; (c) the losers are closed with a pointer comment; (d) the winners are rebased on main, each R8-reviewed. Until (b) lands, none of #372, #364, #489 merges. MT-03/MT-04/MT-08..MT-12 not verified here; the first Freebuff step is to check each against main and mark it done or add it below.
+Decision needed for MT-05: #489 ("conn-cap v2 -- supersedes #372 and #364") overlaps #372 and #364, and #521 states it supersedes the #489 caps. All four are open, base main, and touch `core/src/transport/` (R8). Resolution order: (a) Freebuff compares diffs of #372, #364, #489, #521 and posts a one-table overlap report on #452; (b) operator picks the surviving set; (c) the losers are closed with a pointer comment; (d) the winners are rebased on main, each R8-reviewed. Until (b) lands, none of #372, #364, #489, #521 merges. #364 (open, base main) predates #413 and #432, which landed its sweep and lifecycle halves; treat it as a close candidate once its remaining hunks (Dockerfile, `per_peer_cap.rs`) are confirmed covered by the survivor.
 
 ## 4. Residual cars (open PRs against main on 2026-10-14)
 
-Dispositions: land (merge when green), rebase (needs rebase first), superseded-close, decide (operator or overlap ruling). CI/mergeable state was NOT checked when this table was written; the lane re-checks per D2.
+Two further open PRs, #220 and #216, target base `feat/identity-id-unification` (not main) and are out of this table; they follow #209. Dispositions: land (merge when green), rebase (needs rebase first), superseded-close, decide (operator or overlap ruling). CI/mergeable state was NOT checked when this table was written; the lane re-checks per D2.
 
 | Car | PR | Title (short) | Gate | Disposition |
 |---|---|---|---|---|
 | R-01 | #503 | gitignore .claude/worktrees/ | none | land |
 | R-02 | #504 | hardened ffi_surface.sh | none | land |
 | R-03 | #505 | PR disposition ledger tooling | none | land |
-| R-04 | #506 | API CORS loopback + jna.library.path | review | land |
+| R-04 | #506 | API CORS loopback + jna.library.path | review, android-qa (android/app/build.gradle) | land |
 | R-05 | #507 | Android BLE write-type | android-qa | land |
-| R-06 | #508 | conn-fanout diagnostic tool | none | land |
-| R-07 | #509 | seeding security hardening | R8 likely | land |
-| R-08 | #510 | iOS durable delivery (re-port) | review | land |
+| R-06 | #508 | conn-fanout diagnostic tool | android-qa (MeshServiceViewModel.kt) | land |
+| R-07 | #509 | seeding security hardening | R8 (core/src/transport/swarm.rs) | land |
+| R-08 | #510 | iOS durable delivery (re-port) | review (iOS only, no protected path) | land |
 | R-09 | #511 | agent drift-guard tooling | none | land |
 | R-10 | #500 | docker: retry NDK download | none | land |
 | R-11 | #562 | ios CI: drop duplicate macOS test | none | land |
-| R-12 | #550 | StoreAndCarry outbox retry, receipts on dup | review | land |
-| R-13 | #556 | wire network-change signal into core (#523) | review | land |
-| R-14 | #554 | canonical recipient hint, identify hint binding | R8 | land |
+| R-12 | #550 | StoreAndCarry outbox retry, receipts on dup | review, android-qa (core/src/store/outbox.rs, iron_core.rs not protected paths) | land |
+| R-13 | #556 | wire network-change signal into core (#523) | review, android-qa (core/src/mobile_bridge.rs not a protected path) | land |
+| R-14 | #554 | canonical recipient hint, identify hint binding | R8 (routing/local.rs, routing/optimized_engine.rs, transport/swarm.rs) | land |
 | R-15 | #521 | dynamic admission, evict-don't-deny | R8 | decide (vs #489, see section 3) |
-| R-16 | #209 | unify multi-flavor identity ID | review | rebase |
+| R-16 | #209 | unify multi-flavor identity ID | review, android-qa (21 android files) | rebase |
 | R-17 | #208 | docs(apple): 4-node parity status (fork) | none | decide |
-| R-18 | #178 | API limit OSX/iOS (fork, RULE-8) | R8 | decide |
+| R-18 | #178 | API limit OSX/iOS (fork, RULE-8) | R8 (core/src/transport/ble/gatt.rs) | decide |
 | R-19 | #471 | chore: version 0.5.0 | none | superseded-close (by F-1) |
-| R-20 | dependabot group | #528-#542 (15 PRs) | see below | land |
+| R-20 | dependabot group | #528-#542 (15 PRs) | android-qa for #531, #534, #540, #541, #542; none for the rest | land |
 
-R-20 dependabot group (#528 rust-toolchain, #529 setup-java, #530 cache/restore, #531 splashscreen, #532 bincode 3.0.0, #533 login-action, #534 zxing, #535 tower-http, #536 rustc-hash, #537 metadata-action, #538 x25519-dalek 3.0.0, #539 libc, #540 kotlin 2.4.20, #541 security-crypto, #542 navigation-compose). Land as one car, one PR at a time, lowest risk first (actions, patch bumps, then majors). Major bumps (#532, #535, #536, #538, #540) need a green full build; #538 touches crypto and is R8-gated. A bump that cannot go green is closed with a reason on #452 rather than left open.
+R-20 dependabot group (#528 rust-toolchain, #529 setup-java, #530 cache/restore, #531 splashscreen, #532 bincode 3.0.0, #533 login-action, #534 zxing, #535 tower-http, #536 rustc-hash, #537 metadata-action, #538 x25519-dalek 3.0.0, #539 libc, #540 kotlin 2.4.20, #541 security-crypto, #542 navigation-compose). Land as one car, one PR at a time, lowest risk first (actions, patch bumps, then majors). Major bumps (#532, #535, #536, #538, #540) need a green full build. #538 (x25519-dalek 3.0.0) changes only `Cargo.toml` and `Cargo.lock`, so no protected path is touched and R8 is not mechanically required; because it is the X25519 primitive, still request `crypto-security-auditor` review before merge. A bump that cannot go green is closed with a reason on #452 rather than left open.
 
 ## 5. Final cars
 
