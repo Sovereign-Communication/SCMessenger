@@ -2204,7 +2204,8 @@ mod tests {
             }
         }
         assert_eq!(ledger.occupancy(), (50, 50));
-        assert_eq!(ledger.active_paths(), 50);
+        // Only the twenty paths that carried traffic count as active.
+        assert_eq!(ledger.active_paths(), 20);
         assert!(ledger.counters_consistent());
         let ev = ledger.evict_over_total(TotalLimits { total: 20, fd: 20 }, at(base, 60_000), None);
         assert_eq!(ev.len(), 30);
@@ -2323,6 +2324,7 @@ mod tests {
             let mut ids: Vec<u32> = Vec::new();
             for op in ops {
                 let live_before = ledger.live_paths(&PEER);
+                let is_close = matches!(op, Op::Close(_));
                 let mut evictions = Vec::new();
                 let mut established: Option<u32> = None;
                 let mut over_total = false;
@@ -2408,10 +2410,11 @@ mod tests {
                     }
                 }
                 let live_after = ledger.live_paths(&PEER);
-                // An authenticated peer never loses its last path, under any
-                // op or bound. Unauthenticated, trafficless sole paths past
-                // grace may still be evicted by the total bound, by design.
-                if authenticated && live_before >= 1 {
+                // An authenticated peer never loses its last path to eviction,
+                // under any bound. Its own close is not an eviction. Unauthenticated,
+                // trafficless sole paths past grace may still be evicted by the
+                // total bound, by design.
+                if authenticated && live_before >= 1 && !is_close {
                     prop_assert!(live_after >= 1, "authenticated peer left with no live path");
                 }
                 // Per-peer evictions alone never take a peer from connected to

@@ -1535,12 +1535,18 @@ mod tests {
     fn eviction_logging_is_rate_limited_but_closes_are_not() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
-        // 40 single-path peers against a bound of 4: 36 evictions inside one
-        // quantum, every one of them queued, at most one logged per reason.
+        // 40 single-path peers arrive inside one quantum. Each is inside its
+        // own grace window, so none is a victim yet: the total bound is soft
+        // until the window has passed.
         for n in 0..40usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
-        assert_eq!(drain(&mut b).len(), 36);
+        assert_eq!(b.ledger.occupancy().0, 40, "protected paths are never shed early");
+        assert!(drain(&mut b).is_empty());
+        // One arrival after every grace window has closed sheds the excess
+        // (41 paths against a bound of 4) in one pass, logged once per reason.
+        b.path_established(PeerId::random(), cid(40), &wan(), true, at(base, 60_000));
+        assert_eq!(drain(&mut b).len(), 37);
         let gate = b.evict_logs.get("over-total").expect("gate exists");
         assert!(gate.suppressed >= 30, "suppressed: {}", gate.suppressed);
     }
@@ -1553,7 +1559,15 @@ mod tests {
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         let peers: Vec<PeerId> = (0..6).map(|_| PeerId::random()).collect();
         for (n, peer) in peers.iter().enumerate() {
-            b.path_established(*peer, cid(n), &wan(), true, at(base, n as u64 * 10));
+            // The first four settle inside one quantum and stay protected by
+            // their grace windows; the last two arrive after those windows
+            // have closed, so the bound can shed the excess.
+            let when = if n < 4 {
+                at(base, n as u64 * 10)
+            } else {
+                at(base, 60_000 + n as u64 * 10)
+            };
+            b.path_established(*peer, cid(n), &wan(), true, when);
         }
         assert_eq!(b.ledger.occupancy().0, 4, "bound = half the descriptors");
         let closes = drain(&mut b);
@@ -1580,7 +1594,7 @@ mod tests {
                 cid(n),
                 &wan(),
                 false,
-                at(base, 10_000 + n as u64),
+                at(base, 10_000 + n as u64 * 2_000),
             );
         }
         let closes = drain(&mut b);
@@ -1604,11 +1618,11 @@ mod tests {
         // event. No need to wait for the periodic sample.
         b.note_os_exhaustion(PressureKind::Fd);
         b.note_os_exhaustion(PressureKind::Fd);
-        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
         assert_eq!(drain(&mut b).len(), 1, "room was evicted at once");
         assert_eq!(b.ledger.occupancy().0, 5);
         // The scheduled sample lifts the cap again.
-        b.tick_with(at(base, 10_000), Some(fd_limit_1000()), true);
+        b.tick_with(at(base, 120_000), Some(fd_limit_1000()), true);
         assert_eq!(b.total_budget().expect("derived").limits.total, 500);
     }
 
@@ -1629,7 +1643,7 @@ mod tests {
             },
         ));
         assert_eq!(b.pressure_events, 1);
-        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
         assert_eq!(b.ledger.occupancy().0, 4);
     }
 
@@ -1972,7 +1986,9 @@ mod tests {
         }
         flood(&mut b, 500, 4, at(base, 10));
         b.note_os_exhaustion(PressureKind::Fd);
-        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        // Periodic: the sampling and marker timers start at construction, so the
+        // first tick must advance them or every later poll reads as overdue.
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), true);
         let after_first = b.ledger.occupancy().0;
         let cap = b.pending_cap;
         assert!(after_first < 41, "the first episode shed some paths");
@@ -1980,7 +1996,7 @@ mod tests {
         for i in 1..=50u64 {
             b.note_os_exhaustion(PressureKind::Fd);
             assert!(
-                !b.tick_due(at(base, 100 + i)),
+                !b.tick_due(at(base, 60_000 + i)),
                 "no tick work inside the quantum"
             );
         }
@@ -1988,7 +2004,7 @@ mod tests {
         assert_eq!(b.pending_cap, cap, "the pending cap did not compound");
         assert_eq!(b.pressure_events, 50, "events are carried, not dropped");
         // The next quantum runs ONE more episode for all of them.
-        let next = at(base, 100) + EVAL_QUANTUM;
+        let next = at(base, 60_000) + EVAL_QUANTUM;
         assert!(b.tick_due(next));
         b.tick_with(next, Some(fd_limit_1000()), false);
         assert_eq!(b.pressure_events, 0);
@@ -2226,9 +2242,12 @@ mod tests {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         for n in 0..3_000usize {
-            b.path_established(PeerId::random(), cid(n), &wan(), false, at(base, n as u64));
+            // One arrival every two seconds: each grace window closes before
+            // the next arrival, so the bound is enforced rather than the window.
+            let t = at(base, n as u64 * 2_000);
+            b.path_established(PeerId::random(), cid(n), &wan(), false, t);
             if let Some((peer, id)) = b.next_close_request() {
-                b.path_closed(&peer, &id, 0, at(base, n as u64));
+                b.path_closed(&peer, &id, 0, t);
             }
         }
         assert_eq!(b.ledger.occupancy().0, 4);
