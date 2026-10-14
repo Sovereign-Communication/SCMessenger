@@ -24,6 +24,7 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 - **D2.** Merge policy: a PR merges when green: CI green on the exact head SHA, no conflicts, and required reviews / Rule-8 adversarial review satisfied for `core/src/{crypto,transport,routing,privacy}/`. Land everything, one car at a time, in dependency order.
 - **D3.** The Freebuff lane is the orchestration lane for this train, with full permission to push branches and merge PRs to main once they are green per D2. Protected-path cars still need `crypto-security-auditor` / Rule-8 sign-off before merge.
 - **D4.** Preserve snapshot `e4050f8` (branches `preserve/shared-checkout-20261003` and `-ekmihd`) is a NEVER MERGE backup. Its useful parts land only as separate cars cut from current main: MT-05 (D9/D1 vendored `libp2p-swarm-0.48.0` fix, Rule-8 gated); MT-07 (OUTBOX-SWEEP-001) already landed as #413. Desktop-only branches `wip/session-close-20260929`, `archive/recovery/*` and the ~90-path staged candidate must be verified and pushed by the operator from the desktop (issue #567); this lane does not touch them.
+- **D5.** Operator decision D5 (2026-10-14): PR #521 (dynamic admission, evict-don't-deny, derived per-peer path budget) is the chosen connection-admission design. Rationale: repo philosophy is no hard/static connection caps, only dynamic allowance; caps must never break messaging. This overrides the earlier CTO constraint quoted in #489 (keep `MAX_ESTABLISHED_PER_PEER=16` and its floor assert). Consequences: #521 is the MT-05 vehicle (carries the D9 vendored `libp2p-swarm-0.48.0` patch); #489, #372 and #364 become superseded-close AFTER #521 merges, once their uncarried remnants are checked (e.g. MeshServiceViewModelTest fix from #372). Gates before #521 merges: update to current main; CI green on exact head (NAT Simulation Tests failed and Full Test Suite was cancelled on the 2026-10-13 run, unresolved); Rule-8 adversarial review by a reviewer independent of the author account, per `docs/rules/SECURITY_PROTOCOL.md` (prior sign-offs were posted from the author's account).
 
 ## 2. Gates for every car
 
@@ -45,11 +46,11 @@ Verified against origin/main (2677ea38) and PR state on 2026-10-14:
 | MT-06 | Android lifecycle (AND-SS-001, STOP-TEARDOWN-TIMEOUT-001) | #351, #367 | android-qa | DONE: #351 and #367 were CLOSED UNMERGED; the work landed instead as #432 (30caacc36, AND-SS-001 serialize start/stop), #515 (bounded stop path) and #519 (re-ensure FGS); `StopStartFloodTest.kt` is on main. Residual #364 lifecycle diff not checked here |
 | MT-07 | Periodic outbox sweep (OUTBOX-SWEEP-001) | #413 | R8 (swarm.rs) | DONE: #413 merged 2026-10-09 (f7b8fc22f); `sweep_outbox_over_swarm` is in `core/src/transport/swarm.rs` on main |
 | MT-04 | D6 routing feed on ConnectionEstablished | unknown | R8 | UNVERIFIED: likely covered by MT-03 WP2 (commit 3c899062 `v050-wp2-routing-feed-all-transports`); #514 is observability only. First step: grep main for the feed and mark done or open a car |
-| MT-05 | D9 + D1 transport, vendored `libp2p-swarm-0.48.0` fix | #372 vs #489 | R8 | OPEN: main has no `vendor/` directory and no `per_peer_cap.rs`; decide |
+| MT-05 | D9 + D1 transport, vendored `libp2p-swarm-0.48.0` fix | #521 (land); #489, #372, #364 (superseded-close after #521 merges) | R8 (independent reviewer) | DECIDED (D5): #521 is the vehicle; carries the vendored D9 patch; not yet on main |
 | MT-08..MT-12 | #359 remainder; defect tickets; tooling; housekeeping; drift guard | #359 (closed unmerged) | per item | UNVERIFIED: not checked against main in this pass |
 | P0-8 BK-01 | Back up everything to GitHub | operator tool | operator | operator-gated |
 
-Decision needed for MT-05: #489 ("conn-cap v2 -- supersedes #372 and #364") overlaps #372 and #364, and #521 states it supersedes the #489 caps. All four are open, base main, and touch `core/src/transport/` (R8). Resolution order: (a) Freebuff compares diffs of #372, #364, #489, #521 and posts a one-table overlap report on #452; (b) operator picks the surviving set; (c) the losers are closed with a pointer comment; (d) the winners are rebased on main, each R8-reviewed. Until (b) lands, none of #372, #364, #489, #521 merges. #364 (open, base main) predates #413 and #432, which landed its sweep and lifecycle halves; treat it as a close candidate once its remaining hunks (Dockerfile, `per_peer_cap.rs`) are confirmed covered by the survivor.
+MT-05 decision: resolved by operator decision D5 (section 1). #521 is the surviving set. #489, #372 and #364 are not merged; each closes as superseded only after #521 merges, once its remnants are confirmed carried (for #364, its remaining hunks such as Dockerfile and `per_peer_cap.rs`; for #372, the MeshServiceViewModelTest fix). Until #521 merges, #489, #372 and #364 stay open and unmerged. #364 predates #413 and #432, which already landed its sweep and lifecycle halves.
 
 ## 4. Residual cars (open PRs against main on 2026-10-14)
 
@@ -71,7 +72,7 @@ Two further open PRs, #220 and #216, target base `feat/identity-id-unification` 
 | R-12 | #550 | StoreAndCarry outbox retry, receipts on dup | review, android-qa (core/src/store/outbox.rs, iron_core.rs not protected paths) | land |
 | R-13 | #556 | wire network-change signal into core (#523) | review, android-qa (core/src/mobile_bridge.rs not a protected path) | land |
 | R-14 | #554 | canonical recipient hint, identify hint binding | R8 (routing/local.rs, routing/optimized_engine.rs, transport/swarm.rs) | land |
-| R-15 | #521 | dynamic admission, evict-don't-deny | R8 | decide (vs #489, see section 3) |
+| R-15 | #521 | dynamic admission, evict-don't-deny | R8 (independent reviewer) | land (MT-05, D5) |
 | R-16 | #209 | unify multi-flavor identity ID | review, android-qa (21 android files) | rebase |
 | R-17 | #208 | docs(apple): 4-node parity status (fork) | none | decide |
 | R-18 | #178 | API limit OSX/iOS (fork, RULE-8) | R8 (core/src/transport/ble/gatt.rs) | decide |
