@@ -36,6 +36,10 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 6. No force-push to main; no rewrite of existing tags; merge one car at a time, then re-verify main is green before the next.
 7. Cars never merge the preserve snapshot or any branch containing it.
 
+### Freebuff lane mandate (operator, 2026-10-14)
+
+The Freebuff lane runs a comprehensive burndown of every car in this queue as fast as possible, with full authority to push branches, fix, and merge to main each car once its gates are met (CI green on exact head, no conflicts, Rule-8 independent review for `core/src/{crypto,transport,routing,privacy}/`, android-qa where tagged). Gates are not waivable by the lane.
+
 ## 3. Carry-over cars (status of the V040_V050 file's cars)
 
 Verified against origin/main (2677ea38) and PR state on 2026-10-14:
@@ -50,6 +54,12 @@ Verified against origin/main (2677ea38) and PR state on 2026-10-14:
 | MT-08..MT-12 | #359 remainder; defect tickets; tooling; housekeeping; drift guard | #359 (closed unmerged) | per item | UNVERIFIED: not checked against main in this pass |
 | P0-8 BK-01 | Back up everything to GitHub | operator tool | operator | operator-gated |
 
+MT-05 fix round for #521 (review of head 230b6169: https://github.com/Sovereign-Communication/SCMessenger/pull/521#issuecomment-6163230854):
+- **A (BLOCKING):** total-bound eviction can strip a peer's last path (`evict_over_total`, `path_budget.rs` victim loop); fix so no authenticated peer loses its last path, make over-bound a soft bound with an `over-bound-soft` marker, and remove the over_total proptest exemption.
+- **B (SHOULD-FIX):** replayed contact-signed envelope earns the permanent `traffic` bit (`swarm.rs` `envelope_signed_by_known_contact`); add created_at skew/expiry checks and a bounded recent message_id LRU.
+- **C (SHOULD-FIX):** pending-inbound shed refuses contacts on new IPs at headroom 0; allow one pending slot per distinct /24.
+- Gates: update to main; CI green on exact head; independent Rule-8 review on final head.
+
 MT-05 decision: resolved by operator decision D5 (section 1). #521 is the surviving set. #489, #372 and #364 are not merged; each closes as superseded only after #521 merges, once its remnants are confirmed carried (for #364, its remaining hunks such as Dockerfile and `per_peer_cap.rs`; for #372, the MeshServiceViewModelTest fix). Until #521 merges, #489, #372 and #364 stay open and unmerged. #364 predates #413 and #432, which already landed its sweep and lifecycle halves.
 
 ## 4. Residual cars (open PRs against main on 2026-10-14)
@@ -58,6 +68,8 @@ Two further open PRs, #220 and #216, target base `feat/identity-id-unification` 
 
 | Car | PR | Title (short) | Gate | Disposition |
 |---|---|---|---|---|
+| R-00a | #569 | Take Blacksmith runners out of CI rotation (2500/3000 minutes used). Quick mitigation: set repo variable CI_RUNNER to anything other than 'blacksmith' (operator settings action); durable fix: remove Blacksmith routing from workflows per #569. Must land first: every car runs CI. | operator | P0, land first |
+| R-00b | #570 | wasm with_storage build break (issue #570). Blocks NAT Simulation Tests / Full Test Suite on train cars incl. #521. | none (acceptance: `cargo build --tests --target wasm32-unknown-unknown -p scmessenger-wasm`) | P0, land before #521 |
 | R-01 | #503 | gitignore .claude/worktrees/ | none | land |
 | R-02 | #504 | hardened ffi_surface.sh | none | land |
 | R-03 | #505 | PR disposition ledger tooling | none | land |
