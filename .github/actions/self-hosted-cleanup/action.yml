@@ -13,5 +13,6 @@ runs:
       if: runner.environment == 'self-hosted'
       shell: bash
       run: |
+        set -euo pipefail
         cd "$GITHUB_WORKSPACE"
-        git clean -ffdxq -e target || true
+        git clean -ffdxq -e target

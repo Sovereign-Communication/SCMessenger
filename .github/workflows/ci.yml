@@ -266,19 +266,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
         uses: ./.github/actions/linux-build-deps
       - run: cargo doc --workspace --no-deps
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   ffi-surface:
     name: FFI Surface Contract
@@ -289,10 +283,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -307,9 +298,6 @@ jobs:
       - run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
       - run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
       - run: scripts/ffi_surface.sh
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   windows-cli-artifact:
     name: Windows CLI Artifact

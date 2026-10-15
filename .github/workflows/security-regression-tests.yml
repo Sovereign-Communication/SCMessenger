@@ -97,14 +97,8 @@ jobs:
         id: platform
         uses: ./.github/actions/detect-platform-change
 
-      # Pinned on integrate/train-20261004. This arrived unpinned from #228,
-      # and an unpinned `stable` is exactly the drift the repo pin exists to
-      # prevent: scripts/check_toolchain_pin.py fails closed on it, and left
-      # alone it would turn this repo red on an unrelated diff one day.
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: steps.platform.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
+        if: steps.platform.outputs.rust_relevant == 'true'
 
       - uses: Swatinem/rust-cache@v2
         if: steps.platform.outputs.rust_relevant == 'true'
@@ -155,6 +149,3 @@ jobs:
           fi
 
           echo "[OK] $MATCHED forgery/negative-security regression test(s) selected and passed"
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
