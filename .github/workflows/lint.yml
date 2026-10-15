@@ -31,13 +31,23 @@ jobs:
   # Required context. Only the cheap, non-compiling checks live here: rustfmt and
   # the two python perimeter/unwrap gates. clippy (--all-features, a strict
   # superset of what ran here) is the canonical job "Lint" in ci.yml, so it is
-  # not compiled a second time. Hosted: nothing here needs the OCI warm cache.
+  # not compiled a second time.
+  #
+  # Runner selection contract, shared verbatim by every OCI-eligible job in
+  # ci.yml, lint.yml, hygiene.yml and security-regression-tests.yml:
+  #   trusted event (push, or same-repo PR) AND (CI_RUNNER == 'oci'
+  #   OR (CI_RUNNER == '' AND USE_OCI_RUNNER != 'false'))
+  #     -> ["self-hosted","oci"]
+  #   anything else -> ubuntu-latest (fork PRs, or the explicit 'hosted' value)
+  # The three inputs are deliberately consistent so there is no combination
+  # (CI_RUNNER unset, 'oci', 'hosted'; USE_OCI_RUNNER unset/true/false) in which
+  # one required check silently moves to OCI while another stays hosted.
   rust:
     name: Rust Linting
     needs: changes
     # Required check: always run and fail closed if `changes` failed.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Fail closed if change detection failed
@@ -47,11 +57,20 @@ jobs:
           exit 1
       - uses: actions/checkout@v7
 
+      # On the OCI runner rustc/rustfmt 1.99.0 are preinstalled; this puts them
+      # on PATH and fails closed if the host drifted off the pin. A no-op hosted.
+      - name: Use preinstalled Rust (self-hosted)
+        uses: ./.github/actions/self-hosted-rust
+
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: needs.changes.outputs.rust_relevant == 'true'
+        if: needs.changes.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
         with:
           toolchain: 1.99.0
           components: rustfmt
+
+      - name: Clean self-hosted workspace
+        if: always()
+        uses: ./.github/actions/self-hosted-cleanup
 
       - name: Check Rust formatting
         if: needs.changes.outputs.rust_relevant == 'true'

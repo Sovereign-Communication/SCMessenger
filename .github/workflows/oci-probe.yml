@@ -95,6 +95,39 @@ jobs:
           pkg-config --modversion dbus-1 || true
           rg --version | head -1 || true
 
+      # scripts/check_required_contexts.py (run by the required check
+      # "Repository Hygiene Checks") needs a REAL YAML parser: PyYAML when
+      # importable, else `yq`, else it hard-fails. If the OCI host has neither,
+      # routing that required check here would make main unmergeable, so this is
+      # the single most important thing to verify before flipping the variable.
+      - name: YAML parser available for check_required_contexts.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          py_yaml=no
+          if python3 -c 'import yaml' 2>/dev/null; then py_yaml=yes; fi
+          echo "PyYAML importable: $py_yaml"
+          yq_present=no
+          if command -v yq >/dev/null 2>&1; then yq_present=yes; fi
+          echo "yq on PATH: $yq_present"
+          if [ "$py_yaml" = "no" ] && [ "$yq_present" = "no" ]; then
+            echo "[FAIL] neither PyYAML nor yq: check_required_contexts.py would hard-fail here"
+            exit 1
+          fi
+          echo "[OK] a real YAML parser is available"
+
+      # The gates that hygiene-checks and lint.yml run are pure python3; prove
+      # the interpreter can actually import the stdlib modules they use.
+      - name: Python stdlib modules used by the required gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, re, subprocess, sys, tempfile, itertools, pathlib, shutil, argparse
+          print("python", sys.version.split()[0])
+          print("[OK] stdlib imports used by the required gates are present")
+          PY
+
       - name: Workspace cache state
         shell: bash
         run: |
