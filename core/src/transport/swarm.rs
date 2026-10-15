@@ -27,6 +27,7 @@ use super::mesh_routing::{
 };
 use crate::store::ledger_entry::{LedgerExchangeRequest, LedgerExchangeResponse, SharedPeerEntry};
 // Import mycorrhizal routing modules
+use super::envelope_gate::{contact_signed_envelope_earns_traffic, RecentEnvelopeIds};
 #[cfg(target_arch = "wasm32")]
 use super::multiport::MultiPortConfig;
 #[cfg(not(target_arch = "wasm32"))]
@@ -199,23 +200,6 @@ fn peer_standing(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -
         .unwrap_or(PeerStanding::UNKNOWN)
 }
 
-/// True when the signer of a Drift envelope (signature verified) is a saved
-/// contact. A self-signed envelope from a stranger is not "a known identity".
-fn envelope_signed_by_known_contact(core: &crate::IronCore, envelope_data: &[u8]) -> bool {
-    let Ok(envelope) = crate::drift::DriftEnvelope::from_bytes(envelope_data) else {
-        return false;
-    };
-    if envelope.verify().is_err() {
-        return false;
-    }
-    core.contact_manager
-        .read()
-        .get_by_public_key(&hex::encode(envelope.sender_public_key))
-        .ok()
-        .flatten()
-        .is_some()
-}
-
 /// Admission traffic validation for an inbound message request. Receipt alone
 /// proves nothing (a Sybil can send requests for free); traffic counts only
 /// when the sender is not blocked AND is a peer with authenticated history or
@@ -226,13 +210,21 @@ fn envelope_signed_by_known_contact(core: &crate::IronCore, envelope_data: &[u8]
 /// therefore gated behind admission: `may_probe_stranger` admits one probe per
 /// path per locally measured allowance (derived from the handshake baseline),
 /// so a flood of requests on one path costs one probe, and the number of paths
-/// is itself bounded by the derived total. Peers with authenticated history
-/// never reach the probe, so honest traffic is unaffected.
+/// is itself bounded by the derived total. Authenticated peers remain admitted
+/// regardless of envelope validity, but valid contact envelopes still pass
+/// through the gate so replay IDs are shared across authenticated and stranger
+/// ingress.
+///
+/// The signed-by-contact fallback also requires an envelope addressed to this
+/// identity, a fresh envelope (bounded `created_at` skew and unexpired TTL),
+/// and a message ID that has not earned the bit recently, so a captured
+/// envelope cannot be replayed to re-earn traffic credit.
 fn inbound_message_is_validated(
     core_handle: &Option<Weak<crate::IronCore>>,
     peer_id: PeerId,
     envelope_data: &[u8],
     may_probe_stranger: impl FnOnce() -> bool,
+    recent_envelopes: &mut RecentEnvelopeIds,
 ) -> bool {
     let Some(core) = core_handle.as_ref().and_then(|weak| weak.upgrade()) else {
         return false;
@@ -243,17 +235,25 @@ fn inbound_message_is_validated(
     {
         return false;
     }
-    if peer_standing_in(&core, peer_id).authenticated {
-        return true;
+    let authenticated = peer_standing_in(&core, peer_id).authenticated;
+    // Request-response accepts up to 4 MiB, while receive_message rejects an
+    // unwrapped envelope over MAX_MESSAGE_SIZE. Keep oversized input out of
+    // frame/envelope parsing here so authenticated peers cannot force an extra
+    // large allocation and signature check on the swarm event loop. Their
+    // authenticated standing still admits the request as before; strangers
+    // cannot earn traffic from an oversized message.
+    if envelope_data.len() > crate::message::codec::MAX_MESSAGE_SIZE {
+        return authenticated;
     }
-    if !may_probe_stranger() {
+    if !authenticated && !may_probe_stranger() {
         return false;
     }
     let payload = match DriftFrame::from_bytes(envelope_data) {
         Ok(frame) => frame.payload,
         Err(_) => envelope_data.to_vec(),
     };
-    envelope_signed_by_known_contact(&core, &payload)
+    let contact_signed = contact_signed_envelope_earns_traffic(&core, &payload, recent_envelopes);
+    authenticated || contact_signed
 }
 
 /// Refresh the admission standing of a peer that just produced validated
@@ -4743,6 +4743,7 @@ pub async fn start_swarm_with_config(
 
         // Track peers we've already exchanged ledgers with (avoid spamming)
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
+        let mut recent_envelopes = RecentEnvelopeIds::default();
         // Keep the current request ID per peer so a stale failure from an
         // earlier path cannot re-arm a newer, successful exchange.
         let mut pending_ledger_exchanges: HashMap<
@@ -5458,7 +5459,7 @@ pub async fn start_swarm_with_config(
                                     request_response::Message::Request { request, .. } => {
                                         inbound_message_is_validated(&core_handle, peer, &request.envelope_data, || {
                                             swarm.behaviour_mut().admission.may_probe_stranger(&connection_id, web_time::Instant::now())
-                                        })
+                                        }, &mut recent_envelopes)
                                     }
                                     request_response::Message::Response { request_id, response } => {
                                         // An `accepted` reply from a peer we chose as a
@@ -9640,6 +9641,7 @@ pub async fn start_swarm_with_config(
         }
 
         let mut ledger_exchanged_peers: HashSet<PeerId> = HashSet::new();
+        let mut recent_envelopes = RecentEnvelopeIds::default();
         let mut pending_ledger_exchanges: HashMap<
             PeerId,
             libp2p::request_response::OutboundRequestId,
@@ -10013,7 +10015,7 @@ pub async fn start_swarm_with_config(
                                 {
                                     if inbound_message_is_validated(&core_handle, *peer, &request.envelope_data, || {
                                         swarm.behaviour_mut().admission.may_probe_stranger(connection_id, web_time::Instant::now())
-                                    }) {
+                                    }, &mut recent_envelopes) {
                                         swarm.behaviour_mut().admission.stamp_traffic(peer, connection_id, web_time::Instant::now());
                                         refresh_admission_standing(&mut swarm.behaviour_mut().admission, &core_handle, *peer);
                                     }
@@ -13639,8 +13641,13 @@ mod relay_per_peer_budget_tests {
 
 #[cfg(test)]
 mod admission_trust_tests {
-    use super::{peer_standing, PeerStanding};
+    use super::{inbound_message_is_validated, peer_standing, PeerStanding};
+    use crate::drift::{DriftEnvelope, EnvelopeType};
+    use crate::identity::IdentityKeys;
+    use crate::store::Contact;
+    use crate::transport::envelope_gate::RecentEnvelopeIds;
     use libp2p::PeerId;
+    use std::sync::Arc;
 
     const SOURCE: &str = include_str!("swarm.rs");
     const ARM_START: &str = "SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::";
@@ -13660,6 +13667,258 @@ mod admission_trust_tests {
         assert_eq!(standing, PeerStanding::UNKNOWN);
         assert!(!standing.authenticated);
         assert_eq!(standing.reputation, f64::NEG_INFINITY);
+    }
+
+    fn signed_envelope(
+        signing_key: &ed25519_dalek::SigningKey,
+        recipient_public_key: &[u8; 32],
+        message_id: [u8; 16],
+    ) -> Vec<u8> {
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .expect("system clock must be after the epoch")
+            .as_secs() as u32;
+        let mut envelope = DriftEnvelope {
+            version: crate::drift::DRIFT_VERSION,
+            envelope_type: EnvelopeType::EncryptedMessage,
+            compressed: false,
+            message_id,
+            recipient_hint: DriftEnvelope::hint_from_public_key(recipient_public_key),
+            created_at: now,
+            ttl_expiry: now.saturating_add(crate::drift::envelope::DEFAULT_TTL_SECS),
+            hop_count: 0,
+            priority: 128,
+            sender_public_key: signing_key.verifying_key().to_bytes(),
+            ephemeral_public_key: [0; 32],
+            nonce: [0; 24],
+            signature: [0; 64],
+            ciphertext: Vec::new(),
+            ratchet_dh_public: None,
+            ratchet_message_number: None,
+            suite: None,
+            pq_kem_ciphertext: None,
+            pq_encaps_key: None,
+            transcript_hash: None,
+        };
+        envelope.signature = envelope.sign(signing_key);
+        envelope.to_bytes().expect("test envelope must serialize")
+    }
+
+    #[test]
+    fn authenticated_ingress_records_replay_id_and_rejects_malformed_optional_pq() {
+        let core = Arc::new(crate::IronCore::new());
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test identity initialization must succeed");
+        let local_public_key = core
+            .identity
+            .read()
+            .keys()
+            .expect("test identity keys must exist")
+            .signing_key
+            .verifying_key()
+            .to_bytes();
+
+        let sender = IdentityKeys::generate();
+        let sender_public_key = sender.signing_key.verifying_key().to_bytes();
+        let sender_peer: PeerId = sender
+            .to_libp2p_peer_id()
+            .expect("sender peer ID must derive")
+            .parse()
+            .expect("sender peer ID must parse");
+        core.contact_manager
+            .read()
+            .add(Contact::new(
+                sender_peer.to_string(),
+                hex::encode(sender_public_key),
+            ))
+            .expect("sender contact must be saved");
+
+        let envelope = signed_envelope(&sender.signing_key, &local_public_key, [1; 16]);
+        let core_handle = Some(Arc::downgrade(&core));
+        let mut recent = RecentEnvelopeIds::default();
+        let mut probe_called = false;
+
+        assert!(inbound_message_is_validated(
+            &core_handle,
+            sender_peer,
+            &envelope,
+            || {
+                probe_called = true;
+                true
+            },
+            &mut recent,
+        ));
+        assert!(!probe_called, "authenticated contacts do not need a probe");
+
+        assert!(
+            !inbound_message_is_validated(
+                &core_handle,
+                PeerId::random(),
+                &envelope,
+                || true,
+                &mut recent,
+            ),
+            "a saved-contact envelope first seen on authenticated ingress must not earn traffic again through a stranger"
+        );
+
+        let mut truncated_pq_extension = envelope.clone();
+        truncated_pq_extension.push(0x01);
+        assert!(
+            DriftEnvelope::from_bytes(&truncated_pq_extension).is_err(),
+            "a present PQ extension without its suite byte must be rejected"
+        );
+        assert!(inbound_message_is_validated(
+            &core_handle,
+            sender_peer,
+            &truncated_pq_extension,
+            || panic!("authenticated ingress must not request a stranger probe"),
+            &mut recent,
+        ));
+
+        let mut oversized_pq_blob = envelope.clone();
+        oversized_pq_blob.extend_from_slice(&[0x01, 0x02]);
+        oversized_pq_blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(
+            DriftEnvelope::from_bytes(&oversized_pq_blob).is_err(),
+            "an overflowing PQ blob length must be rejected"
+        );
+        assert!(inbound_message_is_validated(
+            &core_handle,
+            sender_peer,
+            &oversized_pq_blob,
+            || panic!("authenticated ingress must not request a stranger probe"),
+            &mut recent,
+        ));
+
+        let mut oversized_decompressed_ciphertext = envelope.clone();
+        let ciphertext_offset = DriftEnvelope::FIXED_OVERHEAD - 1;
+        let ciphertext_length_offset = ciphertext_offset - 2;
+        oversized_decompressed_ciphertext[1] |= crate::drift::envelope::COMPRESSION_FLAG;
+        oversized_decompressed_ciphertext[ciphertext_length_offset..ciphertext_offset]
+            .copy_from_slice(&4u16.to_le_bytes());
+        oversized_decompressed_ciphertext
+            .splice(ciphertext_offset..ciphertext_offset, u32::MAX.to_le_bytes());
+        assert!(matches!(
+            DriftEnvelope::from_bytes(&oversized_decompressed_ciphertext),
+            Err(crate::drift::DriftError::DecompressionFailed(_))
+        ));
+        assert!(inbound_message_is_validated(
+            &core_handle,
+            sender_peer,
+            &oversized_decompressed_ciphertext,
+            || panic!("authenticated ingress must not request a stranger probe"),
+            &mut recent,
+        ));
+    }
+
+    #[test]
+    fn contact_envelope_for_another_recipient_does_not_earn_traffic() {
+        let core = Arc::new(crate::IronCore::new());
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test identity initialization must succeed");
+        let local_public_key = core
+            .identity
+            .read()
+            .keys()
+            .expect("test identity keys must exist")
+            .signing_key
+            .verifying_key()
+            .to_bytes();
+        let other_recipient = IdentityKeys::generate();
+        let other_public_key = other_recipient.signing_key.verifying_key().to_bytes();
+        let sender = IdentityKeys::generate();
+        let sender_public_key = sender.signing_key.verifying_key().to_bytes();
+        let sender_peer: PeerId = sender
+            .to_libp2p_peer_id()
+            .expect("sender peer ID must derive")
+            .parse()
+            .expect("sender peer ID must parse");
+        core.contact_manager
+            .read()
+            .add(Contact::new(
+                sender_peer.to_string(),
+                hex::encode(sender_public_key),
+            ))
+            .expect("sender contact must be saved");
+
+        let wrong_recipient_envelope =
+            signed_envelope(&sender.signing_key, &other_public_key, [2; 16]);
+        let core_handle = Some(Arc::downgrade(&core));
+        let mut recent = RecentEnvelopeIds::default();
+        let stranger = PeerId::random();
+
+        assert!(!inbound_message_is_validated(
+            &core_handle,
+            stranger,
+            &wrong_recipient_envelope,
+            || true,
+            &mut recent,
+        ));
+        let addressed_to_us = signed_envelope(&sender.signing_key, &local_public_key, [2; 16]);
+        assert!(inbound_message_is_validated(
+            &core_handle,
+            stranger,
+            &addressed_to_us,
+            || true,
+            &mut recent,
+        ));
+    }
+
+    #[test]
+    fn oversized_ingress_skips_contact_probe_and_preserves_authenticated_standing() {
+        let core = Arc::new(crate::IronCore::new());
+        core.grant_consent();
+        core.initialize_identity()
+            .expect("test identity initialization must succeed");
+        let sender = IdentityKeys::generate();
+        let sender_public_key = sender.signing_key.verifying_key().to_bytes();
+        let sender_peer: PeerId = sender
+            .to_libp2p_peer_id()
+            .expect("sender peer ID must derive")
+            .parse()
+            .expect("sender peer ID must parse");
+        core.contact_manager
+            .read()
+            .add(Contact::new(
+                sender_peer.to_string(),
+                hex::encode(sender_public_key),
+            ))
+            .expect("sender contact must be saved");
+
+        let oversized = vec![0; crate::message::codec::MAX_MESSAGE_SIZE + 1];
+        let core_handle = Some(Arc::downgrade(&core));
+        let mut recent = RecentEnvelopeIds::default();
+        let mut probe_called = false;
+
+        assert!(inbound_message_is_validated(
+            &core_handle,
+            sender_peer,
+            &oversized,
+            || {
+                probe_called = true;
+                true
+            },
+            &mut recent,
+        ));
+        assert!(!probe_called, "authenticated peers do not need a probe");
+
+        probe_called = false;
+        assert!(!inbound_message_is_validated(
+            &core_handle,
+            PeerId::random(),
+            &oversized,
+            || {
+                probe_called = true;
+                true
+            },
+            &mut recent,
+        ));
+        assert!(
+            !probe_called,
+            "oversized stranger messages are rejected before parsing or consuming a probe"
+        );
     }
 
     #[test]

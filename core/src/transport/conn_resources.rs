@@ -317,7 +317,7 @@ impl ResourceModel {
         let b_mem = snapshot.mem_available.map(|avail| {
             let per = self.per_connection_bytes();
             let pool = occupancy.total as f64 * per + avail as f64;
-            to_usize((pool * MEMORY_SHARE / per) as u64).max(occupancy.active)
+            to_usize((pool * MEMORY_SHARE / per) as u64).max(occupancy.protected)
         });
 
         let mut derived = match (b_fd, b_mem) {

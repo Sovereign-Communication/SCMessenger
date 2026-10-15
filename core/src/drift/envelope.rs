@@ -33,6 +33,10 @@ pub const COMPRESSION_THRESHOLD: usize = 256;
 /// When set, the ciphertext field contains LZ4-compressed data.
 pub const COMPRESSION_FLAG: u8 = 0x80;
 
+/// Default envelope lifetime in seconds (7 days). The single source for the
+/// creation TTL and for the freshness window the transport trust gate applies.
+pub const DEFAULT_TTL_SECS: u32 = 604_800;
+
 /// Drift Protocol Envelope — compact binary format for mesh relay
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftEnvelope {
@@ -352,15 +356,29 @@ impl DriftEnvelope {
             let pq_flag = data[offset];
             offset += 1;
             if pq_flag == 0x01 {
+                // A truncated extension is untrusted input; reject it before
+                // indexing the suite byte rather than panicking in the parser.
+                if offset >= data.len() {
+                    return Err(DriftError::BufferTooShort {
+                        need: offset + 1,
+                        got: data.len(),
+                    });
+                }
                 let suite = data[offset];
                 offset += 1;
 
                 // Helper function to read a blob (length + data)
                 let read_blob =
                     |data: &[u8], offset: &mut usize| -> Result<Option<Vec<u8>>, DriftError> {
-                        if *offset + 4 > data.len() {
+                        let Some(length_end) = offset.checked_add(4) else {
                             return Err(DriftError::BufferTooShort {
-                                need: *offset + 4,
+                                need: usize::MAX,
+                                got: data.len(),
+                            });
+                        };
+                        if length_end > data.len() {
+                            return Err(DriftError::BufferTooShort {
+                                need: length_end,
                                 got: data.len(),
                             });
                         }
@@ -371,20 +389,26 @@ impl DriftEnvelope {
                             data[*offset + 2],
                             data[*offset + 3],
                         ]) as usize;
-                        *offset += 4;
+                        *offset = length_end;
 
                         if len == 0 {
                             Ok(None)
                         } else {
-                            if *offset + len > data.len() {
+                            let Some(blob_end) = offset.checked_add(len) else {
                                 return Err(DriftError::BufferTooShort {
-                                    need: *offset + len,
+                                    need: usize::MAX,
+                                    got: data.len(),
+                                });
+                            };
+                            if blob_end > data.len() {
+                                return Err(DriftError::BufferTooShort {
+                                    need: blob_end,
                                     got: data.len(),
                                 });
                             }
 
-                            let blob = data[*offset..*offset + len].to_vec();
-                            *offset += len;
+                            let blob = data[*offset..blob_end].to_vec();
+                            *offset = blob_end;
                             Ok(Some(blob))
                         }
                     };
@@ -499,8 +523,8 @@ impl DriftEnvelope {
             .map_err(|e| DriftError::IoError(format!("Time error: {}", e)))?
             .as_secs() as u32;
 
-        // TTL: 7 days by default (604800 seconds)
-        let ttl_expiry = created_at + 604800;
+        // TTL: 7 days by default
+        let ttl_expiry = created_at + DEFAULT_TTL_SECS;
 
         // Convert Vec<u8> fields to fixed-size arrays
         let sender_public_key: [u8; 32] = legacy
@@ -578,8 +602,8 @@ impl DriftEnvelope {
             .map_err(|e| DriftError::IoError(format!("Time error: {}", e)))?
             .as_secs() as u32;
 
-        // TTL: 7 days by default (604800 seconds)
-        let ttl_expiry = created_at + 604800;
+        // TTL: 7 days by default
+        let ttl_expiry = created_at + DEFAULT_TTL_SECS;
 
         // Convert Vec<u8> fields to fixed-size arrays
         let sender_public_key: [u8; 32] = v2

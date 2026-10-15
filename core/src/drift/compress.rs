@@ -13,6 +13,15 @@ pub fn compress(data: &[u8]) -> Vec<u8> {
 ///
 /// Returns error if decompression fails.
 pub fn decompress(data: &[u8]) -> Result<Vec<u8>, DriftError> {
+    if data.len() >= 4 {
+        let declared_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        if declared_size > crate::message::codec::MAX_MESSAGE_SIZE {
+            return Err(DriftError::DecompressionFailed(
+                "Decompressed ciphertext exceeds the maximum message size".to_string(),
+            ));
+        }
+    }
+
     lz4_flex::decompress_size_prepended(data)
         .map_err(|e| DriftError::DecompressionFailed(e.to_string()))
 }

@@ -107,6 +107,12 @@ pub const SNAPSHOT_MAX_AGE_SAMPLES: u32 = 3;
 /// at most one line per category per quantum.
 pub const LOG_INTERVAL: Duration = EVAL_QUANTUM;
 
+/// Most non-known pending inbound connections admitted at zero headroom. Each
+/// distinct /24 gets one slot during fd exhaustion, but the total never
+/// exceeds this, so a source spread across many networks cannot open an
+/// unbounded number of sockets.
+pub const ZERO_HEADROOM_PENDING_CEILING: usize = 4;
+
 // ---------------------------------------------------------------------------
 // OS exhaustion detection
 // ---------------------------------------------------------------------------
@@ -354,6 +360,8 @@ pub struct AdmissionBehaviour {
     mem_at: Instant,
     rss_at: Instant,
     shed_log: RateGate,
+    /// Rate-limits the `over-bound-soft` marker (eviction could not reach the bound).
+    soft_bound_log: RateGate,
     /// Closes to hand to the swarm on the next poll.
     to_close: VecDeque<(PeerId, ConnectionId)>,
     /// Connections that closed because we evicted them, until the swarm loop
@@ -406,6 +414,7 @@ impl AdmissionBehaviour {
             mem_at: now,
             rss_at: now,
             shed_log: RateGate::new(),
+            soft_bound_log: RateGate::new(),
             to_close: VecDeque::new(),
             evicted_closed: HashMap::new(),
             resources: ResourceModel::new(),
@@ -985,7 +994,14 @@ impl AdmissionBehaviour {
             return (open >= 1).then_some("known-pool");
         }
         let general = self.pending_inbound.saturating_sub(self.pending_known);
-        if general >= cap {
+        // Zero headroom: a source on a /24 with no pending connection still gets
+        // one slot, so a roaming contact on a new network is not refused during
+        // fd exhaustion. A second source from an already-pending /24 is shed, and
+        // the slots are capped in total at ZERO_HEADROOM_PENDING_CEILING.
+        let new_prefix =
+            src.is_some_and(|ip| !self.pending_by_prefix.contains_key(&source_prefix(ip)));
+        let zero_headroom_slot = cap == 0 && new_prefix && general < ZERO_HEADROOM_PENDING_CEILING;
+        if general >= cap && !zero_headroom_slot {
             return Some("cap");
         }
         let ip = src?;
@@ -1005,15 +1021,37 @@ impl AdmissionBehaviour {
     /// connection that triggered the check) is never chosen.
     fn enforce_total(&mut self, now: Instant, keep: Option<ConnectionId>) {
         let occupancy = self.occupancy();
-        self.derived = self
-            .resources
-            .derive(&self.snapshot, occupancy, (self.scaler)());
+        // The floor counts protected paths (authenticated or carrying traffic),
+        // which the bound can never evict, so the derived bound cannot sit
+        // below what the ledger must keep.
+        self.derived = self.resources.derive(
+            &self.snapshot,
+            self.occupancy_for_pressure(),
+            (self.scaler)(),
+        );
         let Some(derived) = self.derived else {
             return;
         };
-        if occupancy.total > derived.limits.total || occupancy.fd > derived.limits.fd {
-            let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
-            self.queue(evictions, now);
+        if occupancy.total <= derived.limits.total && occupancy.fd <= derived.limits.fd {
+            return;
+        }
+        let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
+        self.queue(evictions, now);
+        // A peer's last path is pinned while authenticated, trafficked or in
+        // grace, so the bound can stay exceeded. Report it as a soft bound
+        // rather than evicting those peers.
+        let after = self.occupancy();
+        if after.total > derived.limits.total || after.fd > derived.limits.fd {
+            if let Some(suppressed) = self.soft_bound_log.permit(now, LOG_INTERVAL) {
+                tracing::warn!(
+                    "[CONN] over-bound-soft total={} bound={} fd={} fd_bound={} suppressed={}",
+                    after.total,
+                    derived.limits.total,
+                    after.fd,
+                    derived.limits.fd,
+                    suppressed
+                );
+            }
         }
     }
 
@@ -1505,12 +1543,22 @@ mod tests {
     fn eviction_logging_is_rate_limited_but_closes_are_not() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
-        // 40 single-path peers against a bound of 4: 36 evictions inside one
-        // quantum, every one of them queued, at most one logged per reason.
+        // 40 single-path peers arrive inside one quantum. Each is inside its
+        // own grace window, so none is a victim yet: the total bound is soft
+        // until the window has passed.
         for n in 0..40usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
-        assert_eq!(drain(&mut b).len(), 36);
+        assert_eq!(
+            b.ledger.occupancy().0,
+            40,
+            "protected paths are never shed early"
+        );
+        assert!(drain(&mut b).is_empty());
+        // One arrival after every grace window has closed sheds the excess
+        // (41 paths against a bound of 4) in one pass, logged once per reason.
+        b.path_established(PeerId::random(), cid(40), &wan(), true, at(base, 60_000));
+        assert_eq!(drain(&mut b).len(), 37);
         let gate = b.evict_logs.get("over-total").expect("gate exists");
         assert!(gate.suppressed >= 30, "suppressed: {}", gate.suppressed);
     }
@@ -1523,7 +1571,15 @@ mod tests {
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         let peers: Vec<PeerId> = (0..6).map(|_| PeerId::random()).collect();
         for (n, peer) in peers.iter().enumerate() {
-            b.path_established(*peer, cid(n), &wan(), true, at(base, n as u64 * 10));
+            // The first four settle inside one quantum and stay protected by
+            // their grace windows; the last two arrive after those windows
+            // have closed, so the bound can shed the excess.
+            let when = if n < 4 {
+                at(base, n as u64 * 10)
+            } else {
+                at(base, 60_000 + n as u64 * 10)
+            };
+            b.path_established(*peer, cid(n), &wan(), true, when);
         }
         assert_eq!(b.ledger.occupancy().0, 4, "bound = half the descriptors");
         let closes = drain(&mut b);
@@ -1550,7 +1606,7 @@ mod tests {
                 cid(n),
                 &wan(),
                 false,
-                at(base, 10_000 + n as u64),
+                at(base, 10_000 + n as u64 * 2_000),
             );
         }
         let closes = drain(&mut b);
@@ -1574,11 +1630,11 @@ mod tests {
         // event. No need to wait for the periodic sample.
         b.note_os_exhaustion(PressureKind::Fd);
         b.note_os_exhaustion(PressureKind::Fd);
-        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
         assert_eq!(drain(&mut b).len(), 1, "room was evicted at once");
         assert_eq!(b.ledger.occupancy().0, 5);
         // The scheduled sample lifts the cap again.
-        b.tick_with(at(base, 10_000), Some(fd_limit_1000()), true);
+        b.tick_with(at(base, 120_000), Some(fd_limit_1000()), true);
         assert_eq!(b.total_budget().expect("derived").limits.total, 500);
     }
 
@@ -1599,7 +1655,7 @@ mod tests {
             },
         ));
         assert_eq!(b.pressure_events, 1);
-        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
         assert_eq!(b.ledger.occupancy().0, 4);
     }
 
@@ -1942,7 +1998,9 @@ mod tests {
         }
         flood(&mut b, 500, 4, at(base, 10));
         b.note_os_exhaustion(PressureKind::Fd);
-        b.tick_with(at(base, 100), Some(fd_limit_1000()), false);
+        // Periodic: the sampling and marker timers start at construction, so the
+        // first tick must advance them or every later poll reads as overdue.
+        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), true);
         let after_first = b.ledger.occupancy().0;
         let cap = b.pending_cap;
         assert!(after_first < 41, "the first episode shed some paths");
@@ -1950,7 +2008,7 @@ mod tests {
         for i in 1..=50u64 {
             b.note_os_exhaustion(PressureKind::Fd);
             assert!(
-                !b.tick_due(at(base, 100 + i)),
+                !b.tick_due(at(base, 60_000 + i)),
                 "no tick work inside the quantum"
             );
         }
@@ -1958,7 +2016,7 @@ mod tests {
         assert_eq!(b.pending_cap, cap, "the pending cap did not compound");
         assert_eq!(b.pressure_events, 50, "events are carried, not dropped");
         // The next quantum runs ONE more episode for all of them.
-        let next = at(base, 100) + EVAL_QUANTUM;
+        let next = at(base, 60_000) + EVAL_QUANTUM;
         assert!(b.tick_due(next));
         b.tick_with(next, Some(fd_limit_1000()), false);
         assert_eq!(b.pressure_events, 0);
@@ -2196,9 +2254,12 @@ mod tests {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         for n in 0..3_000usize {
-            b.path_established(PeerId::random(), cid(n), &wan(), false, at(base, n as u64));
+            // One arrival every two seconds: each grace window closes before
+            // the next arrival, so the bound is enforced rather than the window.
+            let t = at(base, n as u64 * 2_000);
+            b.path_established(PeerId::random(), cid(n), &wan(), false, t);
             if let Some((peer, id)) = b.next_close_request() {
-                b.path_closed(&peer, &id, 0, at(base, n as u64));
+                b.path_closed(&peer, &id, 0, t);
             }
         }
         assert_eq!(b.ledger.occupancy().0, 4);
@@ -2265,5 +2326,51 @@ mod tests {
         let mut b = AdmissionBehaviour::new();
         assert!(matches!(b.poll(&mut cx), Poll::Pending));
         assert!(b.timer.is_none(), "nothing tracked, nothing to wake for");
+    }
+
+    #[test]
+    fn zero_headroom_admits_one_pending_per_new_slash24() {
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        // Zero headroom, nothing pending: a source on a new /24 gets its slot.
+        let first = src_ip(1, 1);
+        assert_eq!(b.pending_refusal(0, Some(first)), None);
+        b.track_pending(cid(1), now, true, Some(first));
+        // A second source from the same, already-pending /24 is shed.
+        assert_eq!(b.pending_refusal(0, Some(src_ip(2, 1))), Some("cap"));
+        // A different /24 still gets its own slot.
+        assert_eq!(b.pending_refusal(0, Some(src_ip(3, 2))), None);
+        // Without a source address, zero headroom admits nothing.
+        assert_eq!(b.pending_refusal(0, None), Some("cap"));
+    }
+
+    #[test]
+    fn positive_cap_still_sheds_a_new_slash24_once_full() {
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        b.track_pending(cid(1), now, true, Some(src_ip(1, 1)));
+        // The general cap of 1 is full: the zero-headroom slot does not apply.
+        assert_eq!(b.pending_refusal(1, Some(src_ip(1, 2))), Some("cap"));
+    }
+
+    #[test]
+    fn zero_headroom_total_is_capped_across_many_slash24s() {
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        // Each distinct /24 gets its one slot until the global ceiling is reached.
+        for net in 1..=ZERO_HEADROOM_PENDING_CEILING as u8 {
+            let src = src_ip(1, net);
+            assert_eq!(
+                b.pending_refusal(0, Some(src)),
+                None,
+                "/24 {net} within ceiling"
+            );
+            b.track_pending(cid(usize::from(net)), now, true, Some(src));
+        }
+        assert_eq!(b.pending_inbound, ZERO_HEADROOM_PENDING_CEILING);
+        // A new /24 past the ceiling is shed, and so is another source on a pending /24.
+        let beyond = ZERO_HEADROOM_PENDING_CEILING as u8 + 1;
+        assert_eq!(b.pending_refusal(0, Some(src_ip(1, beyond))), Some("cap"));
+        assert_eq!(b.pending_refusal(0, Some(src_ip(2, 1))), Some("cap"));
     }
 }
