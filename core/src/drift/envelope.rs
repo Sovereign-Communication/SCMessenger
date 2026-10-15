@@ -356,15 +356,29 @@ impl DriftEnvelope {
             let pq_flag = data[offset];
             offset += 1;
             if pq_flag == 0x01 {
+                // A truncated extension is untrusted input; reject it before
+                // indexing the suite byte rather than panicking in the parser.
+                if offset >= data.len() {
+                    return Err(DriftError::BufferTooShort {
+                        need: offset + 1,
+                        got: data.len(),
+                    });
+                }
                 let suite = data[offset];
                 offset += 1;
 
                 // Helper function to read a blob (length + data)
                 let read_blob =
                     |data: &[u8], offset: &mut usize| -> Result<Option<Vec<u8>>, DriftError> {
-                        if *offset + 4 > data.len() {
+                        let Some(length_end) = offset.checked_add(4) else {
                             return Err(DriftError::BufferTooShort {
-                                need: *offset + 4,
+                                need: usize::MAX,
+                                got: data.len(),
+                            });
+                        };
+                        if length_end > data.len() {
+                            return Err(DriftError::BufferTooShort {
+                                need: length_end,
                                 got: data.len(),
                             });
                         }
@@ -375,20 +389,26 @@ impl DriftEnvelope {
                             data[*offset + 2],
                             data[*offset + 3],
                         ]) as usize;
-                        *offset += 4;
+                        *offset = length_end;
 
                         if len == 0 {
                             Ok(None)
                         } else {
-                            if *offset + len > data.len() {
+                            let Some(blob_end) = offset.checked_add(len) else {
                                 return Err(DriftError::BufferTooShort {
-                                    need: *offset + len,
+                                    need: usize::MAX,
+                                    got: data.len(),
+                                });
+                            };
+                            if blob_end > data.len() {
+                                return Err(DriftError::BufferTooShort {
+                                    need: blob_end,
                                     got: data.len(),
                                 });
                             }
 
-                            let blob = data[*offset..*offset + len].to_vec();
-                            *offset += len;
+                            let blob = data[*offset..blob_end].to_vec();
+                            *offset = blob_end;
                             Ok(Some(blob))
                         }
                     };
