@@ -107,6 +107,12 @@ pub const SNAPSHOT_MAX_AGE_SAMPLES: u32 = 3;
 /// at most one line per category per quantum.
 pub const LOG_INTERVAL: Duration = EVAL_QUANTUM;
 
+/// Most non-known pending inbound connections admitted at zero headroom. Each
+/// distinct /24 gets one slot during fd exhaustion, but the total never
+/// exceeds this, so a source spread across many networks cannot open an
+/// unbounded number of sockets.
+pub const ZERO_HEADROOM_PENDING_CEILING: usize = 4;
+
 // ---------------------------------------------------------------------------
 // OS exhaustion detection
 // ---------------------------------------------------------------------------
@@ -990,10 +996,12 @@ impl AdmissionBehaviour {
         let general = self.pending_inbound.saturating_sub(self.pending_known);
         // Zero headroom: a source on a /24 with no pending connection still gets
         // one slot, so a roaming contact on a new network is not refused during
-        // fd exhaustion. A second source from an already-pending /24 is shed.
+        // fd exhaustion. A second source from an already-pending /24 is shed, and
+        // the slots are capped in total at ZERO_HEADROOM_PENDING_CEILING.
         let new_prefix =
             src.is_some_and(|ip| !self.pending_by_prefix.contains_key(&source_prefix(ip)));
-        if general >= cap && !(cap == 0 && new_prefix) {
+        let zero_headroom_slot = cap == 0 && new_prefix && general < ZERO_HEADROOM_PENDING_CEILING;
+        if general >= cap && !zero_headroom_slot {
             return Some("cap");
         }
         let ip = src?;
@@ -2343,5 +2351,26 @@ mod tests {
         b.track_pending(cid(1), now, true, Some(src_ip(1, 1)));
         // The general cap of 1 is full: the zero-headroom slot does not apply.
         assert_eq!(b.pending_refusal(1, Some(src_ip(1, 2))), Some("cap"));
+    }
+
+    #[test]
+    fn zero_headroom_total_is_capped_across_many_slash24s() {
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        // Each distinct /24 gets its one slot until the global ceiling is reached.
+        for net in 1..=ZERO_HEADROOM_PENDING_CEILING as u8 {
+            let src = src_ip(1, net);
+            assert_eq!(
+                b.pending_refusal(0, Some(src)),
+                None,
+                "/24 {net} within ceiling"
+            );
+            b.track_pending(cid(usize::from(net)), now, true, Some(src));
+        }
+        assert_eq!(b.pending_inbound, ZERO_HEADROOM_PENDING_CEILING);
+        // A new /24 past the ceiling is shed, and so is another source on a pending /24.
+        let beyond = ZERO_HEADROOM_PENDING_CEILING as u8 + 1;
+        assert_eq!(b.pending_refusal(0, Some(src_ip(1, beyond))), Some("cap"));
+        assert_eq!(b.pending_refusal(0, Some(src_ip(2, 1))), Some("cap"));
     }
 }
