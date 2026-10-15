@@ -33,8 +33,9 @@ jobs:
   # superset of what ran here) is the canonical job "Lint" in ci.yml, so it is
   # not compiled a second time.
   #
-  # Runner selection contract, shared verbatim by every OCI-eligible job in
-  # ci.yml, lint.yml, hygiene.yml and security-regression-tests.yml:
+  # Runner selection contract, shared by required OCI jobs in ci.yml, lint.yml
+  # and hygiene.yml. Optional Docs, FFI and security jobs stay hosted so they do
+  # not queue ahead of branch-protection checks on the two-runner pool:
   #   trusted event (push, or same-repo PR) AND (CI_RUNNER == 'oci'
   #   OR (CI_RUNNER == '' AND USE_OCI_RUNNER != 'false'))
   #     -> ["self-hosted","oci"]
