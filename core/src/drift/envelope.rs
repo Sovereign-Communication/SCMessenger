@@ -33,6 +33,10 @@ pub const COMPRESSION_THRESHOLD: usize = 256;
 /// When set, the ciphertext field contains LZ4-compressed data.
 pub const COMPRESSION_FLAG: u8 = 0x80;
 
+/// Default envelope lifetime in seconds (7 days). The single source for the
+/// creation TTL and for the freshness window the transport trust gate applies.
+pub const DEFAULT_TTL_SECS: u32 = 604_800;
+
 /// Drift Protocol Envelope — compact binary format for mesh relay
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftEnvelope {
@@ -499,8 +503,8 @@ impl DriftEnvelope {
             .map_err(|e| DriftError::IoError(format!("Time error: {}", e)))?
             .as_secs() as u32;
 
-        // TTL: 7 days by default (604800 seconds)
-        let ttl_expiry = created_at + 604800;
+        // TTL: 7 days by default
+        let ttl_expiry = created_at + DEFAULT_TTL_SECS;
 
         // Convert Vec<u8> fields to fixed-size arrays
         let sender_public_key: [u8; 32] = legacy
@@ -578,8 +582,8 @@ impl DriftEnvelope {
             .map_err(|e| DriftError::IoError(format!("Time error: {}", e)))?
             .as_secs() as u32;
 
-        // TTL: 7 days by default (604800 seconds)
-        let ttl_expiry = created_at + 604800;
+        // TTL: 7 days by default
+        let ttl_expiry = created_at + DEFAULT_TTL_SECS;
 
         // Convert Vec<u8> fields to fixed-size arrays
         let sender_public_key: [u8; 32] = v2
