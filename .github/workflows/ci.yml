@@ -148,6 +148,7 @@ jobs:
         if: needs.changes.outputs.rust_relevant == 'true'
         with:
           key: lint-clippy
+          cache-bin: ${{ runner.environment != 'self-hosted' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
         if: needs.changes.outputs.rust_relevant == 'true'
@@ -232,6 +233,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust_relevant == 'true'
         with:
+          cache-bin: ${{ runner.environment != 'self-hosted' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install libdbus-1-dev (Ubuntu)
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true'
