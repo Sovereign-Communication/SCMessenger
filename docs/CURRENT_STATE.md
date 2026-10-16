@@ -7,10 +7,18 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-10-07 (bootstrap section rewritten to the #469 decided model; stale GCP bootstrap VM reference marked superseded; no runtime or release status changed)
+Last updated: 2026-10-16 (rustls dependency security patch candidate; CI verification pending)
 Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 host-gate result is historical and must be rerun.
 
 ---
+
+### Dependency security patch candidate (2026-10-16)
+
+`Cargo.lock` selects rustls 0.23.46 as the patch candidate for
+RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, and
+RUSTSEC-2026-0349. Full `cargo metadata --locked --format-version 1
+--all-features` completed without changing the lockfile. CI `cargo deny check`
+and workspace build/test gates are pending.
 
 ## 1. Executive Summary & Release Roadmap
 
