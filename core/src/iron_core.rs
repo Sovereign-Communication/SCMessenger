@@ -1268,22 +1268,18 @@ impl IronCore {
         });
 
         if handoff_to_drift {
-            // Bind the message to its recipient BEFORE custody changes hands. A
-            // peer that only ever receives the envelope could otherwise return an
-            // application receipt for a message we no longer hold retry state
-            // for; the binding is what makes a receipt actionable.
-            self.outbox
-                .write()
-                .authorize_recipient(&message_id, recipient_id)
-                .map_err(|error| {
-                    tracing::error!(
-                        event = "receipt_authorization_store_failed",
-                        message_id = %message_id,
-                        error = %error,
-                        "Aborting custody handoff because receipt authorization could not be retained"
-                    );
-                    IronCoreError::StorageError
-                })?;
+            // Defect A (cell test 2026-10-10): StoreAndCarry used to bypass the
+            // outbox entirely, so nothing ever retried the send and a peer we
+            // were already connected to never received it. Drift custody is an
+            // ADDITIONAL path now; the outbox keeps the durable pending entry so
+            // the reconnect flush and the periodic sweep (dynamic, receipt-gated
+            // backoff, no attempt cap) keep retrying. Enqueue also binds the
+            // message to its recipient, which makes a later receipt actionable,
+            // so it replaces the bare authorize_recipient call.
+            // Lock order: Drift and the outbox are never held together. Custody is
+            // inserted FIRST, in its own statement, then the outbox entry, so a
+            // receipt (which clears the outbox, then Drift, sequentially) can only
+            // act once both exist and cannot leave Drift custody orphaned.
             let stored_env = crate::drift::store::StoredEnvelope {
                 envelope_data: envelope_data.clone(),
                 message_id: drift_env.message_id,
@@ -1298,7 +1294,35 @@ impl IronCore {
                     .as_secs(),
             };
             self.drift_store.write().insert(stored_env);
-            tracing::info!("StoreAndCarry route resolved for {}. Handoff to Drift custody and bypassed active outbox.", message_id);
+            // The guard is a temporary of this `let` statement and is dropped at
+            // its end, before the error path below touches Drift.
+            let enqueue_result = self.outbox.write().enqueue(QueuedMessage {
+                version: 1,
+                message_id: message_id.clone(),
+                recipient_id: recipient_id.to_string(),
+                envelope_data: envelope_data.clone(),
+                queued_at: web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                attempts: 0,
+                next_retry_at: None,
+                in_custody: false,
+                custody_established_at: 0,
+                state: crate::store::outbox::MessageState::Enqueued,
+            });
+            if let Err(error) = enqueue_result {
+                tracing::error!(
+                    event = "outbox_enqueue_failed",
+                    message_id = %message_id,
+                    error = %error,
+                    "Retry state could not be retained (storage failure, never a count limit)"
+                );
+                // Roll back custody so a failed enqueue leaves no half state.
+                self.drift_store.write().remove(&drift_env.message_id);
+                return Err(IronCoreError::StorageError);
+            }
+            tracing::info!("StoreAndCarry route resolved for {}. Held in Drift custody and kept in the outbox for event-driven retry.", message_id);
         } else {
             let connected = self
                 .transport_manager
@@ -2652,6 +2676,9 @@ impl IronCore {
         self.storage_manager
             .read()
             .update_disk_stats(total_bytes, free_bytes);
+        // The outbox bounds itself by the free space actually reported here,
+        // not by a fixed message count. Separate statement: no nested locks.
+        self.outbox.write().update_free_disk_bytes(free_bytes);
     }
 
     pub fn get_disk_stats(&self) -> crate::store::DiskStats {
