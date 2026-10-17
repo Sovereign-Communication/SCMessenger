@@ -133,8 +133,6 @@ const MAX_FFI_LOG_LINE_LEN: usize = 8 * 1024;
 const MAX_FFI_PRIVACY_JSON_LEN: usize = 64 * 1024;
 /// Largest invite token accepted before bincode decoding.
 const MAX_FFI_INVITE_TOKEN_LEN: usize = 16 * 1024;
-/// Most routing hints accepted in one `routing_update_peer_hints` call.
-const MAX_FFI_ROUTING_HINTS: usize = 64;
 
 /// Platform-supplied handles are opaque, so the only decidable checks are:
 /// non-blank, bounded, and free of control characters. Fails closed.
@@ -1005,9 +1003,7 @@ impl IronCore {
             // Initialize routing engine with identity-derived peer id and hint.
             // If the swarm has already seeded the engine (via start_swarm_with_config),
             // keep it — the shared engine is already in use for message dispatch.
-            let hint = blake3::hash(&pk_bytes).as_bytes()[0..8]
-                .try_into()
-                .unwrap_or([0u8; 8]);
+            let hint = crate::identity::keys::routing_hint_from_public_key(&pk_bytes);
             let mut routing = self.routing_engine.write();
             if routing.is_none() {
                 *routing = Some(OptimizedRoutingEngine::new(pk_bytes, hint));
@@ -1250,9 +1246,10 @@ impl IronCore {
         }
 
         // Check routing decision
-        let hint = blake3::hash(recipient_id.as_bytes()).as_bytes()[0..8]
-            .try_into()
-            .unwrap_or([0u8; 8]);
+        // Canonical routing hint: blake3 of the RAW recipient key bytes, the same
+        // derivation the swarm registers peers under. Hashing the hex string
+        // here previously made every recipient hint miss the routing table.
+        let hint = crate::identity::keys::routing_hint_from_public_key(&recipient_pk);
         let msg_id_bytes: [u8; 16] = *uuid::Uuid::parse_str(&message_id)
             .unwrap_or_else(|_| uuid::Uuid::nil())
             .as_bytes();
@@ -3294,27 +3291,45 @@ impl IronCore {
     /// length-bounded and parsed to 32 bytes before it touches the engine, and
     /// adaptive-TTL state is keyed by the canonical hex form.
     pub fn routing_update_peer_hints(&self, peer_id_hex: String, hints: Vec<Vec<u8>>) {
-        if hints.len() > MAX_FFI_ROUTING_HINTS {
-            tracing::warn!("[WARN] routing_update_peer_hints ignored: oversized hint list");
-            return;
-        }
         let Some(peer_id) = validate_routing_peer_id("routing_update_peer_hints", &peer_id_hex)
         else {
             return;
         };
+        // Dedupe and bound the announcement BEFORE taking the routing write
+        // lock: malformed entries and duplicates are dropped, and parsing
+        // stops once the largest budget any peer can earn is reached, so lock
+        // hold time is independent of how many hints the caller sent. The
+        // exact per-peer (reliability-derived) and global budgets are applied
+        // by `LocalCell::update_peer_hints`.
+        let max_hints = crate::routing::LocalCell::max_peer_hint_budget();
+        let mut seen_hints: std::collections::HashSet<[u8; 8]> = std::collections::HashSet::new();
+        let mut parsed_hints: Vec<[u8; 8]> = hints
+            .into_iter()
+            .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
+            .filter(|hint| seen_hints.insert(*hint))
+            .take(max_hints)
+            .collect();
+        // The peer's own direct hint is always kept: it is exempt from the
+        // budgets, and an announcement must not make a connected peer
+        // unroutable by omitting the hint derived from its key.
+        let direct_hint = crate::identity::keys::routing_hint_from_public_key(&peer_id);
+        if !parsed_hints.contains(&direct_hint) {
+            parsed_hints.push(direct_hint);
+        }
         if let Some(engine) = self.routing_engine.write().as_mut() {
             // Record message activity for the peer, which feeds the adaptive TTL.
             engine.record_message_activity(&hex::encode(peer_id));
-            let parsed_hints: Vec<[u8; 8]> = hints
-                .into_iter()
-                .filter_map(|hint| <[u8; 8]>::try_from(hint.as_slice()).ok())
-                .collect();
             // LocalCell intentionally updates only peers already known to
             // the local topology; an announcement cannot create a peer.
-            engine
+            let applied = engine
                 .base_engine_mut()
                 .local_cell_mut()
                 .update_peer_hints(&peer_id, parsed_hints);
+            if !applied {
+                tracing::debug!(
+                    "routing_update_peer_hints: announce not applied now (rate-limited announces are coalesced and applied later; unknown peers ignored)"
+                );
+            }
         }
     }
 
@@ -3613,9 +3628,26 @@ impl IronCore {
         let mut guard = self.routing_engine.write();
         match guard.as_mut() {
             Some(engine) => {
-                let hint = blake3::hash(target_peer_id.as_bytes()).as_bytes()[0..8]
-                    .try_into()
-                    .unwrap_or([0u8; 8]);
+                // Accept either a public-key hex identity or a libp2p PeerId.
+                let target_key: Option<[u8; 32]> = hex::decode(target_peer_id.trim())
+                    .ok()
+                    .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+                    .or_else(|| {
+                        self.extract_public_key_from_peer_id(target_peer_id.clone())
+                            .ok()
+                            .and_then(|hex_pk| hex::decode(hex_pk).ok())
+                            .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+                    });
+                let Some(target_key) = target_key else {
+                    // Unresolvable target: there is no real route to report, so
+                    // return no path rather than inventing one.
+                    tracing::debug!(
+                        event = "best_paths_unresolved_target",
+                        "swarm_get_best_paths: target is not a 32-byte key or PeerId; no path"
+                    );
+                    return Vec::new();
+                };
+                let hint = crate::identity::keys::routing_hint_from_public_key(&target_key);
                 let msg_id: [u8; 16] = *uuid::Uuid::new_v4().as_bytes();
                 let now = web_time::SystemTime::now()
                     .duration_since(web_time::UNIX_EPOCH)
@@ -3643,7 +3675,7 @@ impl IronCore {
                 paths.truncate(count as usize);
                 paths
             }
-            None => vec![vec![target_peer_id]],
+            None => Vec::new(),
         }
     }
 
@@ -5103,7 +5135,7 @@ impl IronCore {
                     let peers = engine
                         .base_engine()
                         .local_cell()
-                        .peers_for_hint(&arr[0..8].try_into().unwrap_or([0u8; 8]));
+                        .peers_for_hint(&crate::identity::keys::routing_hint_from_public_key(&arr));
                     return peers
                         .iter()
                         .map(|p| format!("{:?}", p.transports))
@@ -7295,7 +7327,188 @@ mod tests {
             .local_cell()
             .get_peer(&peer)
             .unwrap();
-        assert_eq!(stored.reachable_hints, vec![hint]);
+        // The announced hint is stored, and the peer's own key-derived hint is
+        // never dropped by an announcement.
+        assert_eq!(
+            stored.reachable_hints,
+            vec![
+                hint,
+                crate::identity::keys::routing_hint_from_public_key(&peer)
+            ]
+        );
+    }
+
+    fn hint_test_core_with_local_engine() -> IronCore {
+        let core = IronCore::new();
+        *core.routing_engine.write() = Some(OptimizedRoutingEngine::new([0u8; 32], [0u8; 8]));
+        core
+    }
+
+    /// A real Ed25519 public key, so `is_valid_public_key` style checks and the
+    /// send-path derivation see a legitimate recipient.
+    fn hint_test_pubkey() -> [u8; 32] {
+        ed25519_dalek::SigningKey::from_bytes(&[9u8; 32])
+            .verifying_key()
+            .to_bytes()
+    }
+
+    #[test]
+    fn identified_peer_without_contact_gets_direct_route_not_discovery() {
+        let core = hint_test_core_with_local_engine();
+        let peer = hint_test_pubkey();
+        // What the swarm does on identify: the optimized engine's peer_seen,
+        // with no contact record and no announcement.
+        core.routing_engine
+            .write()
+            .as_mut()
+            .unwrap()
+            .peer_seen(peer, crate::routing::TransportType::TCP);
+
+        // The send path derives the hint from the recipient's hex identity.
+        let recipient_hex = hex::encode(peer);
+        let recipient_bytes: [u8; 32] = hex::decode(&recipient_hex).unwrap().try_into().unwrap();
+        let hint = crate::identity::keys::routing_hint_from_public_key(&recipient_bytes);
+        let decision = core
+            .make_routing_decision(hint, [3u8; 16], 128, 1000)
+            .expect("engine installed");
+        match decision.primary {
+            crate::routing::NextHop::Direct { peer_id, .. } => assert_eq!(peer_id, peer),
+            other => panic!("expected Direct for identified peer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn recipient_hint_is_consistent_between_sender_and_routing_table() {
+        let peer = hint_test_pubkey();
+        let canonical = crate::identity::keys::routing_hint_from_public_key(&peer);
+        // Definition: blake3 of the RAW key bytes, never of the hex string.
+        assert_eq!(canonical[..], blake3::hash(&peer).as_bytes()[..8]);
+        assert_ne!(
+            canonical[..],
+            blake3::hash(hex::encode(peer).as_bytes()).as_bytes()[..8],
+            "the hex-string hash is the defective legacy form"
+        );
+
+        // The routing table registers exactly the sender's hint.
+        let core = hint_test_core_with_local_engine();
+        core.routing_peer_seen(hex::encode(peer), "tcp".to_string());
+        let engine = core.routing_engine.read();
+        let stored = engine
+            .as_ref()
+            .unwrap()
+            .base_engine()
+            .local_cell()
+            .get_peer(&peer)
+            .unwrap();
+        assert!(stored.reachable_hints.contains(&canonical));
+
+        // Our own advertised hint uses the same derivation.
+        assert_eq!(
+            crate::drift::envelope::DriftEnvelope::hint_from_public_key(&peer)[..],
+            canonical[..4]
+        );
+    }
+
+    #[test]
+    fn legacy_hex_string_hint_is_not_routable_but_wire_hint_is_unchanged() {
+        // Compatibility: the 4-byte Drift envelope hint on the wire already
+        // used the raw-key digest, so deployed v0.4.x nodes keep matching it.
+        // The hex-string-hash form never reached the wire or a routing table,
+        // so dropping it breaks no deployed consumer.
+        let core = hint_test_core_with_local_engine();
+        let peer = hint_test_pubkey();
+        core.routing_engine
+            .write()
+            .as_mut()
+            .unwrap()
+            .peer_seen(peer, crate::routing::TransportType::TCP);
+        let legacy: [u8; 8] = blake3::hash(hex::encode(peer).as_bytes()).as_bytes()[..8]
+            .try_into()
+            .unwrap();
+        let decision = core
+            .make_routing_decision(legacy, [4u8; 16], 128, 1000)
+            .expect("engine installed");
+        assert!(!matches!(
+            decision.primary,
+            crate::routing::NextHop::Direct { .. }
+        ));
+        let wire = crate::drift::envelope::DriftEnvelope::hint_from_public_key(&peer);
+        assert_eq!(
+            wire[..],
+            blake3::hash(&peer).as_bytes()[..4],
+            "wire hint stays blake3(raw key)[..4]"
+        );
+    }
+
+    #[test]
+    fn best_paths_for_unresolvable_target_is_empty_not_invented() {
+        let core = hint_test_core_with_local_engine();
+        assert!(core
+            .swarm_get_best_paths("not-a-peer-id".to_string(), 3)
+            .is_empty());
+        let no_engine = IronCore::new();
+        *no_engine.routing_engine.write() = None;
+        assert!(no_engine
+            .swarm_get_best_paths(hex::encode(hint_test_pubkey()), 3)
+            .is_empty());
+    }
+
+    #[test]
+    fn announcement_with_duplicates_stores_each_hint_once_plus_direct() {
+        let core = hint_test_core_with_local_engine();
+        let peer = hint_test_pubkey();
+        core.routing_engine
+            .write()
+            .as_mut()
+            .unwrap()
+            .peer_seen(peer, crate::routing::TransportType::TCP);
+        let dup = vec![0xAB; 8];
+        core.routing_update_peer_hints(
+            hex::encode(peer),
+            vec![dup.clone(), dup.clone(), dup, vec![1u8; 3]],
+        );
+        let direct = crate::identity::keys::routing_hint_from_public_key(&peer);
+        let mut guard = core.routing_engine.write();
+        let hints = guard
+            .as_mut()
+            .unwrap()
+            .base_engine_mut()
+            .local_cell_mut()
+            .get_peer(&peer)
+            .map(|p| p.reachable_hints.clone())
+            .unwrap_or_default();
+        assert_eq!(hints.iter().filter(|h| **h == [0xAB; 8]).count(), 1);
+        assert!(hints.contains(&direct));
+        assert_eq!(hints.len(), 2);
+    }
+
+    #[test]
+    fn announcement_never_drops_direct_hint_regardless_of_list_size() {
+        // No static cap may displace the direct hint: even a maximal
+        // announcement leaves the peer routable.
+        let core = hint_test_core_with_local_engine();
+        let peer = hint_test_pubkey();
+        core.routing_engine
+            .write()
+            .as_mut()
+            .unwrap()
+            .peer_seen(peer, crate::routing::TransportType::TCP);
+        let many: Vec<Vec<u8>> = (0..100_000u32)
+            .map(|i| {
+                let mut h = i.to_le_bytes().to_vec();
+                h.extend_from_slice(&[0xEE; 4]);
+                h
+            })
+            .collect();
+        core.routing_update_peer_hints(hex::encode(peer), many);
+        let hint = crate::identity::keys::routing_hint_from_public_key(&peer);
+        let decision = core
+            .make_routing_decision(hint, [5u8; 16], 128, 1000)
+            .expect("engine installed");
+        assert!(matches!(
+            decision.primary,
+            crate::routing::NextHop::Direct { .. }
+        ));
     }
 
     #[test]
@@ -8132,7 +8345,7 @@ mod tests {
         }
         let peer = hex::encode([7u8; 32]);
         core.routing_peer_seen(peer.clone(), long.clone());
-        core.routing_update_peer_hints(peer, vec![vec![0u8; 8]; MAX_FFI_ROUTING_HINTS + 1]);
+        core.routing_update_peer_hints(peer, vec![vec![0u8; 8]; 100_000]);
         let _ = core.routing_summary();
     }
 

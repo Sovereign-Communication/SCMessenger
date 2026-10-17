@@ -109,6 +109,22 @@ pub fn identity_id_from_public_key_hex(public_key_hex: &str) -> Option<String> {
     Some(hex::encode(blake3::hash(&bytes).as_bytes()))
 }
 
+/// Canonical 8-byte ROUTING hint for a raw 32-byte Ed25519 public key:
+/// `blake3(raw public key bytes)[0..8]`.
+///
+/// This is the one derivation shared by the send path, the swarm, the routing
+/// table and the FFI. It must be fed the RAW key bytes, never the 64-character
+/// hex string: hashing the string yields an unrelated digest that no routing
+/// table entry carries. The 4-byte Drift envelope `recipient_hint` is the
+/// first 4 bytes of this same digest (`Envelope::hint_from_public_key`), so
+/// the wire form and the routing form always agree.
+pub fn routing_hint_from_public_key(public_key: &[u8; 32]) -> [u8; 8] {
+    let digest = blake3::hash(public_key);
+    let mut hint = [0u8; 8];
+    hint.copy_from_slice(&digest.as_bytes()[..8]);
+    hint
+}
+
 /// Get the type of a 64-hex identifier for logging/debugging
 pub fn identify_key_type(hex_str: &str) -> &'static str {
     if is_valid_public_key(hex_str) {
