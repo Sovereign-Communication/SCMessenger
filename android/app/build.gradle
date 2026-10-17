@@ -307,7 +307,7 @@ dependencies {
     
     // Permissions
     implementation 'com.google.accompanist:accompanist-permissions:0.32.0'
-    implementation 'androidx.core:core-splashscreen:1.0.1'
+    implementation 'androidx.core:core-splashscreen:1.2.0'
 
     // Testing
     testImplementation 'junit:junit:4.13.2'
