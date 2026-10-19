@@ -28,7 +28,7 @@
       </div>
       <div id="conv-list" style="flex:1;overflow-y:auto"></div>
       <div id="conv-empty" class="empty-state">
-        <div class="empty-icon">💬</div>
+        <div class="empty-icon"></div>
         <div class="empty-title">No conversations yet</div>
         <div class="empty-subtitle">Your encrypted conversations will appear here</div>
       </div>
@@ -40,12 +40,12 @@
       <input type="text" class="search-bar" id="contact-search" placeholder="Search contacts..." />
       <div id="contacts-list" style="flex:1;overflow-y:auto"></div>
       <div id="contacts-empty" class="empty-state">
-        <div class="empty-icon">👤</div>
+        <div class="empty-icon"></div>
         <div class="empty-title">No contacts yet</div>
         <div class="empty-subtitle">Add contacts to start messaging</div>
       </div>
       <button class="fab" id="fab-add-contact" title="Add Contact" onclick="typeof SCM !== 'undefined' && SCM.ui && SCM.ui.openAddContact()">+</button>
-      <button class="fab" id="fab-scan-qr" title="Scan QR Code" style="right:80px" onclick="SCM.actions.scanQRCode()">📷</button>
+      <button class="fab" id="fab-scan-qr" title="Scan QR Code" style="right:80px" onclick="SCM.actions.scanQRCode()">QR</button>
     </div>
 
     <!-- TAB: Mesh (Dashboard) -->
@@ -72,9 +72,9 @@
         <div class="card">
           <div class="card-title">Transports</div>
           <div style="display:flex;justify-content:space-around;text-align:center;padding-top:4px">
-            <div><div style="font-size:24px">🌐</div><div class="stat-label">WebSocket</div></div>
-            <div><div style="font-size:24px;opacity:0.3">📶</div><div class="stat-label" style="opacity:0.3">BLE (N/A)</div></div>
-            <div><div style="font-size:24px;opacity:0.3">📡</div><div class="stat-label" style="opacity:0.3">WiFi (N/A)</div></div>
+            <div><div style="font-size:24px"></div><div class="stat-label">WebSocket</div></div>
+            <div><div style="font-size:24px;opacity:0.3"></div><div class="stat-label" style="opacity:0.3">BLE (N/A)</div></div>
+            <div><div style="font-size:24px;opacity:0.3"></div><div class="stat-label" style="opacity:0.3">WiFi (N/A)</div></div>
           </div>
         </div>
 
@@ -88,9 +88,7 @@
 
         <div class="section-header">Discovered Nodes</div>
         <div id="mesh-peers-list"></div>
-        <div id="mesh-peers-empty" style="padding:0 16px 16px">
-          <span class="list-subtitle">No nodes discovered yet</span>
-        </div>
+        <div id="mesh-peers-empty" style="padding:0 16px 16px"></div>
       </div>
     </div>
 
@@ -122,9 +120,9 @@
             <div class="detail-row"><span class="detail-label">Device ID</span><span class="detail-value mono" id="id-device-id">—</span></div>
             <div class="detail-row"><span class="detail-label">libp2p Peer ID</span><span class="detail-value mono" id="id-libp2p-peer">—</span></div>
             <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-outline" onclick="SCM.actions.copyIdentityExport()">📋 Copy Full Export</button>
-              <button class="btn btn-outline" onclick="SCM.actions.exportIdentity()">🔑 Show Backup</button>
-              <button class="btn btn-outline" onclick="SCM.actions.showPeerQRCode()">📷 Show QR Code</button>
+              <button class="btn btn-outline" onclick="SCM.actions.copyIdentityExport()">Copy Full Export</button>
+              <button class="btn btn-outline" onclick="SCM.actions.exportIdentity()">Show Backup</button>
+              <button class="btn btn-outline" onclick="SCM.actions.showPeerQRCode()">Show QR Code</button>
             </div>
           </div>
           <div id="identity-uninitialized">
@@ -141,7 +139,7 @@
         <div class="card">
           <div class="card-title">Mesh Network</div>
           <div class="warn-card">
-            <div class="warn-title">⚠️ Relay = Messaging (Bidirectional)</div>
+            <div class="warn-title">[WARNING] Relay = Messaging (Bidirectional)</div>
             <div class="warn-body">OFF = no sending OR receiving. ON = full participation.</div>
           </div>
           <div class="switch-row">
@@ -241,9 +239,9 @@
           <div class="detail-row"><span class="detail-label">Listeners</span><span class="detail-value mono" id="diag-listeners" style="font-size:11px;max-width:60%;word-break:break-all">—</span></div>
           <div class="detail-row"><span class="detail-label">External Addrs</span><span class="detail-value mono" id="diag-external" style="font-size:11px;max-width:60%;word-break:break-all">—</span></div>
           <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-outline" onclick="SCM.actions.exportDiagnostics()">📊 Export Diagnostics</button>
-            <button class="btn btn-outline" onclick="SCM.actions.exportLogs()">📋 Export Logs</button>
-            <button class="btn btn-outline" onclick="SCM.actions.runMaintenance()">🔧 Run Maintenance</button>
+            <button class="btn btn-outline" onclick="SCM.actions.exportDiagnostics()">Export Diagnostics</button>
+            <button class="btn btn-outline" onclick="SCM.actions.exportLogs()">Export Logs</button>
+            <button class="btn btn-outline" onclick="SCM.actions.runMaintenance()">Run Maintenance</button>
           </div>
         </div>
 
@@ -264,8 +262,8 @@
           <div class="chat-topbar-title" id="chat-title">Contact</div>
           <div class="list-meta" id="chat-peer-id-short"></div>
         </div>
-        <button class="icon-btn" id="chat-block-btn" onclick="SCM.actions.toggleBlockChatPeer()" title="Block/Unblock">🛡️</button>
-        <button class="icon-btn" onclick="SCM.actions.blockAndDeleteChatPeer()" title="Block & Delete All">⛔</button>
+        <button class="icon-btn" id="chat-block-btn" onclick="SCM.actions.toggleBlockChatPeer()" title="Block/Unblock">Block</button>
+        <button class="icon-btn" onclick="SCM.actions.blockAndDeleteChatPeer()" title="Block & Delete All">Del</button>
       </div>
       <div id="chat-banner" class="hidden" style="margin:8px 16px">
         <div class="card" style="background:var(--md-secondary-container);margin:0;display:flex;justify-content:space-between;align-items:center">
@@ -276,7 +274,7 @@
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-input-area">
         <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..." autocomplete="off" />
-        <button class="send-fab" id="chat-send-btn">➤</button>
+        <button class="send-fab" id="chat-send-btn">Send</button>
       </div>
     </div>
   </div>
@@ -284,16 +282,16 @@
   <!-- ===== BOTTOM NAV ===== -->
   <nav id="bottom-nav">
     <button class="nav-item active" data-tab="conversations" onclick="typeof SCM !== 'undefined' && SCM.ui && SCM.ui.switchTab('conversations')">
-      <div class="nav-icon">💬</div>Chats
+      <div class="nav-icon"></div>Chats
     </button>
     <button class="nav-item" data-tab="contacts" onclick="typeof SCM !== 'undefined' && SCM.ui && SCM.ui.switchTab('contacts')">
-      <div class="nav-icon">👥</div>Contacts
+      <div class="nav-icon"></div>Contacts
     </button>
     <button class="nav-item" data-tab="mesh" onclick="typeof SCM !== 'undefined' && SCM.ui && SCM.ui.switchTab('mesh')">
-      <div class="nav-icon">🌐</div>Mesh
+      <div class="nav-icon"></div>Mesh
     </button>
     <button class="nav-item" data-tab="settings" onclick="typeof SCM !== 'undefined' && SCM.ui && SCM.ui.switchTab('settings')">
-      <div class="nav-icon">⚙️</div>Settings
+      <div class="nav-icon"></div>Settings
     </button>
   </nav>
 </div>
@@ -304,8 +302,8 @@
 <div id="modal-add-contact" class="modal-overlay">
   <div class="modal-dialog">
     <div class="modal-title">Add Contact</div>
-    <button class="btn btn-outline" style="width:100%;margin-bottom:8px" onclick="SCM.actions.pasteIdentityExport()">📋 Paste Identity Export</button>
-    <button class="btn btn-outline" style="width:100%;margin-bottom:8px" onclick="SCM.actions.scanQRCode()">📷 Scan QR Code</button>
+    <button class="btn btn-outline" style="width:100%;margin-bottom:8px" onclick="SCM.actions.pasteIdentityExport()">Paste Identity Export</button>
+    <button class="btn btn-outline" style="width:100%;margin-bottom:8px" onclick="SCM.actions.scanQRCode()">Scan QR Code</button>
     <div class="divider" style="margin:12px 0"></div>
     <div class="field"><label>Peer ID (libp2p)</label><input type="text" id="add-peer-id" class="mono" /></div>
     <div class="field"><label>Nickname (Optional)</label><input type="text" id="add-name" /></div>
@@ -372,7 +370,7 @@
 <!-- First Run / Onboarding -->
 <div id="modal-onboarding" class="modal-overlay">
   <div class="modal-dialog" style="text-align:center">
-    <div style="font-size:48px;margin-bottom:16px">🛡️</div>
+    <div style="font-size:48px;margin-bottom:16px"></div>
     <div class="modal-title" style="text-align:center">SCMessenger</div>
     <p style="font-size:14px;color:var(--md-on-surface-variant);margin-bottom:24px;text-align:left">
       Your browser is running a sovereign mesh node in <b>relay-only mode</b>.

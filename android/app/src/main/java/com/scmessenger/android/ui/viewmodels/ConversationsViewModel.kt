@@ -36,7 +36,11 @@ class ConversationsViewModel @Inject constructor(
     // Grouped conversations (by peer)
     val conversations = messages.map { messageList ->
         messageList
-            .groupBy { it.peerId }
+            .groupBy { record ->
+                // One identity, one thread: fold public-key / identity_id /
+                // libp2p spellings of the same peer into a single group.
+                PeerIdValidator.threadKey(record.peerId) { meshRepository.canonicalContactIdPublic(it) }
+            }
             // MSG-ORDER-002: locally-assigned timestamps only (see ChatViewModel);
             // senderTimestamp is provenance and must never drive ordering.
             .mapValues { (_, msgs) -> msgs.newestFirst() }

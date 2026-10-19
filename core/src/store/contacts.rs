@@ -21,6 +21,11 @@ use std::sync::Arc;
 pub const PLACEHOLDER_KEY_NOTE: &str =
     "public_key unavailable: not self-certifying from peer id; awaiting verified key";
 
+/// Longest peer id / public key string accepted by `ContactManager::add`.
+const MAX_CONTACT_ID_LEN: usize = 256;
+/// Longest nickname / note accepted by `ContactManager::add`.
+const MAX_CONTACT_TEXT_LEN: usize = 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
     pub peer_id: String,
@@ -147,19 +152,33 @@ impl ContactManager {
     /// Idempotent - a no-op once every contact has been rewritten under its
     /// prefixed key.
     fn migrate_unprefixed_contacts(&self) {
-        if self
-            .backend
-            .get(b"metadata_contacts_migrated")
-            .map(|opt| opt.is_some())
-            .unwrap_or(false)
-        {
-            return;
+        match self.backend.get(b"metadata_contacts_migrated") {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(e) => {
+                // Fall through: the migration is idempotent, so re-running
+                // after an unreadable flag is safe.
+                tracing::warn!(
+                    event = "contacts_key_prefix_migration_flag_unreadable",
+                    error = %e,
+                    "could not read migration flag; re-running idempotent migration"
+                );
+            }
         }
 
-        let Ok(entries) = self.backend.scan_prefix(b"") else {
-            return;
+        let entries = match self.backend.scan_prefix(b"") {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!(
+                    event = "contacts_key_prefix_migration_scan_failed",
+                    error = %e,
+                    "could not scan backend; contact key migration deferred"
+                );
+                return;
+            }
         };
         let mut migrated = 0u32;
+        let mut failed = 0u32;
         for (key, value) in entries {
             if key.starts_with(CONTACT_KEY_PREFIX) {
                 continue;
@@ -184,14 +203,37 @@ impl ContactManager {
             if already_exists {
                 // Prefixed key already exists, don't overwrite.
                 // Just remove the legacy bare key to clean up the backend.
-                let _ = self.backend.remove(&key);
+                if self.backend.remove(&key).is_err() {
+                    failed += 1;
+                }
             } else if self.backend.put(&prefixed, &value).is_ok() {
-                let _ = self.backend.remove(&key);
+                if self.backend.remove(&key).is_err() {
+                    failed += 1;
+                }
                 migrated += 1;
+            } else {
+                failed += 1;
             }
         }
 
-        let _ = self.backend.put(b"metadata_contacts_migrated", b"true");
+        // Only mark the migration complete when every record was handled;
+        // otherwise a transient write failure would permanently strand the
+        // remaining bare-keyed contacts (the flag short-circuits future runs).
+        if failed == 0 {
+            if let Err(e) = self.backend.put(b"metadata_contacts_migrated", b"true") {
+                tracing::warn!(
+                    event = "contacts_key_prefix_migration_flag_write_failed",
+                    error = %e,
+                    "could not persist migration flag; migration will re-run next start"
+                );
+            }
+        } else {
+            tracing::warn!(
+                event = "contacts_key_prefix_migration_incomplete",
+                failed_count = failed,
+                "some contacts could not be migrated; will retry on next start"
+            );
+        }
 
         if migrated > 0 {
             tracing::info!(
@@ -624,6 +666,28 @@ impl ContactManager {
     }
 
     pub fn add(&self, mut contact: Contact) -> Result<(), IronCoreError> {
+        // Contacts arrive from platform/UI code and from parsed envelopes: bound
+        // every free-form field before it is canonicalized or persisted, and
+        // refuse a contact with no id at all (fails closed).
+        let too_long = |value: &Option<String>| {
+            value
+                .as_ref()
+                .is_some_and(|v| v.len() > MAX_CONTACT_TEXT_LEN)
+        };
+        if contact.peer_id.trim().is_empty()
+            || contact.peer_id.len() > MAX_CONTACT_ID_LEN
+            || contact.public_key.len() > MAX_CONTACT_ID_LEN
+            || too_long(&contact.nickname)
+            || too_long(&contact.local_nickname)
+            || too_long(&contact.notes)
+            || contact
+                .last_known_device_id
+                .as_ref()
+                .is_some_and(|v| v.len() > MAX_CONTACT_ID_LEN)
+        {
+            tracing::warn!("contact rejected: empty id or oversized field");
+            return Err(IronCoreError::InvalidInput);
+        }
         // UNIFICATION: Live canonicalize contact writes — mirrors migrate_libp2p_peer_ids_to_canonical_hex (load migration).
         // Prevents new 12D3 entries that would duplicate already-migrated hex nodes until next load.
         let peer_id_trimmed = contact.peer_id.trim().to_string();
@@ -705,6 +769,17 @@ impl ContactManager {
             );
             Ok(Some(contact))
         } else {
+            // Contacts are filed under LOWERCASE hex. A 64-hex identifier in any
+            // other case (or with stray whitespace) is the same identity, so
+            // fold it once and retry; the folded form is a fixed point, which
+            // bounds the recursion.
+            let folded = peer_id.trim().to_lowercase();
+            if folded != peer_id
+                && folded.len() == 64
+                && folded.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return self.get(folded);
+            }
             // If not found by peer_id, try resolving as identity_id
             if let Ok(Some(public_key)) = self.resolve_identity_id(&peer_id) {
                 return self.get(public_key);
@@ -753,6 +828,13 @@ impl ContactManager {
         if let Some(contact) = self.get(peer_id.clone())? {
             let bundle_key = contact_bundle_key(&contact.public_key);
             let _ = self.backend.remove(&bundle_key);
+            // `get` resolves identity-id and libp2p spellings to the stored
+            // row; the row lives under the contact's own peer_id, so removing
+            // only the caller's spelling would leave it behind (#209 forward-port).
+            let stored_key = contact_key(&contact.peer_id);
+            self.backend
+                .remove(&stored_key)
+                .map_err(|_| IronCoreError::StorageError)?;
         }
         let key = contact_key(&peer_id);
         self.backend
@@ -1683,6 +1765,62 @@ mod tests {
     }
 
     #[test]
+    fn remove_by_identity_id_or_libp2p_id_deletes_the_stored_row() {
+        let mgr = make_manager();
+        let (peer_a, key_a) = crate::test_support::self_certifying_keypair(b"scm-idv2-rm-a");
+        let (_peer_b, key_b) = crate::test_support::self_certifying_keypair(b"scm-idv2-rm-b");
+        mgr.add(Contact::new(peer_a.clone(), key_a.clone()))
+            .unwrap();
+        mgr.add(Contact::new(key_b.clone(), key_b.clone())).unwrap();
+
+        // libp2p spelling resolves to the hex-keyed row and must delete it.
+        mgr.remove(peer_a.clone()).unwrap();
+        assert!(mgr.get(key_a.clone()).unwrap().is_none());
+        assert!(mgr.get(peer_a).unwrap().is_none());
+
+        // identity_id spelling likewise.
+        let id_b = crate::identity::identity_id_from_public_key_hex(&key_b).unwrap();
+        mgr.remove(id_b).unwrap();
+        assert!(mgr.get(key_b).unwrap().is_none());
+    }
+
+    #[test]
+    fn contact_is_filed_only_under_lowercase_public_key_hex_and_junk_ids_miss() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = crate::test_support::self_certifying_keypair(b"scm-idv2-canon");
+        mgr.add(Contact::new(peer_id.clone(), key_hex.clone()))
+            .unwrap();
+
+        // Exactly one row, keyed by the lowercase public-key hex; the libp2p
+        // spelling was canonicalized on write, not stored as a second row.
+        let rows = mgr.list().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].peer_id, key_hex);
+        assert_eq!(rows[0].peer_id, rows[0].peer_id.to_lowercase());
+
+        // Every spelling of that one identity resolves to the same row.
+        let id = crate::identity::identity_id_from_public_key_hex(&key_hex).unwrap();
+        for (n, spelling) in [peer_id, key_hex.clone(), key_hex.to_uppercase(), id]
+            .into_iter()
+            .enumerate()
+        {
+            let got = mgr.get(spelling).unwrap();
+            let filed_under = got.map(|c| c.peer_id);
+            assert!(
+                filed_under.as_deref() == Some(key_hex.as_str()),
+                "spelling #{n} must resolve to the one canonical row"
+            );
+        }
+
+        // Non-key identifiers neither resolve nor delete anything.
+        for junk in ["not-a-key", "12D3KooWnotakey", "zz"] {
+            assert!(mgr.get(junk.to_string()).unwrap().is_none(), "{junk}");
+            mgr.remove(junk.to_string()).unwrap();
+        }
+        assert_eq!(mgr.list().unwrap().len(), 1);
+    }
+
+    #[test]
     fn step2_test_reject_hash_as_public_key_in_send() {
         // This test verifies that prepare_message_internal rejects a blake3 hash
         // when used as a public key (i.e., when the sender mistakenly passes
@@ -1953,5 +2091,59 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Entry-point guard: `ContactManager::add` refuses an empty/blank id and
+    /// any oversized field, stores nothing for them, and still accepts a
+    /// well-formed contact.
+    #[test]
+    fn add_rejects_empty_and_oversized_fields() {
+        let mgr = make_manager();
+        let (peer_id, key_hex) = self_certifying_keypair(b"contact-input-bounds");
+
+        assert!(matches!(
+            mgr.add(Contact::new(String::new(), key_hex.clone())),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            mgr.add(Contact::new("   ".to_string(), key_hex.clone())),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            mgr.add(Contact::new(
+                "p".repeat(MAX_CONTACT_ID_LEN + 1),
+                key_hex.clone()
+            )),
+            Err(IronCoreError::InvalidInput)
+        ));
+        assert!(matches!(
+            mgr.add(Contact::new(
+                peer_id.clone(),
+                "k".repeat(MAX_CONTACT_ID_LEN + 1)
+            )),
+            Err(IronCoreError::InvalidInput)
+        ));
+        for field in 0..3 {
+            let mut contact = Contact::new(peer_id.clone(), key_hex.clone());
+            let big = Some("n".repeat(MAX_CONTACT_TEXT_LEN + 1));
+            match field {
+                0 => contact.nickname = big,
+                1 => contact.local_nickname = big,
+                _ => contact.notes = big,
+            }
+            assert!(matches!(mgr.add(contact), Err(IronCoreError::InvalidInput)));
+        }
+        let mut contact = Contact::new(peer_id.clone(), key_hex.clone());
+        contact.last_known_device_id = Some("d".repeat(MAX_CONTACT_ID_LEN + 1));
+        assert!(matches!(mgr.add(contact), Err(IronCoreError::InvalidInput)));
+        assert!(
+            mgr.get(key_hex.clone()).unwrap().is_none(),
+            "no rejected contact may be persisted"
+        );
+
+        // Control: the well-formed contact is accepted, so the rejections above
+        // are not vacuous.
+        mgr.add(Contact::new(peer_id, key_hex.clone())).unwrap();
+        assert!(mgr.get(key_hex).unwrap().is_some());
     }
 }
