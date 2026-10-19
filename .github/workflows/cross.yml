@@ -42,7 +42,7 @@ env:
 jobs:
   wasm:
     name: WASM
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     steps:
       - uses: actions/checkout@v7
       - name: Detect Rust-relevant change
