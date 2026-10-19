@@ -60,7 +60,7 @@ env:
 jobs:
   changes:
     name: Detect changed areas
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 5
     outputs:
       ios_relevant: ${{ steps.platform.outputs.ios_relevant }}
@@ -72,7 +72,7 @@ jobs:
 
   wiring-gate:
     name: Android Wiring Gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python
@@ -106,7 +106,7 @@ jobs:
   # pull_request, so it cannot serve as the PR gate on its own.
   android-unit-tests:
     name: Android JVM Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.0
@@ -133,7 +133,7 @@ jobs:
 
   android:
     name: Android Debug APK
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # The PR mobile gate is the installable APK build. JVM unit tests run in
     # the dedicated Docker Integration Suite, where the native/JNA test
     # environment is available and its diagnostics are preserved. Running the
@@ -269,7 +269,7 @@ jobs:
   android-release:
     name: Android Release Build
     if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
