@@ -28,6 +28,10 @@ ignore = [
     "RUSTSEC-2026-0104",
     # Transitive via proc-macro-error2 — unmaintained, transitive, no fix available
     "RUSTSEC-2026-0173",
+    # Transitive via zbus 4.4.0; unmaintained as standalone crates, no safe upgrade available.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]
