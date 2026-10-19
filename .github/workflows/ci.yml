@@ -23,7 +23,7 @@ jobs:
   # runner is never acquired just to learn it has nothing to do.
   changes:
     name: Detect changed areas
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 5
     outputs:
       rust_relevant: ${{ steps.platform.outputs.rust_relevant }}
@@ -36,7 +36,7 @@ jobs:
   handoff-scope:
     name: Handoff ownership scope
     # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -75,7 +75,7 @@ jobs:
   naming-policy:
     name: Naming policy
     # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,7 +125,7 @@ jobs:
     # Required check: always run so it reports a real result; a failed `changes`
     # job must fail this check, not skip it (a skipped required check is green).
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 30
     steps:
       - name: Fail closed if change detection failed
@@ -166,7 +166,7 @@ jobs:
   orchestration:
     name: Orchestration control plane
     # Python only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 10
     steps:
       # Runs on every pull request and every push, on the default merge checkout.
