@@ -16,7 +16,7 @@ concurrency:
 jobs:
   changes:
     name: Detect changed areas
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 5
     outputs:
       rust_relevant: ${{ steps.platform.outputs.rust_relevant }}
@@ -37,7 +37,7 @@ jobs:
     needs: changes
     # Required check: always run and fail closed if `changes` failed.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 15
     steps:
       - name: Fail closed if change detection failed
@@ -84,7 +84,7 @@ jobs:
     needs: changes
     # Job-level skip: ktlint only reads android/, so it never starts for other diffs.
     if: needs.changes.outputs.kotlin_relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -130,7 +130,7 @@ jobs:
 
   javascript:
     name: JavaScript Linting
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
