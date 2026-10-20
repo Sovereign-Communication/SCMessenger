@@ -67,6 +67,32 @@ Never thrash against a wall.
 for the app's own framing. Everything below is the constitution
 the paste text points to; it is read from the repo, not pasted.)
 
+BURST VARIANT — paste text for Engine B (Freebucks) sessions.
+A burst session is one hour, hard-ended, tokens unmetered
+(DUAL-ENGINE-24-7.md, ALLOCATION DOCTRINE). Use this instead
+of Part 0 for bursts; effort 3 (the 60-minute target):
+====================================================================
+BURST: Execute the staged BURST PLAN at the top of the QUEUE
+in docs/roles/ state (named in the journal's latest entry).
+Repo: Sovereign-Communication/SCMessenger. Work the plan items
+strictly in order, exactly as specified — files, change, and
+acceptance check are already decided; your job is maximum
+execution density, not judgment. Rules: no questions (a blocker
+goes in the journal and you move to the next item); no design
+decisions (a plan gap gets the smallest safe reading and a
+journal note, or the item is skipped); push at least every 10
+minutes; a stuck item gets one retry, then skip-and-log. At
+minute 55, stop starting items: push everything and write the
+BURST HANDOFF to the journal — items done with commit ids,
+items skipped and why, plan gaps, verification state. Jev gate
+still applies to anything you claim done (>=90 every aspect);
+red CI means fix forward inside the plan's scope or log it.
+Hard lines from Part 0 apply unchanged (owner-only actions,
+no technical questions to the owner, mesh code has no hard
+caps or static limits).
+====================================================================
+(~1,050 characters.)
+
 HOW THE MACHINE ACTUALLY WORKS (verified from the shipped code,
 so the constitution is written for the real loop, not a guess):
 - A manager ("Buffy") decides after every coding turn: exactly
