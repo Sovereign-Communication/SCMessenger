@@ -153,12 +153,14 @@ the watchdog evaluates top-to-bottom, first matching row wins)
 5. Engine A 5h >90% or weekly =100%, no banked reset -> park A;
    role's next cycle on Engine B if its ledger allows, else C
    for Shepherd-class work, else sleep until the reset.
-6. Weekly =100% AND banked reset exists AND AUTO_REDEEM on ->
-   vision driver redeems; immediate Luna start (new weekly
-   clock); all parked A roles resume per the herd stagger.
-7. Weekly =100% AND banked reset exists AND AUTO_REDEEM off ->
-   OWNER-ITEM (one line, with the reset's expiry); lanes run on
-   B/C meanwhile. Never nag: one item, updated in place.
+6. Weekly remaining <= REDEEM_AT_REMAINING_PCT (default 0%)
+   AND banked reset exists AND auto-redeem armed -> vision
+   driver redeems; immediate Luna start (new weekly clock);
+   all parked A roles resume per the herd stagger.
+7. Trigger reached AND banked reset exists AND auto-redeem
+   disarmed -> OWNER-ITEM (one line, with the reset's expiry);
+   lanes run on B/C meanwhile. Never nag: one item, updated
+   in place.
 8. Both engines exhausted, queue non-empty -> sessions park;
    watchdog wakes at the earliest reset (5h, daily refill, or
    weekly, whichever is first); audit reports the stall once.
@@ -214,13 +216,22 @@ SCHEDULING POLICY (watchdog-enforced, not session-enforced)
   restarts BOTH windows; else park Engine A until weekly_resets_at
   and shift live lanes to Engine B/C.
 - Banked-reset redemption: an account action on the usage page
-  (Settings -> Usage -> "Use reset"). DEFAULT: the scheduler
-  posts an OWNER-ITEM and the vision driver performs the click
-  only with AUTO_REDEEM_BANKED_RESET = $true in watchdog config —
-  that flag is Lucas's one-time call, asked once in the OWNER
-  QUEUE, never per-redemption. Expiry watch: if a banked reset
-  expires within 48h and weekly usage is already >50%, the
-  OWNER-ITEM escalates (redeem-before-expiry beats lose-it).
+  (Settings -> Usage -> "Use reset"), driven by an ARMING
+  MECHANISM (owner decision 2026-10-19, Lucas): auto-redeem is
+  ALLOWED and armed in the app; the trigger is a remaining-%
+  threshold on the WEEKLY window — REDEEM_AT_REMAINING_PCT,
+  DEFAULT 0% (redeem only when the week is fully spent),
+  adjustable by the user to any value 0-100 (e.g. 10 = redeem
+  when a tenth of the week remains, so lanes never sit at zero
+  waiting for the click). The watchdog mirrors the same two
+  settings (armed + threshold) in its config; the vision driver
+  performs the click when the trigger fires. A 5-hour wall NEVER
+  consumes a banked reset on its own — that window refills in
+  hours, and a full reset spent there wastes the weekly refill;
+  the threshold governs the weekly window only. Expiry watch:
+  if a banked reset expires within 48h and weekly usage is
+  already >50%, the OWNER-ITEM escalates (redeem-before-expiry
+  beats lose-it) regardless of the threshold.
   Immediately after any redemption, the scheduler starts one
   Luna session at once: the new weekly window's clock starts at
   the first post-reset message, so an idle redeemed week starts
@@ -269,7 +280,8 @@ button that needs clicking.
   3. STATUS READS: /status card + Freebucks balance as telemetry
      fallback (above).
   4. RESET REDEMPTION: on the usage page, click "Use reset" —
-     only under the AUTO_REDEEM flag (above).
+     only when auto-redeem is armed and the remaining-%
+     threshold has fired (above).
   5. HUNG-SESSION EVIDENCE: screenshot the stuck state into the
      journal BEFORE the watchdog's PID reap, so a kill leaves a
      diagnosis, not a mystery.
@@ -295,20 +307,22 @@ A WALL NIGHT, WORKED EXAMPLE (illustrative, from the rules above)
 00:41 — Watchdog respawns Landing (resets_at + 60s). 00:44 one
   Implementer. 00:47 the second. Each reads state, takes its
   lease, resumes the recorded operation.
-04:55 — Weekly crosses 100% mid-window. A banked reset is on the
-  account and AUTO_REDEEM is on: vision driver redeems on the
-  usage page (Jev-verified click), scheduler immediately starts
-  a Luna session so the new weekly clock starts, lanes continue
-  into the fresh week. Total human involvement: none. The 6h
-  audit reports: 2 walls, 3 resumes, 1 reset redeemed.
+04:55 — Weekly remaining hits the armed threshold (0%). A
+  banked reset is on the account and auto-redeem is armed:
+  vision driver redeems on the usage page (Jev-verified click),
+  scheduler immediately starts a Luna session so the new weekly
+  clock starts, lanes continue into the fresh week. Total human
+  involvement: none. The 6h audit reports: 2 walls, 3 resumes,
+  1 reset redeemed.
 
 WHAT LUCAS EVER SEES
 - The 6h audit gains three lines: Engine A (5h %, weekly %,
   next reset), Engine B (Freebucks/hours burned today per role),
   walls hit + resumes executed since last audit.
-- OWNER QUEUE items only: the AUTO_REDEEM one-time flag, a
-  banked reset about to expire unused, both engines walled at
-  once with queue non-empty. Everything else is machinery.
+- OWNER QUEUE items only: a banked reset about to expire unused,
+  both engines walled at once with queue non-empty. The redeem
+  threshold is his in-app setting, never an owner-queue item.
+  Everything else is machinery.
 
 ON-BOX CHECKLIST (unverified off-box, ~10 min, one time):
 - Confirm the rollout-JSONL rate_limits fields on the actual
