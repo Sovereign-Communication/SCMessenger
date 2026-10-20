@@ -257,12 +257,14 @@ recorded operation, never a reconstruction. Walls therefore cost
 the tail of one response, never the thread of the work.
 
 THE JEV VISION DRIVER (supervision of the GUI itself)
-Why it exists: Freebuff mission mode is a GUI/TUI loop — the model
-writes its next prompt and a fresh session must receive it. CLI
+Why it exists: Freebuff mission mode is a GUI loop — a manager
+agent (Buffy) auto-continues each tab, but only inside the
+desktop app, and only while the app can see and click. CLI
 spawning covers headless starts; the vision driver covers
-everything the CLI can't see: a session sitting at a limit banner,
-a mission waiting for its next prompt to be pasted, a "Use reset"
-button that needs clicking.
+everything the app can't do for itself: a session sitting at a
+limit banner, a stalled mission tab that needs its
+pick-it-back-up message, a "Use reset" button that needs
+clicking on the ChatGPT usage page.
 - Build line (already in flight, harness repo): driver-core
   screenshot -> Jev judgment -> action, per docs/hourglass-vision.md
   and the computer-control plan (issues #270-273: launch_app, NL
@@ -273,10 +275,13 @@ button that needs clicking.
   1. WALL WATCH: recognize the Codex/Freebuff limit screens;
      confirm the session checkpointed; record the wall; do NOT
      click through or retry — schedule the resume.
-  2. MISSION FEEDING: when a Freebuff mission session is idle at
-     a fresh prompt, paste the next-cycle prompt from the state
-     docs and submit — the mechanical half of mission recursion,
-     so no human pastes prompts at 3am.
+  2. MISSION FEEDING: Buffy auto-continues a mission tab on its
+     own — feeding is needed only when the tab reports the
+     built-in failure state ("Mission couldn't get a decision…
+     Send a message to pick it back up") or sits idle with queue
+     remaining: then the driver sends the pick-it-back-up message
+     (or the next-cycle prompt for non-mission sessions), so no
+     human nudges a stalled tab at 3am.
   3. STATUS READS: /status card + Freebucks balance as telemetry
      fallback (above).
   4. RESET REDEMPTION: on the usage page, click "Use reset" —
@@ -328,9 +333,12 @@ ON-BOX CHECKLIST (unverified off-box, ~10 min, one time):
 - Confirm the rollout-JSONL rate_limits fields on the actual
   Codex install (path + field names) and pin them in
   usage-ledger.ps1; fall back to vision reads if absent.
-- Confirm Freebuff's mission mode entry point and whether it
-  accepts the mission text from a file/clipboard (vision driver
-  duty 2 depends on the paste path).
+- Confirm Freebuff's mission entry point on the box build
+  (Queue -> mission text + effort slider) and that the Windows
+  build matches the verified Linux build's mechanics (mission
+  cap 4,000 chars, Buffy decider); the desktop auto-updates, so
+  a newer Windows build may differ — re-verify after big
+  updates.
 - Confirm the connected-ChatGPT model picker exposes GPT-6 Luna
   by that name in Freebuff on the box, and that /status inside
   that session reports the ChatGPT account's windows.
@@ -360,12 +368,18 @@ SOURCES & CONFIDENCE (every load-bearing claim, 2026-10-19)
   tier in session-hours (50/day + 60 monthly bonus; Luna ~13
   hrs/day). Both recorded; the scheduler trusts neither number
   and reads the live balance.
-- Freebuff mission mode (model writes its own next prompt; fresh
-  session continues): owner-reported from the product itself;
-  no public documentation found 2026-10-19, and the npm launcher
-  package (v0.2.30) contains no mission code — the feature lives
-  in the binary/newer builds. Design treats Lucas's description
-  as the spec.
+- Freebuff mission mode: VERIFIED from the shipped Freebuff
+  Desktop build (app 0.0.182, Linux AppImage from freebuff.com,
+  orchestrator bundle modules src/shared/mission-prompt.ts +
+  src/server/services/mission.ts, read 2026-10-19). Mechanics:
+  a manager agent ("Buffy", freebuff-desktop-autorun) decides
+  after each coding turn — one next input (skill + written
+  prompt) or stop — from a clipped trace (agent prose, one line
+  per tool call, receipts, self-grades), never from code.
+  Passes run in the SAME conversation. Mission text hard-caps
+  at 4,000 chars. Effort 1-5 = 15/30/60/120/240-min targets.
+  Deciders: hosted autorun agent, Claude Code, or Codex
+  (read-only sandbox). No auto-redeem code exists in the build.
 - Vision driver: harness docs/hourglass-vision.md + computer-
   control plan (issues #270-273) + driver-core versions, all
   read from the local harness checkout 2026-10-19. HIGH.
