@@ -1,8 +1,106 @@
 # CEO state — live handoff
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Status: Active
-Last updated: 2026-09-14T08:30Z (CEO audit: Multi-transport store-and-forward breakthrough confirmed live; Windows <-> Cellular Pixel verified; BoD 5/5 unanimous approval)
+Last updated: 2026-10-17T05:54:10Z (source paths and GitHub release blockers rechecked; device/cloud state unverified)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
+Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this live checkpoint and the live v0.5.1 issue/PR tracking with repository execution-order guidance.
+
+# ===== RESUME HERE (2026-10-17, focused current-state refresh) =====
+
+This checkpoint supersedes prior live-status summaries below. Older dated sections
+are historical records, not current instructions. No merge, release, deployment,
+or architecture authority is granted here.
+
+- The working branch is `preserve/shared-checkout-20261003` at `e4050f84`; it is a preservation snapshot and must not be merged. Fetched `origin/main` is `b62b631ba7954d8d81c328658c0a525dd6b05e79` (2026-10-16).
+- The release target is v0.5.1 per live GitHub issue tracking. Current source has reachable routing-feed and CLI seed-dial paths; this does not prove transport-racing acceptance or a three-node run.
+- Main CI [38998920029](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/38998920029) failed at `cargo deny check`; rustls 0.23.45 is below the >=0.23.46 fix, and the lockfile also reports yanked `chacha20 0.10.1`. PR #604 remains OPEN/BEHIND at `f4083681d81cda86eacd15d9aad8574c5e967a7d`; its security-regression check is CANCELLED and no review is submitted.
+- The open-PR snapshot in [prs.json](../prs.json) records 43 PRs at 2026-10-17T05:54:10Z. PRs #521 and #599 remain OPEN with no submitted reviews; #521 is BEHIND, and #599 skipped Android Release Build. Issues #573-575 and #577 remain OPEN.
+- Three-node/device and release acceptance are not verified. Release issue #603 requires tri-node verifier exit 0 plus Jev >=99/100; operator-device issues #592 and #593 remain OPEN. See [COMPREHENSIVE_ISSUES_ANALYSIS_20261008.md](../COMPREHENSIVE_ISSUES_ANALYSIS_20261008.md); validate all operational state against fresh evidence before acting.
+
+# ===== END RESUME 2026-10-17 =====
+
+---
+
+# ===== HISTORICAL CHECKPOINT (2026-10-01; superseded by 2026-10-17) =====
+
+This checkpoint records only the observations listed here. It grants no merge,
+release, deployment, or architecture authority. Historical sections below remain
+records and do not override this checkpoint.
+
+- At 2026-10-01T00:43Z, `curl.exe --max-time 5 -sS -i http://127.0.0.1:9876/health`
+  -> HTTP 200, `{"status":"healthy"}`; `curl.exe --max-time 5 -sS -i
+  http://127.0.0.1:9876/version` -> version `0.4.0`, git hash `bceacb9`,
+  build time `2026-09-26T20:38:26.767320800+00:00`; `curl.exe --max-time 5
+  -sS -i http://127.0.0.1:9876/api/identity` -> identity ID
+  `985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826`, peer ID
+  `12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw`, nickname
+  `Claude-Windows-Driver`. These are recorded command outputs, not a
+  claim of current API status.
+- At 00:43Z, `adb devices -l` listed Pixel 6a serial
+  `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp` as `device`. At 01:02Z,
+  `adb devices -l` returned no device entries. Current availability is UNVERIFIED.
+- CI artifact for PR #421 run
+  [36654635755](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/36654635755), head
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`, was verified: APK SHA256
+  `8da295b760e50e44e174b11a1049505ec9b593f54de5ec73ce3db021373a6308`, signer
+  SHA256 `067d312c1470d9b36c39b54943e3d8c434243821c9874c03241e8668801fd672`;
+  CI reported `SCMESSENGER_DEBUG_KEYSTORE_BASE64` unset. `adb install -r` returned
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; the recorded checkpoint says no uninstall,
+  wipe, UI, or onboarding occurred, installed-app full signer is unknown, and ADB
+  later disconnected (recorded `adb install -r` output above).
+- AWS check: `aws ec2 describe-instances ...` -> NOT RUN (`aws` CLI not
+  installed). Cloud-node status is UNVERIFIED; this does not establish that
+  the node is down.
+- GitHub `main` is
+  [`e76e05933d49f5f764539960bf9768e409ea9fa4`](https://github.com/Sovereign-Communication/SCMessenger/commit/e76e05933d49f5f764539960bf9768e409ea9fa4).
+  PRs [#422](https://github.com/Sovereign-Communication/SCMessenger/pull/422)
+  and [#424](https://github.com/Sovereign-Communication/SCMessenger/pull/424)
+  are merged.
+- PR [#416](https://github.com/Sovereign-Communication/SCMessenger/pull/416)
+  is open at head `d4138a07b4ff508e40f16d1f72987244e8b09e19`. Compared with
+  `main`, it is 23 commits ahead and 15 behind, with 23 commits, 31 files,
+  +4263/-15 ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...d4138a07b4ff508e40f16d1f72987244e8b09e19)).
+- PR [#403](https://github.com/Sovereign-Communication/SCMessenger/pull/403)
+  is open at head `1a3cb2744a53ee135ceada23b982a737116644ee`; versus `main`,
+  it is 10 commits ahead and 34 behind, with 10 commits and 8 files. The actual
+  compare includes `scripts/backup_purge.sh`; use the compare contents rather
+  than the PR-body scope ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...1a3cb2744a53ee135ceada23b982a737116644ee)).
+  The latest of its 35 comments is #5893444868 and the freeze remains on the
+  named Freebuff branches ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/403#issuecomment-5893444868)).
+- PR [#421](https://github.com/Sovereign-Communication/SCMessenger/pull/421)
+  is open at head `7a6c271924a4625e24ff80a30cc89ee9adede356`, 3 commits ahead
+  and 12 behind `main`, with 3 commits and 2 files
+  ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...7a6c271924a4625e24ff80a30cc89ee9adede356)).
+  Its exact-head check-runs API returned `total_count=36`, all successful
+  ([check-runs API](https://api.github.com/repos/Sovereign-Communication/SCMessenger/commits/7a6c271924a4625e24ff80a30cc89ee9adede356/check-runs)). The latest and only
+  #421 comment, #5902649210, records Rule-8 `REQUEST_CHANGES`, with high global
+  inbound starvation and medium repeated-handover findings
+  ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/421#issuecomment-5902649210)).
+  That comment is not itself a GitHub review-submission object. Checks pass, but
+  the merge/security gate does not.
+- The #421 cap policy remains unresolved; this checkpoint makes no cap or
+  architecture choice.
+- Cellular test, deployment, release, and three-node-pass status are UNVERIFIED
+  for any time after the observations above. No merge or architecture choice is
+  authorized by these observations.
+
+# ===== END HISTORICAL CHECKPOINT 2026-10-01 =====
+
+## Historical checkpoint note
+
+The earlier dated records below are retained for provenance. They are not live
+SCMessenger status and must be revalidated against source, GitHub, and device
+state before use. The former upstream-tooling audit is omitted from this
+SCMessenger-only handoff; it did not establish a current SCMessenger release or
+three-node status.
 
 ## Role
 
@@ -12,7 +110,33 @@ state, holds the consensus rule, and never bypasses the CTO package's gates.
 Key strategic and architectural alignment is adjudicated by the Board of
 Directors (`/bod`, tracked in `HANDOFF/BOD_STATE.md`).
 
-# ===== RESUME HERE (2026-09-14) =====
+# ===== HISTORICAL CHECKPOINT (2026-09-21, session close; superseded by 2026-10-17) =====
+
+## Historical audit posture for incoming CEO — revalidate before use
+
+1. Load order: `AGENTS.md` → transition file → this file → `CTO_STATE.md` →
+   BLE package → master plan → WiFi implementation plan → freebuff README.
+2. Verify Freebuff/orchestrator claims with **fresh commands** (git origin/main,
+   `gh pr list`, node `/version` + `/api/diagnostics`, AWS `docker logs`).
+3. **WP / WiFi / 0.4.0-complete claims** require:
+   - mechanical gates + `scripts/jev_canonical_check.py` keyed `is_passing`
+   - WP5 evidence on P0 umbrella for WiFi-fixed
+   - master plan checklist for tag
+4. Fleet at prior close (re-derive before quoting as live): Windows+AWS
+   `51edac4b`, Pixel APK same tree family after authorized fresh install.
+5. The 2026-09-21 checkpoint listed a PR and provider-configuration action;
+   both are historical and must be re-derived from current GitHub records and
+   repository execution-order guidance before use.
+
+## Historical hand-off note
+
+The 2026-09-21 packet `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md` is
+superseded by current v0.5.1 tracking. Do not use it as active execution authority.
+
+# ===== END HISTORICAL SECTION 2026-09-21 =====
+
+# ----- PREVIOUS RESUME (2026-09-14) — HISTORY -----
+
 
 ## Major Breakthrough Live Audit
 
@@ -448,7 +572,7 @@ Operator directive: 400+ uncommitted files; gitignore scratch/ and clean up
    `git check-ignore -v` and `-uall` status (untracked now: exactly the 2
    checkpoints + the peers backup JSON). Nothing deleted; `scratch/driver/`
    is live operator<->session infrastructure (README, driver.sh, watcher.ps1,
-   Startup-folder persistence) and the T6 Tier-A harness consumes
+   Startup-folder persistence) and the T6 Tier-A test suite consumes
    `scratch/driver/watcher.log` freshness (A10) -- deletion would break a
    tracked gate. Disk cost is 1.6 MB; no reclaim needed.
 3. **CTO checkpoints committed:** `D1_LIVE_CUTOVER` (080000Z) and
