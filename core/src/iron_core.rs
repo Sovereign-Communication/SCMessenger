@@ -368,7 +368,7 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::persistent(backend.clone());
+        let outbox = Outbox::new();
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
@@ -604,7 +604,7 @@ impl IronCore {
         let blocked_manager = CoreBlockedManager::new(backend.clone());
         let blocked_for_auto_block = CoreBlockedManager::new(backend.clone());
         let inbox = Inbox::new();
-        let outbox = Outbox::persistent(backend.clone());
+        let outbox = Outbox::new();
         let storage_manager =
             StorageManager::new(backend.clone(), history_manager.clone(), log_mgr.clone());
         let spam_detector =
@@ -1059,22 +1059,15 @@ impl IronCore {
             .as_secs();
 
         let decision = self.make_routing_decision(hint, msg_id_bytes, 128, now);
-        let handoff_to_drift = decision.is_some_and(|decision| {
-            matches!(decision.primary, crate::routing::NextHop::StoreAndCarry)
-        });
+
+        let mut handoff_to_drift = false;
+        if let Some(dec) = decision {
+            if matches!(dec.primary, crate::routing::NextHop::StoreAndCarry) {
+                handoff_to_drift = true;
+            }
+        }
+
         if handoff_to_drift {
-            self.outbox
-                .write()
-                .authorize_recipient(&message_id, recipient_id)
-                .map_err(|error| {
-                    tracing::error!(
-                        event = "receipt_authorization_store_failed",
-                        message_id = %message_id,
-                        error = %error,
-                        "Aborting custody handoff because receipt authorization could not be retained"
-                    );
-                    IronCoreError::StorageError
-                })?;
             let stored_env = crate::drift::store::StoredEnvelope {
                 envelope_data: envelope_data.clone(),
                 message_id: drift_env.message_id,
@@ -1095,54 +1088,28 @@ impl IronCore {
                 .transport_manager
                 .read()
                 .is_peer_connected(recipient_pk);
-            if connected {
-                self.outbox
-                    .write()
-                    .authorize_recipient(&message_id, recipient_id)
-                    .map_err(|error| {
-                        tracing::error!(
-                            event = "receipt_authorization_store_failed",
-                            message_id = %message_id,
-                            error = %error,
-                            "Aborting direct send because recipient authorization could not be retained"
-                        );
-                        IronCoreError::StorageError
-                    })?;
-            } else {
-                self.outbox
-                    .write()
-                    .enqueue(QueuedMessage {
-                        version: 1,
-                        message_id: message_id.clone(),
-                        recipient_id: recipient_id.to_string(),
-                        envelope_data: envelope_data.clone(),
-                        queued_at: web_time::SystemTime::now()
-                            .duration_since(web_time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        attempts: 0,
-                        next_retry_at: None,
-                        in_custody: false,
-                        custody_established_at: 0,
-                        state: crate::store::outbox::MessageState::Enqueued,
-                    })
-                    .map_err(|error| {
-                        tracing::error!(
-                            event = "outbox_enqueue_failed",
-                            message_id = %message_id,
-                            error = %error,
-                            "Aborting send because retry state could not be retained"
-                        );
-                        IronCoreError::StorageError
-                    })?;
+            if !connected {
+                let _ = self.outbox.write().enqueue(QueuedMessage {
+                    version: 1,
+                    message_id: message_id.clone(),
+                    recipient_id: recipient_id.to_string(),
+                    envelope_data: envelope_data.clone(),
+                    queued_at: web_time::SystemTime::now()
+                        .duration_since(web_time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    attempts: 0,
+                    next_retry_at: None,
+                    in_custody: false,
+                    custody_established_at: 0,
+                    state: crate::store::outbox::MessageState::Enqueued,
+                });
             }
         }
 
-        let identity_id = identity.identity_id();
-        drop(identity);
         self.audit_log.write().append(
             AuditEventType::MessageSent,
-            identity_id,
+            identity.identity_id(),
             Some(recipient_id.to_string()),
             None,
         );
@@ -3700,7 +3667,7 @@ impl IronCore {
             })?
         };
 
-        let mut message = decode_message(&plaintext).map_err(|e| {
+        let message = decode_message(&plaintext).map_err(|e| {
             tracing::warn!("Failed to decode message: {:?}", e);
             IronCoreError::Internal
         })?;
@@ -3809,63 +3776,43 @@ impl IronCore {
             }
         };
 
-        // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass.
-        // Positive receipts also require an exact queued recipient match before callbacks.
+        // Handle receipt classification AFTER blocked-peer check to prevent metadata leaks/spam bypass
         if message.message_type == crate::MessageType::Receipt {
-            // Do not expose the payload's claimed sender_id as receipt identity.
-            message.sender_id = sender_public_key_hex.clone();
-            match crate::message::types::decode_receipt(&message.payload) {
-                Ok(receipt) => {
-                    let positive_receipt = matches!(
-                        &receipt.status,
-                        crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read
-                    );
-                    // Positive receipts consume authorization; other statuses only notify.
-                    let authorized = if positive_receipt {
-                        let cleared = self
-                            .outbox
-                            .write()
-                            .remove_for_recipient_key(&receipt.message_id, &sender_pubkey);
-                        if cleared {
-                            if let Ok(message_id) = uuid::Uuid::parse_str(&receipt.message_id) {
-                                self.drift_store.write().remove(message_id.as_bytes());
-                            }
-                        }
-                        cleared
-                    } else {
-                        self.outbox
-                            .read()
-                            .contains_for_recipient_key(&receipt.message_id, &sender_pubkey)
+            if let Ok(receipt) = crate::message::types::decode_receipt(&message.payload) {
+                if let Some(delegate) = self.delegate.read().as_ref() {
+                    let status_str = match receipt.status {
+                        crate::DeliveryStatus::Sent => "Sent".to_string(),
+                        crate::DeliveryStatus::Delivered => "Delivered".to_string(),
+                        _ => "Delivered".to_string(),
                     };
-
-                    if authorized {
-                        let status = match receipt.status {
-                            crate::DeliveryStatus::Sent => "Sent",
-                            crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read => {
-                                "Delivered"
-                            }
-                            crate::DeliveryStatus::Failed => "Failed",
-                        };
-                        if let Some(delegate) = self.delegate.read().as_ref() {
-                            delegate.on_receipt_received(receipt.message_id.clone(), status.into());
-                        }
-                    }
-
-                    if positive_receipt {
-                        tracing::info!(
-                            event = "receipt_outbox_cleared",
-                            message_id = %receipt.message_id,
-                            removed = authorized,
-                            "Processed application delivery receipt from the authenticated recipient"
-                        );
-                    }
+                    delegate.on_receipt_received(receipt.message_id.clone(), status_str);
                 }
-                Err(error) => tracing::error!(
+
+                // A Delivered (or legacy Read) receipt is the application-level
+                // confirmation that releases the sender's retry state. The
+                // delegate callback updates platform history, but it does not
+                // remove the matching outbox/drift entry. Without this call,
+                // the retry loop keeps re-enqueuing an envelope the recipient
+                // already stored, creating duplicates during a long soak.
+                if matches!(
+                    &receipt.status,
+                    crate::DeliveryStatus::Delivered | crate::DeliveryStatus::Read
+                ) {
+                    let cleared = self.mark_message_sent(receipt.message_id.clone());
+                    tracing::info!(
+                        event = "receipt_outbox_cleared",
+                        message_id = %receipt.message_id,
+                        removed = cleared,
+                        "Processed application delivery receipt"
+                    );
+                }
+            } else if let Err(e) = crate::message::types::decode_receipt(&message.payload) {
+                tracing::error!(
                     event = "receipt_parse_failed",
                     sender_id = %message.sender_id,
-                    error = %error,
+                    error = %e,
                     "Failed to parse receipt payload from sender: malformed JSON"
-                ),
+                );
             }
             // Receipts are protocol metadata, not user content. Return the
             // decoded message so callers can handle the receipt branch without
