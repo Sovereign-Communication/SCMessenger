@@ -163,6 +163,9 @@ jobs:
           fi
       - run: cargo deny check
         if: needs.changes.outputs.rust_relevant == 'true'
+      - name: Check lockfile is up to date
+        if: needs.changes.outputs.rust_relevant == 'true'
+        run: cargo update --workspace --locked --dry-run
   orchestration:
     name: Orchestration control plane
     # Python only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
