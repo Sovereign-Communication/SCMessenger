@@ -7,13 +7,12 @@ burn the full Codex weekly allowance, spend the banked reset, burn
 the next week too — with zero human whack-a-mole in between.
 
 THE ENGINES
-TWO METERS, ONE WARNING: whether a Freebuff session running a
-connected-ChatGPT model ALSO consumes Freebuff session-hours is
-NOT verified. Until the on-box check settles it, the scheduler
-treats every connected-model hour as drawing on BOTH ledgers —
-the conservative assumption; if the check proves otherwise, the
-ledgers decouple and capacity roughly doubles. Never plan against
-the optimistic reading.
+TWO METERS, FULLY SEPARATE (owner-confirmed 2026-10-19, Lucas —
+this overrides the earlier conservative draft): sessions on the
+connected GPT account burn ONLY GPT/Codex usage and ZERO
+Freebucks; Freebuff-native models burn ONLY Freebucks. The pools
+are independent and additive — a Codex wall never touches the
+Freebucks balance and vice versa. Plan against both at full size.
 
 Engine A — Codex via the connected ChatGPT account (inside Freebuff),
 model GPT-6 Luna. THE WORKHORSE: carries all lanes by default.
@@ -35,10 +34,15 @@ Engine B — Freebuff's own allowance, $8/mo plan. Two surfaces
 report this tier differently: Lucas's account shows 250
 Freebucks/day; the official plans page expresses the same tier
 as ~50 session-hours/day refilled daily + 60 monthly bonus hours,
-metered per model multiplier (GPT-6 Luna ~13 hrs/day in that
-table). The scheduler NEVER hardcodes either number — it reads
-the live balance/ledger and plans against what the product
-actually reports that day. THE OVERFLOW + SPECIALIST engine:
+metered per model multiplier. The scheduler NEVER hardcodes
+either number — it reads the live balance/ledger and plans
+against what the product actually reports that day.
+Known rate (owner-confirmed): GPT-6 Luna native = 20 Freebucks
+per hour, so the daily 250 buys ~12.5 hours of native Luna —
+a full second Luna engine that owes nothing to the Codex
+windows. The roster also includes GPT-6.1 Sol (sometimes),
+Gemini 4 Argon, and Muse Spark 1.3 (owner-reported) for
+one-off specialist needs. THE OVERFLOW + SPECIALIST engine:
 - One-off needs, single-role bursts, and any work that arrives
   while Engine A is walled.
 - Hour-block discipline from WINDOWS-24-7.md still applies:
@@ -225,6 +229,11 @@ SCHEDULING POLICY (watchdog-enforced, not session-enforced)
   moves THAT role's next cycle to Engine B with the same prompt
   (the mission prompt is engine-agnostic; only the STATE block's
   LAST WALL line changes). Roles return to Engine A at its reset.
+  Because the meters are fully separate (owner-confirmed), a
+  Codex weekly wall still leaves ~12.5 h/day of native Luna on
+  Engine B — the "both engines walled" case now requires the
+  Freebucks day to be spent too, which the burn ledger makes
+  visible hours in advance.
 
 RECOVERY — EXACTLY WHERE YOU LEFT OFF
 The mission prompt's checkpoint rule is the recovery mechanism:
@@ -311,10 +320,9 @@ ON-BOX CHECKLIST (unverified off-box, ~10 min, one time):
 - Confirm the connected-ChatGPT model picker exposes GPT-6 Luna
   by that name in Freebuff on the box, and that /status inside
   that session reports the ChatGPT account's windows.
-- Settle the two-meters question: run one connected-Luna session
-  for a known duration and observe whether the Freebuff
-  session-hour/Freebucks ledger moved. Record the answer in this
-  doc; until then the both-ledgers assumption governs.
+- SETTLED by the owner 2026-10-19 (no box check needed):
+  connected-GPT sessions burn zero Freebucks; Freebuff-native
+  Luna is 20 Freebucks/hour. (Was the two-meters open question.)
 
 SOURCES & CONFIDENCE (every load-bearing claim, 2026-10-19)
 - /status shows 5h %, weekly %, reset timestamps, credits;
