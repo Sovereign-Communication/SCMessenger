@@ -3,6 +3,7 @@
   "protocol_version": "2.0.0",
   "canonical_document": "docs/ORCHESTRATION.md",
   "kernel": "scripts/orchestrate_strict.py",
+  "execution_pointer_document": "SHIP_PLAN.md",
   "state_schema_version": "1.0.0",
   "semantic_roles": {
     "CONTROLLER": {"authority": "coordinate", "writes": ["HANDOFF/", "tmp/orchestration/", "tmp/tasks/"], "forbidden": ["application_source", "test_implementation", "generated_source", "compile_fix", "architecture_adjudication"]},
