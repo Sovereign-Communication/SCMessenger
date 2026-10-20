@@ -70,10 +70,6 @@ jobs:
         # state, and fails if the classifier drifts.
         shell: bash
         run: python scripts/validate_handoff_scope.py --repo-root . --self-test
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
   naming-policy:
     name: Naming policy
     # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
@@ -113,10 +109,6 @@ jobs:
         # shape where an unratified proposal can block a merge.
         shell: bash
         run: python scripts/check_naming.py --repo-root . --self-test
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
   # Canonical clippy + cargo-deny gate. lint.yml's "Rust Linting" no longer repeats
   # clippy (this --all-features run is a strict superset) or compiles anything.
   # fmt also lives only in "Rust Linting". Hosted: OCI queue waits for this job
@@ -170,10 +162,6 @@ jobs:
           fi
       - run: cargo deny check
         if: needs.changes.outputs.rust_relevant == 'true'
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
   orchestration:
     name: Orchestration control plane
     # Python only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
@@ -193,10 +181,6 @@ jobs:
         run: python scripts/orchestration_contract.py
       - name: Run deterministic orchestration tests
         run: python scripts/test_orchestration_v2.py
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
   test:
     name: Test (${{ matrix.os }})
     needs: changes
@@ -254,10 +238,6 @@ jobs:
       - name: Run workspace tests
         if: matrix.os != 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
         run: cargo test --workspace --features test-utils
-      - name: Clean self-hosted workspace
-        if: always() && matrix.os == 'ubuntu-latest'
-        uses: ./.github/actions/self-hosted-cleanup
-
   docs:
     name: Docs
     needs: changes

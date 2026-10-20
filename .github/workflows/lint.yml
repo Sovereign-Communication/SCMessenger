@@ -69,10 +69,6 @@ jobs:
           toolchain: 1.99.0
           components: rustfmt
 
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
-
       - name: Check Rust formatting
         if: needs.changes.outputs.rust_relevant == 'true'
         run: cargo fmt --all -- --check
