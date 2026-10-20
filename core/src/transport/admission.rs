@@ -1,37 +1,35 @@
-//! Connection admission: evict, never deny.
+//! Connection admission: derive elastic resource allowances and evict, never deny.
 //!
 //! [`AdmissionBehaviour`] replaces libp2p's static `connection_limits`
 //! behaviour. It is kept FIRST in the `IronCoreBehaviour` derive struct, so
-//! the derive macro consults it before any child behaviour. Its
-//! `handle_established_*_connection` hooks ALWAYS accept: an honest peer is
-//! never refused because of a count. Two derived bounds are enforced by
-//! queueing `ToSwarm::CloseConnection` for the worst surplus path:
+//! the derive macro consults it before any child behaviour. The total resource
+//! allowance is elastic: pressure triggers ordinary low-value eviction while
+//! preserving useful live paths; it never rejects a connection to satisfy a
+//! numeric ceiling. Per-peer and machine-resource budgets queue
+//! `ToSwarm::CloseConnection` for surplus paths:
 //!
 //! * per peer: the path budget of [`super::path_budget`] (with a symmetric
 //!   tie-break so both ends of a simultaneous dial close the SAME connection);
 //! * across all peers: a total derived from the machine's descriptor limit,
 //!   available memory and measured per-connection cost
 //!   ([`super::conn_resources`]), recomputed on a tick and immediately on OS
-//!   resource errors. Above it the lowest-value paths are evicted
-//!   (`reason=over-total`): peers without authenticated history first, then
-//!   paths with no VALIDATED traffic, then redundant paths, then lowest local
-//!   reputation, then youngest, so Sybil churn evicts itself while established
-//!   authenticated peers keep their connection.
+//!   resource errors. Eviction ranks untrusted peers and paths with stale or
+//!   absent VALIDATED traffic first, followed by redundant paths, low reputation
+//!   and younger paths. A soft bound may remain exceeded while useful paths are
+//!   active; no hard fallback sacrifices a peer's last useful path.
 //!
 //! The OS can still refuse an accept or dial below libp2p (EMFILE, ENOMEM,
 //! ...). Those errors arrive as swarm events; they are logged (rate-limited)
-//! as `[CONN] hard-ceiling` AND fed back into the total, once per tick (one
-//! episode, however many events), shrinking multiplicatively and never below
-//! the authenticated / validated-traffic paths. Pending (pre-handshake)
+//! as `[CONN] hard-ceiling` AND fed back into the elastic allowance, once per
+//! tick (one episode, however many events), shrinking multiplicatively but
+//! never below authenticated or recently validated useful paths. Pending (pre-handshake)
 //! inbound sockets are the cheapest thing to shed: they hold a descriptor yet
 //! have no authenticated identity. While pressure lasts the number of
 //! young pending inbound connections is bounded (also multiplicatively, per
 //! episode), pending entries older than a locally derived handshake allowance
-//! are written off, and a new pending inbound beyond the bound is dropped at
-//! accept time (the only place this module ever declines a connection; it
-//! never applies to an established peer, and under proven descriptor
-//! exhaustion the OS would have refused the accept anyway). The periodic
-//! sample lifts both caps.
+//! are written off, and only pending inbound under observed descriptor pressure
+//! is shed by source fairness. A periodic sample and quiet periods restore the
+//! elastic allowance.
 //!
 //! The swarm loop feeds the behaviour liveness stamps (ping and identify are
 //! separate sources), traffic stamps and local reputation (the behaviour
@@ -295,7 +293,7 @@ fn source_prefix(ip: IpAddr) -> IpAddr {
     }
 }
 
-/// Why a pending inbound connection was dropped at accept time.
+/// Why an inbound handshake was shed during observed resource pressure.
 #[derive(Debug)]
 struct PendingShed;
 
@@ -360,7 +358,7 @@ pub struct AdmissionBehaviour {
     mem_at: Instant,
     rss_at: Instant,
     shed_log: RateGate,
-    /// Rate-limits the `over-bound-soft` marker (eviction could not reach the bound).
+    /// Rate-limits the marker when useful paths keep the resource bound soft.
     soft_bound_log: RateGate,
     /// Closes to hand to the swarm on the next poll.
     to_close: VecDeque<(PeerId, ConnectionId)>,
@@ -457,12 +455,23 @@ impl AdmissionBehaviour {
         self.fd_at = now;
         self.mem_at = now;
         self.rss_at = now;
+        self.resources.observe(self.snapshot.rss, 0);
+        self.derived = self.resources.derive(
+            &self.snapshot,
+            self.occupancy_for_pressure(now),
+            (self.scaler)(),
+        );
         self
     }
 
     /// Replace the platform power scale source (permille, 1000 = unscaled).
     pub fn with_scaler(mut self, scaler: fn() -> u32) -> Self {
         self.scaler = scaler;
+        self.derived = self.resources.derive(
+            &self.snapshot,
+            self.occupancy_for_pressure(Instant::now()),
+            (self.scaler)(),
+        );
         self
     }
 
@@ -668,15 +677,14 @@ impl AdmissionBehaviour {
     }
 
     /// Local reputation of a connected peer (higher is more valuable). Used to
-    /// rank eviction victims when the total bound is exceeded.
+    /// rank eviction victims when the dynamic resource allowance is exceeded.
     pub fn note_reputation(&mut self, peer: PeerId, score: f64) {
         self.ledger.note_reputation(peer, score);
     }
 
     /// The peer has authenticated history (a saved contact, or positive local
     /// reputation earned through validated exchanges). Its paths rank above
-    /// every unauthenticated path when the total bound forces evictions and
-    /// are the floor of pressure shrinking.
+    /// unauthenticated paths and contribute to the dynamic useful-path floor.
     pub fn note_authenticated(&mut self, peer: PeerId) {
         self.ledger.note_authenticated(peer);
     }
@@ -725,15 +733,26 @@ impl AdmissionBehaviour {
         }
     }
 
-    /// Occupancy including the paths worth protecting. O(paths): only for a
-    /// pressure episode, never the hot path.
-    fn occupancy_for_pressure(&self) -> Occupancy {
-        let (protected, protected_fd) = self.ledger.protected_paths();
+    /// Occupancy and currently useful paths, measured during recomputation.
+    fn occupancy_for_pressure(&self, now: Instant) -> Occupancy {
+        let (protected, protected_fd) = self.ledger.protected_paths(now);
         Occupancy {
             protected,
             protected_fd,
             ..self.occupancy()
         }
+    }
+
+    /// Refresh the soft total allowance from current resource and occupancy
+    /// evidence. The allowance guides eviction; it never gates connection hooks.
+    fn refresh_total_budget(&mut self, now: Instant) -> Option<Derived> {
+        let derived = self.resources.derive(
+            &self.snapshot,
+            self.occupancy_for_pressure(now),
+            (self.scaler)(),
+        );
+        self.derived = derived;
+        derived
     }
 
     /// True when `tick` has anything to do. Every part of `tick` is gated on
@@ -922,7 +941,7 @@ impl AdmissionBehaviour {
             // ONE episode per quantum, however many error events it carries;
             // events raised between episodes wait for the next one.
             if let Some(kind) = self.pressure_kind.take() {
-                let occupancy = self.occupancy_for_pressure();
+                let occupancy = self.occupancy_for_pressure(now);
                 self.resources.note_pressure(kind, occupancy);
                 if kind == PressureKind::Fd {
                     self.shrink_pending_cap(now, occupancy.fd);
@@ -1017,29 +1036,18 @@ impl AdmissionBehaviour {
         None
     }
 
-    /// Re-derive the total bound and evict whatever exceeds it. `keep` (the
-    /// connection that triggered the check) is never chosen.
+    /// Re-derive the resource-derived soft allowance and evict low-value
+    /// surplus paths. It may remain exceeded if only useful sole paths remain.
     fn enforce_total(&mut self, now: Instant, keep: Option<ConnectionId>) {
-        let occupancy = self.occupancy();
-        // The floor counts protected paths (authenticated or carrying traffic),
-        // which the bound can never evict, so the derived bound cannot sit
-        // below what the ledger must keep.
-        self.derived = self.resources.derive(
-            &self.snapshot,
-            self.occupancy_for_pressure(),
-            (self.scaler)(),
-        );
-        let Some(derived) = self.derived else {
+        let Some(derived) = self.refresh_total_budget(now) else {
             return;
         };
+        let occupancy = self.occupancy();
         if occupancy.total <= derived.limits.total && occupancy.fd <= derived.limits.fd {
             return;
         }
         let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
         self.queue(evictions, now);
-        // A peer's last path is pinned while authenticated, trafficked or in
-        // grace, so the bound can stay exceeded. Report it as a soft bound
-        // rather than evicting those peers.
         let after = self.occupancy();
         if after.total > derived.limits.total || after.fd > derived.limits.fd {
             if let Some(suppressed) = self.soft_bound_log.permit(now, LOG_INTERVAL) {
@@ -1330,10 +1338,10 @@ mod tests {
     }
 
     #[test]
-    fn established_hooks_always_accept() {
-        let mut b = AdmissionBehaviour::new();
+    fn all_connection_hooks_accept_beyond_the_soft_resource_allowance() {
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         let peer = PeerId::random();
-        // A flood far beyond any historical static cap: every hook accepts.
+        // A flood beyond the sampled allowance is never refused at a count.
         for n in 0..500usize {
             let a = lan(10_000 + (n % 1000) as u16);
             assert!(b.handle_pending_inbound_connection(cid(n), &a, &a).is_ok());
@@ -1540,27 +1548,40 @@ mod tests {
     }
 
     #[test]
-    fn eviction_logging_is_rate_limited_but_closes_are_not() {
+    fn new_peer_burst_preserves_messaging_and_sheds_only_after_grace() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
-        // 40 single-path peers arrive inside one quantum. Each is inside its
-        // own grace window, so none is a victim yet: the total bound is soft
-        // until the window has passed.
-        for n in 0..40usize {
+        let contact = PeerId::random();
+        b.path_established(contact, cid(0), &wan(), true, base);
+        b.note_authenticated(contact);
+        b.stamp_traffic(&contact, &cid(0), at(base, 1));
+
+        for n in 1..40usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
         assert_eq!(
             b.ledger.occupancy().0,
-            40,
-            "protected paths are never shed early"
+            41,
+            "burst peers remain during grace"
         );
-        assert!(drain(&mut b).is_empty());
-        // One arrival after every grace window has closed sheds the excess
-        // (41 paths against a bound of 4) in one pass, logged once per reason.
-        b.path_established(PeerId::random(), cid(40), &wan(), true, at(base, 60_000));
-        assert_eq!(drain(&mut b).len(), 37);
-        let gate = b.evict_logs.get("over-total").expect("gate exists");
-        assert!(gate.suppressed >= 30, "suppressed: {}", gate.suppressed);
+        assert!(drain(&mut b).is_empty(), "no hard numeric cap");
+        assert_eq!(
+            b.ledger.live_paths(&contact),
+            1,
+            "messaging path is preserved"
+        );
+
+        b.tick_with(at(base, 60_000), None, false);
+        assert!(
+            b.ledger.occupancy().0 < 41,
+            "stale, low-value paths are shed after grace"
+        );
+        assert_eq!(
+            b.ledger.live_paths(&contact),
+            1,
+            "authenticated message path survives"
+        );
+        assert!(b.ledger.counters_consistent());
     }
 
     // ---- total bound ------------------------------------------------------
@@ -1618,33 +1639,18 @@ mod tests {
     }
 
     #[test]
-    fn hard_ceiling_is_acted_on_not_only_logged() {
+    fn pressure_adjusts_allowance_and_recovers_without_losing_message_path() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
-        for n in 0..6usize {
+        let contact = PeerId::random();
+        b.path_established(contact, cid(0), &wan(), true, base);
+        b.note_authenticated(contact);
+        b.stamp_traffic(&contact, &cid(0), at(base, 1));
+        for n in 1..6usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
-        assert!(drain(&mut b).is_empty(), "6 paths are far below the bound");
-        // Two accepts fail with EMFILE inside one tick: that is ONE episode,
-        // which retains 3/4 of the live paths (6 -> 5), not one eviction per
-        // event. No need to wait for the periodic sample.
-        b.note_os_exhaustion(PressureKind::Fd);
-        b.note_os_exhaustion(PressureKind::Fd);
-        b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
-        assert_eq!(drain(&mut b).len(), 1, "room was evicted at once");
-        assert_eq!(b.ledger.occupancy().0, 5);
-        // The scheduled sample lifts the cap again.
-        b.tick_with(at(base, 120_000), Some(fd_limit_1000()), true);
-        assert_eq!(b.total_budget().expect("derived").limits.total, 500);
-    }
+        assert!(drain(&mut b).is_empty());
 
-    #[test]
-    fn swarm_errors_feed_pressure_through_on_swarm_event() {
-        let base = Instant::now();
-        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
-        for n in 0..5usize {
-            b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
-        }
         let io = std::io::Error::from_raw_os_error(FD_CODES[0]);
         let err = DialError::Transport(vec![(wan(), TransportError::Other(io))]);
         b.on_swarm_event(FromSwarm::DialFailure(
@@ -1656,7 +1662,29 @@ mod tests {
         ));
         assert_eq!(b.pressure_events, 1);
         b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
-        assert_eq!(b.ledger.occupancy().0, 4);
+        let pressured = b.total_budget().expect("pressure-derived");
+        assert_eq!(
+            pressured.limits.total, 5,
+            "floor is authenticated occupancy"
+        );
+        assert_eq!(b.ledger.live_paths(&contact), 1);
+        assert_eq!(
+            drain(&mut b).len(),
+            1,
+            "an untrusted idle path is shed first"
+        );
+        assert_eq!(b.ledger.occupancy().0, 5);
+
+        b.tick_with(at(base, 120_000), Some(fd_limit_1000()), true);
+        assert_eq!(
+            b.total_budget().expect("resource-derived").limits.total,
+            500
+        );
+        assert_eq!(
+            b.ledger.live_paths(&contact),
+            1,
+            "established message path survives recovery"
+        );
     }
 
     #[test]

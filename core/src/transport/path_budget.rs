@@ -43,15 +43,13 @@
 //!
 //! # Total bound
 //!
-//! [`PathLedger::evict_over_total`] enforces a resource-derived bound across
-//! ALL peers (see `conn_resources`). Above the bound the lowest-value paths
-//! are evicted, never refused. Value, lowest first: peers with no authenticated
-//! history (not a saved contact, no positive reputation), then paths with no
-//! VALIDATED protocol traffic (raw request receipt proves nothing: only traffic
-//! the swarm validated is stamped), then paths outside grace, then redundant
-//! paths of multi-path peers, then lowest local reputation (unknown is lowest),
-//! then youngest. Selection is a partial selection (`select_nth_unstable_by`),
-//! not a full sort, and occupancy is kept in incremental counters.
+//! [`PathLedger::evict_over_total`] applies the dynamic resource-derived soft
+//! allowance across ALL peers (see `conn_resources`). Low-value paths are
+//! evicted, never refused. Authenticated peers and recent validated traffic
+//! rank above untrusted or stale paths; validated-traffic protection expires
+//! according to local liveness/handshake evidence. Selection is a partial
+//! selection (`select_nth_unstable_by`), not a full sort, and occupancy is kept
+//! in incremental counters.
 //!
 //! When `used` (live, non-closing paths) exceeds a peer's budget the surplus is
 //! evicted, worst first:
@@ -398,9 +396,48 @@ struct Path<I> {
     ping: LiveSource,
     identify: LiveSource,
     ping_failed: bool,
-    /// Protocol traffic (message protocol, ledger exchange, reflection) seen.
-    traffic: bool,
+    /// Most recent protocol traffic validated by the swarm. This is time-bound
+    /// evidence: stale traffic must not pin a Sybil path indefinitely.
+    last_validated_traffic: Option<Instant>,
     closing: Option<Closing>,
+}
+
+/// Whether a path's most recent validated message still demonstrates useful
+/// activity. Prefer its measured ping/identify cadence (or its peer's measured
+/// cadence); before one exists, use the locally derived handshake grace.
+fn has_recent_validated_traffic<I>(
+    path: &Path<I>,
+    now: Instant,
+    peer_ping: Option<Duration>,
+    peer_identify: Option<Duration>,
+) -> bool {
+    let cadence = path
+        .ping
+        .interval
+        .or(peer_ping)
+        .into_iter()
+        .chain(path.identify.interval.or(peer_identify))
+        .max();
+    let freshness = cadence
+        .map(|interval| (interval * SILENCE_INTERVALS).max(EVAL_QUANTUM))
+        .unwrap_or(path.grace * SILENCE_INTERVALS)
+        .max(EVAL_QUANTUM);
+    path.last_validated_traffic
+        .is_some_and(|at| now.saturating_duration_since(at) <= freshness)
+}
+
+fn peer_liveness_intervals<I>(paths: &[Path<I>]) -> (Option<Duration>, Option<Duration>) {
+    let ping = paths
+        .iter()
+        .filter(|path| path.closing.is_none())
+        .filter_map(|path| path.ping.interval)
+        .max();
+    let identify = paths
+        .iter()
+        .filter(|path| path.closing.is_none())
+        .filter_map(|path| path.identify.interval)
+        .max();
+    (ping, identify)
 }
 
 /// What `on_closed` learned about the path that just closed.
@@ -718,7 +755,7 @@ impl Counts {
         if path.meta.uses_fd {
             self.live_fd += 1;
         }
-        if path.traffic {
+        if path.last_validated_traffic.is_some() {
             self.active += 1;
         }
     }
@@ -728,7 +765,7 @@ impl Counts {
         if path.meta.uses_fd {
             self.live_fd = self.live_fd.saturating_sub(1);
         }
-        if path.traffic {
+        if path.last_validated_traffic.is_some() {
             self.active = self.active.saturating_sub(1);
         }
     }
@@ -851,7 +888,7 @@ where
             ping: LiveSource::default(),
             identify: LiveSource::default(),
             ping_failed: false,
-            traffic: false,
+            last_validated_traffic: None,
             closing: None,
         };
         self.counts.add_live(&path);
@@ -940,15 +977,18 @@ where
 
     /// Live paths worth protecting under resource pressure, and how many of
     /// them own a descriptor: paths of authenticated peers, plus paths that
-    /// carried validated traffic. O(paths); called once per pressure episode,
-    /// never from the hot path.
-    pub fn protected_paths(&self) -> (usize, usize) {
+    /// recently validated traffic. O(paths); called only during resource
+    /// recomputation, never from the hot path.
+    pub fn protected_paths(&self, now: Instant) -> (usize, usize) {
         let mut total = 0;
         let mut fd = 0;
         for (peer, paths) in &self.peers {
             let authenticated = self.trust.get(peer).is_some_and(|t| t.authenticated);
+            let (peer_ping, peer_identify) = peer_liveness_intervals(paths);
             for path in paths.iter().filter(|p| p.closing.is_none()) {
-                if authenticated || path.traffic {
+                if authenticated
+                    || has_recent_validated_traffic(path, now, peer_ping, peer_identify)
+                {
                     total += 1;
                     if path.meta.uses_fd {
                         fd += 1;
@@ -959,8 +999,12 @@ where
         (total, fd)
     }
 
-    /// Enforce the resource-derived bound across ALL peers by EVICTING the
-    /// lowest-value paths (never by refusing a connection). Value, lowest first:
+    /// Enforce the dynamic resource-derived soft allowance across ALL peers by
+    /// evicting low-value paths. Authenticated contacts and recent validated
+    /// traffic rank above untrusted or stale paths, but a peer's sole useful path
+    /// remains when no safer victim exists. The effective allowance retains
+    /// currently useful paths; pressure or stale traffic cannot force a hard
+    /// cutoff of an established message flow. Value, lowest first:
     ///
     /// 1. peer without authenticated history (not a saved contact, no positive
     ///    reputation): authenticated peers go last
@@ -972,11 +1016,11 @@ where
     /// 6. youngest first, so Sybil churn evicts itself
     ///
     /// Ranking is a hint. The gate is live: the last remaining path of a peer
-    /// is evicted only if it is unauthenticated, carries no traffic, is past
-    /// grace, and the peer did not start this call with several paths. Victim
-    /// selection tracks each peer's remaining live paths as it evicts, so one
-    /// call can never take an authenticated peer's last path, nor drop a peer
-    /// that had several paths to zero.
+    /// is evicted only if it is unauthenticated, has no recent validated traffic,
+    /// is past grace, and the peer did not start this call with several paths.
+    /// Victim selection tracks each peer's remaining live paths as it evicts,
+    /// so one call can never take an authenticated peer's last path, nor drop a
+    /// peer that had several paths to zero.
     ///
     /// `keep` (the connection that triggered the check) is never chosen.
     ///
@@ -984,6 +1028,15 @@ where
     /// growing windows, so the cost is O(paths) plus O(k log k) for the k
     /// victims, not a full O(paths log paths) sort per call.
     pub fn evict_over_total(
+        &mut self,
+        limits: TotalLimits,
+        now: Instant,
+        keep: Option<I>,
+    ) -> Vec<Eviction<C, I>> {
+        self.evict_over_total_with_policy(limits, now, keep)
+    }
+
+    fn evict_over_total_with_policy(
         &mut self,
         limits: TotalLimits,
         now: Instant,
@@ -1025,6 +1078,7 @@ where
             let live = paths.iter().filter(|p| p.closing.is_none()).count();
             remaining.insert(*peer, live);
             let trust = self.trust.get(peer).copied().unwrap_or_default();
+            let (peer_ping, peer_identify) = peer_liveness_intervals(paths);
             for path in paths.iter().filter(|p| p.closing.is_none()) {
                 if keep == Some(path.id) {
                     continue;
@@ -1033,7 +1087,7 @@ where
                     peer: *peer,
                     id: path.id,
                     authenticated: trust.authenticated,
-                    traffic: path.traffic,
+                    traffic: has_recent_validated_traffic(path, now, peer_ping, peer_identify),
                     protected: now < path.established_at + path.grace,
                     sole: live <= 1,
                     peer_live: live,
@@ -1154,10 +1208,10 @@ where
         });
         if let Some(path) = found {
             path.last_activity = now;
-            if !path.traffic {
-                path.traffic = true;
+            if path.last_validated_traffic.is_none() {
                 self.counts.active += 1;
             }
+            path.last_validated_traffic = Some(now);
         }
     }
 
@@ -2134,9 +2188,8 @@ mod tests {
         // Honest contact: authenticated history, completely idle.
         ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
         ledger.note_authenticated(1);
-        // Sybils that hammered us with requests: traffic stamped (as a naive
-        // receiver would) but no authenticated history. A sole path carrying
-        // traffic is pinned, so these stay while the bound is soft.
+        // Sybils with recent traffic but no authenticated history; the bounded
+        // recent-traffic window affects rank only while it remains fresh.
         for n in 0..20u32 {
             let id = 100 + n;
             ledger.on_established(
@@ -2148,7 +2201,7 @@ mod tests {
             );
             ledger.stamp_traffic(&id, &id, at(base, 2_000));
         }
-        // Trafficless, unauthenticated Sybils remain evictable.
+        // Trafficless, unauthenticated Sybils remain the first eviction targets.
         for n in 0..10u32 {
             let id = 200 + n;
             ledger.on_established(
@@ -2159,12 +2212,118 @@ mod tests {
                 at(base, 1_000 + u64::from(n)),
             );
         }
-        let ev = ledger.evict_over_total(TotalLimits { total: 5, fd: 5 }, at(base, 60_000), None);
+        let ev = ledger.evict_over_total(TotalLimits { total: 5, fd: 5 }, at(base, 3_000), None);
         assert_eq!(ev.len(), 10);
         assert!(ev.iter().all(|e| (200..210).contains(&e.id)), "{ev:?}");
         assert!(!ev.iter().any(|e| e.id == 1), "the idle contact is kept");
-        assert_eq!(ledger.occupancy().0, 21, "soft bound: pinned paths stay");
+        assert_eq!(ledger.occupancy().0, 21, "recent traffic remains protected");
         assert!(ledger.counters_consistent());
+    }
+
+    #[test]
+    fn traffic_protection_tracks_measured_liveness_and_expires() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        ledger.on_established(1, 1, PathClass::WanV4, rtt(), base);
+        ledger.stamp_traffic(&1, &1, base);
+        assert_eq!(ledger.protected_paths(at(base, 10_000)), (0, 0));
+
+        // A measured ping cadence adapts the dynamic freshness allowance.
+        for ms in [15_000, 30_000] {
+            ledger.stamp_ping(&1, &1, at(base, ms));
+        }
+        assert_eq!(ledger.protected_paths(at(base, 30_000)), (1, 1));
+        assert_eq!(ledger.protected_paths(at(base, 75_001)), (0, 0));
+    }
+
+    #[test]
+    fn stale_traffic_from_long_lived_sybil_paths_does_not_pin_them() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        for id in 1..=8u32 {
+            ledger.on_established(id, id, PathClass::WanV4, rtt(), at(base, u64::from(id)));
+            ledger.stamp_traffic(&id, &id, at(base, 100));
+        }
+
+        let now = at(base, 60_000);
+        assert_eq!(ledger.protected_paths(now), (0, 0));
+        let ev = ledger.evict_over_total(TotalLimits { total: 2, fd: 2 }, now, None);
+        assert_eq!(ev.len(), 6, "stale traffic is no longer eviction immunity");
+        assert_eq!(ledger.occupancy(), (2, 2));
+        assert!(ledger.counters_consistent());
+    }
+
+    #[test]
+    fn new_peer_burst_sheds_untrusted_paths_but_keeps_live_message_flow() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        let contact = 0u32;
+        ledger.on_established(contact, 0, PathClass::WanV4, rtt(), base);
+        ledger.note_authenticated(contact);
+        ledger.stamp_traffic(&contact, &0, at(base, 1));
+        let mut newest_peer = 1u32;
+
+        for id in 1..=30u32 {
+            newest_peer = id;
+            ledger.on_established(
+                id,
+                id,
+                PathClass::WanV4,
+                rtt(),
+                at(base, u64::from(id) * 10),
+            );
+        }
+
+        let ev = ledger.evict_over_total(TotalLimits { total: 8, fd: 8 }, at(base, 60_000), None);
+        assert_eq!(ledger.occupancy().0, 8, "low-value burst paths are shed");
+        assert_eq!(
+            ledger.live_paths(&contact),
+            1,
+            "live authenticated flow survives"
+        );
+        assert_eq!(
+            ledger.live_paths(&newest_peer),
+            0,
+            "youngest untrusted arrival is shed first"
+        );
+        assert!(ev.iter().all(|item| item.peer != contact));
+    }
+
+    #[test]
+    fn dynamic_resource_bound_tracks_current_pressure_and_recovers() {
+        let mut model = super::super::conn_resources::ResourceModel::new();
+        let snapshot = super::super::conn_resources::ResourceSnapshot {
+            fd_soft_limit: Some(1_000),
+            mem_available: None,
+            rss: None,
+        };
+        let occupancy = super::super::conn_resources::Occupancy {
+            total: 120,
+            fd: 120,
+            active: 1,
+            protected: 1,
+            protected_fd: 1,
+        };
+        let normal = model
+            .derive(&snapshot, occupancy, 1_000)
+            .expect("resource-derived");
+        assert_eq!(normal.limits.total, 500);
+        model.note_pressure(super::super::conn_resources::PressureKind::Fd, occupancy);
+        let pressured = model
+            .derive(&snapshot, occupancy, 1_000)
+            .expect("pressure-derived");
+        assert_eq!(
+            pressured.limits.total, 90,
+            "three quarters of live paths, floored at the live useful path"
+        );
+        model.clear_pressure();
+        let recovered = model
+            .derive(&snapshot, occupancy, 1_000)
+            .expect("recovered resource-derived");
+        assert_eq!(
+            recovered.limits.total, 500,
+            "fresh sample recovery restores observed allowance"
+        );
     }
 
     #[test]
