@@ -15,7 +15,12 @@ are independent and additive — a Codex wall never touches the
 Freebucks balance and vice versa. Plan against both at full size.
 
 Engine A — Codex via the connected ChatGPT account (inside Freebuff),
-model GPT-6 Luna. THE WORKHORSE: carries all lanes by default.
+model GPT-6 Luna. THE ENDURANCE ENGINE (the workhorse): carries all
+lanes by default. It is metered in TOKENS (the 5h + weekly windows
+below) but its sessions have NO time limit — a session runs as long
+as it needs to run. So Engine A is spent on wall-clock, not tokens:
+work that waits, paces, supervises, and judges (see the ALLOCATION
+DOCTRINE below).
 - Why Luna: verified against OpenAI's Codex pricing figures —
   Luna fits ~350–3,000 local messages per 5-hour window vs
   ~5–45 for GPT-6 Astra. One to two orders of magnitude more lane
@@ -42,7 +47,13 @@ per hour, so the daily 250 buys ~12.5 hours of native Luna —
 a full second Luna engine that owes nothing to the Codex
 windows. The roster also includes GPT-6.1 Sol (sometimes),
 Gemini 4 Argon, and Muse Spark 1.3 (owner-reported) for
-one-off specialist needs. THE OVERFLOW + SPECIALIST engine:
+one-off specialist needs. THE THROUGHPUT ENGINE (owner-confirmed
+2026-10-19): a Freebuff session is ONE HOUR, hard-ended — but
+tokens inside that hour are UNMETERED. Engine B is therefore
+metered in TIME, not tokens, the exact opposite of Engine A,
+and it is spent on token density: pre-planned execution bursts
+that produce the maximum work per session-hour (ALLOCATION
+DOCTRINE below). It remains the overflow engine secondarily:
 - One-off needs, single-role bursts, and any work that arrives
   while Engine A is walled.
 - Hour-block discipline from WINDOWS-24-7.md still applies:
@@ -52,6 +63,93 @@ one-off specialist needs. THE OVERFLOW + SPECIALIST engine:
 Engine C — Freebuff's cheap/unmetered lanes (MiMo Flash Slow etc.)
 for Shepherd-class work: watching CI, polling, journal upkeep —
 judgment-light work that should never burn Luna quota.
+
+WORK ALLOCATION DOCTRINE (owner, 2026-10-19)
+The engines are metered on opposite axes, so work is allocated
+by axis, never by habit:
+- Engine A is metered in TOKENS and unlimited in TIME. Spend
+  its wall-clock freely and its tokens stingily: assignments
+  whose hours are dominated by waiting (CI shepherding — poll,
+  sleep, act rarely; gate runs; merge-train pacing; watch
+  loops) plus the judgment work only it should do (planning,
+  reviews, staging burst plans). Slow, sleep-heavy, low-token
+  work is what keeps Engine A alive around the clock.
+- Engine B is metered in TIME (one hour, hard end) and
+  unlimited in TOKENS inside the hour. Spend its tokens
+  maximally and its minutes never on waiting: dense,
+  pre-decided execution only. A burst hour spent thinking is
+  wasted; a burst hour spent waiting is theft — the hour ends
+  either way.
+
+CLASSIFY EVERY QUEUE ITEM on two axes before assignment:
+- TOKEN DENSITY: output tokens per minute of work. High =
+  bulk generation, large refactors, test suites, doc sweeps,
+  mechanical transforms across many files.
+- DECISION DENSITY: judgments per step. High = design,
+  review verdicts, debugging unknowns.
+High token / low decision -> BURST QUEUE (Engine B).
+Low token-rate, long-duration, or high decision -> SLOW LANE
+(Engine A). An item high on BOTH is SPLIT: the slow lane
+decides it into a staged plan first; the execution half then
+goes to the burst queue. Default role mapping: Shepherd and
+Landing ride the slow lane (few actions, long CI waits);
+Reviewer and planning ride the slow lane (judgment); bulk
+Implementer work rides bursts; Engine C keeps the pure-watch
+work it already has.
+
+THE BURST PROTOCOL (one Engine B session, 60 minutes, hard end)
+1. NEVER start a burst without a staged BURST PLAN. With no
+   plan ready, the burst runs fallback catalog work only
+   (test generation, docs, mechanical sweeps from the
+   standing fallback list) — never open-ended exploration.
+2. Mission settings for a burst: effort 3 (the 60-minute
+   target matches the session length), mission text = the
+   burst pointer in MISSION-PROMPT.md Part 0's family: read
+   the staged plan, execute it in order, checkpoint as below.
+3. Inside the hour: NO questions (a blocker goes to the
+   journal / OWNER QUEUE and the session moves to the next
+   plan item); NO design decisions (a plan gap is logged and
+   given the smallest safe reading, or the item is skipped);
+   push at least every 10 minutes; items strictly in plan
+   order; a stuck item gets ONE retry, then skip-and-log —
+   never sink the hour into a single item.
+4. The last 5 minutes are reserved, always: start nothing
+   new, push everything, write the BURST HANDOFF into the
+   journal and state docs — items done with commit ids,
+   items skipped and why, plan gaps found, verification
+   state. The hour ending mid-item is normal and expected;
+   the handoff is what makes the cutoff free.
+5. After the burst, the SLOW lane reviews the burst output
+   (Jev gate + review pass — bursts never review their own
+   work; authorship exclusion already demands this), queues
+   fixes, and stages the next burst plan.
+
+THE BURST PLAN (written by the slow lane: token-cheap to make,
+token-dense to execute). An ordered list of fully-specified
+items — exact files, exact change, exact acceptance check per
+item — sized to OVERFILL 60 minutes by ~25%. Overfill is free:
+a plan that runs dry mid-hour burns unmetered tokens on
+nothing, while the remainder simply carries into the handoff
+and the next plan. Every plan ends with the fallback catalog
+pointer for gaps.
+
+SLOW-LANE PACING + THE BURST FACTORY: the slow lane batches
+its status checks (one poll per ~10 minutes, never per
+minute), prefers assignments with built-in sleeps, and shapes
+its token burn to the window (scheduler table rows 3-5).
+Standing duty: AT LEAST ONE staged burst plan is ready at all
+times. A burst hour lost because no plan existed is a
+scheduling failure charged to the slow lane and journaled as
+such — the plan factory is part of the slow lane's job, not
+an afterthought.
+
+PARALLELISM: bursts run SERIALLY by default. The day's
+Freebucks buy a fixed count of session-hours (250/day at
+Luna's 20/hour = ~12.5), and parallel bursts spend the same
+hours faster for zero extra tokens — tokens inside each hour
+are already unmetered, so parallelism buys wall-clock only.
+Run parallel bursts only against a hard deadline, recorded
+as an owner-visible journal decision.
 
 USAGE TELEMETRY (the scheduler's eyes — scripted, zero agent time)
 - Source of truth: Codex `/status` — shows 5-hour % left, weekly
@@ -128,7 +226,12 @@ The split is by phase, and it is absolute:
   waiting for a reset from inside a metered session.
 - The vision driver is the watchdog's hands, never a third
   driver: it performs watchdog-decided actions (wall watch,
-  status reads, reset click) and originates nothing.
+  status reads, reset click) and originates no work and no
+  strategy. Its one judgment duty is bounded: resolving
+  blocking UI decisions through the DECISION ESCALATION
+  PROTOCOL below — Jev decides from repo canon, the driver
+  clicks. Anything outside the protocol's authority is
+  parked and escalated, never improvised.
 MID-RUN WALL DISCIPLINE (the running session's own duty)
 Walls do not only arrive between sessions. Telemetry updates as
 messages flow, so a session deep in a long build can cross 90%
@@ -172,6 +275,14 @@ the watchdog evaluates top-to-bottom, first matching row wins)
     ends wherever it stands; the cycle's checkpoint rule is the
     only protection, which is why cycles keep work pushed at
     every step boundary, not just at cycle end.
+11. ALLOCATION (refines rows 3 and 5): within any spawn, work
+    is assigned per the ALLOCATION DOCTRINE — burst-queue
+    items launch on Engine B when a staged burst plan exists;
+    slow-lane items launch on Engine A; an Engine B spawn with
+    no staged plan runs fallback catalog work only. If Engine
+    B hours remain today and no burst plan is staged, the
+    slow lane's next cycle stages one before anything else
+    optional.
 
 COMPONENT SPEC — usage-ledger.ps1 (new; ~120 LoC PowerShell)
 - Runs from the same 10-min Task Scheduler cadence as watchdog.
@@ -264,7 +375,10 @@ spawning covers headless starts; the vision driver covers
 everything the app can't do for itself: a session sitting at a
 limit banner, a stalled mission tab that needs its
 pick-it-back-up message, a "Use reset" button that needs
-clicking on the ChatGPT usage page.
+clicking on the ChatGPT usage page, and the Continue prompts
+and decision pop-ups that freeze a lane mid-work — including
+answering those pop-ups, through Jev, when the repo's own
+philosophy already contains the answer.
 - Build line (already in flight, harness repo): driver-core
   screenshot -> Jev judgment -> action, per docs/hourglass-vision.md
   and the computer-control plan (issues #270-273: launch_app, NL
@@ -275,33 +389,85 @@ clicking on the ChatGPT usage page.
   1. WALL WATCH: recognize the Codex/Freebuff limit screens;
      confirm the session checkpointed; record the wall; do NOT
      click through or retry — schedule the resume.
-  2. MISSION FEEDING: Buffy auto-continues a mission tab on its
+  2. CONTINUE + POP-UP ADJUDICATION: click Continue/resume
+     prompts so lanes never sit frozen at a banner, and answer
+     decision pop-ups through the DECISION ESCALATION PROTOCOL
+     (below) — the driver is how a lane gets its blocking
+     question answered at 3am without a human and without
+     guessing.
+  3. MISSION FEEDING: Buffy auto-continues a mission tab on its
      own — feeding is needed only when the tab reports the
      built-in failure state ("Mission couldn't get a decision…
      Send a message to pick it back up") or sits idle with queue
      remaining: then the driver sends the pick-it-back-up message
      (or the next-cycle prompt for non-mission sessions), so no
      human nudges a stalled tab at 3am.
-  3. STATUS READS: /status card + Freebucks balance as telemetry
+  4. STATUS READS: /status card + Freebucks balance as telemetry
      fallback (above).
-  4. RESET REDEMPTION: on the usage page, click "Use reset" —
+  5. RESET REDEMPTION: on the usage page, click "Use reset" —
      only when auto-redeem is armed and the remaining-%
      threshold has fired (above).
-  5. HUNG-SESSION EVIDENCE: screenshot the stuck state into the
+  6. HUNG-SESSION EVIDENCE: screenshot the stuck state into the
      journal BEFORE the watchdog's PID reap, so a kill leaves a
      diagnosis, not a mystery.
-- Every vision judgment that triggers an ACTION is Jev-gated
-  (>= 0.85 floor from the vision plan; >= 0.90 for the reset
-  click and for declaring a session hung). A judgment below bar
-  means the driver does nothing and journals the screenshot —
-  a vision driver that guesses is worse than none.
+
+DECISION ESCALATION PROTOCOL (how a blocking pop-up gets
+answered without a human — and when it must not be)
+A lane blocked on a UI decision is burning its window on
+nothing. The driver answers these in three classes:
+- CLASS 1, MECHANICAL: Continue / resume / dismiss / retry
+  prompts whose only effect is letting the lane keep doing
+  what it was already doing. The driver clicks on screen
+  recognition alone (Jev vision >= 0.85). No escalation —
+  a Continue click decides nothing new.
+- CLASS 2, JUDGMENT: a pop-up that chooses between real
+  options (approaches, scopes, approval of a next step,
+  which file/plan/test to proceed with). The driver assembles
+  a CONTEXT PACKET — screenshot, the pop-up's exact text and
+  options, the lane's current objective and queue item from
+  the state docs, and the governing canon excerpts (roles
+  DEFINITIONS, the repo plan docs, the linked issue/PR) —
+  and puts it to Jev through the harness driver stack. This
+  is the pre-ask check, mechanized: does the repo's
+  philosophy yield ONE correct, safe, aligned answer from
+  this context? The driver clicks only when Jev returns
+  that answer at >= 0.95 calibrated confidence. Below the
+  bar — or when two options are both defensible, which means
+  it is a genuine fork, not a pop-up — the driver does NOT
+  guess: screenshot, journal the packet, park ONLY that lane
+  at the decision (other lanes keep working), and route it:
+  OWNER QUEUE if it is a genuine end-state or ramifications
+  call, otherwise to the lane's next live session, which
+  decides with full session context.
+- CLASS 3, NEVER THE DRIVER'S: anything on the owner-only
+  hard lines (spend, payments, keys/credentials, branch
+  deletion without the purge audit, HV-0), anything
+  destructive or irreversible (force-push, delete, send,
+  publish), and anything the canon does not cover at all.
+  Screenshot, journal, OWNER QUEUE, park the lane. No Jev
+  score overrides this class: Jev adds reasons to escalate;
+  it never manufactures authority.
+Every Class 2 and 3 event is journaled with its packet,
+verdict, and confidence — the audit trail is what makes
+autonomous clicking reviewable after the fact. Every click
+is verified with a post-click screenshot; if the resulting
+state contradicts the expected one, the driver stops
+touching that lane, journals the mismatch, and escalates —
+it never clicks its way out of a surprise.
+
+GENERAL RULE, unchanged: every vision judgment that triggers
+an ACTION is Jev-gated (>= 0.85 floor from the vision plan;
+>= 0.90 for the reset click and for declaring a session hung).
+A judgment below bar means the driver does nothing and
+journals the screenshot — a vision driver that guesses is
+worse than none.
 - Degraded mode: until the vision driver lands on the box, the
   watchdog + CLI spawn path (WINDOWS-24-7 Layer 1/2) runs the
   whole system; mission feeding is done by Freebuff's own
   mission mode internally, and walls are detected from
   usage.json + heartbeat staleness instead of screenshots.
   Nothing in this document waits on the vision driver except
-  duties 2-4 being fully hands-free.
+  duties 2, 3, 5 and 6 being fully hands-free.
 
 A WALL NIGHT, WORKED EXAMPLE (illustrative, from the rules above)
 23:10 — Implementer is mid-batch; usage.json shows 5h at 88%,
