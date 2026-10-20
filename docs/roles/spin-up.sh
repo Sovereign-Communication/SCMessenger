@@ -19,7 +19,7 @@ case "${1:-}" in
   implementer|landing|shepherd|reviewer|overseer)
     echo "=== Paste everything below into a new Freebuff session (role: ${1}) ==="
     echo
-    cat "$DIR/${1}.md"
+    cat "$DIR/prompts/${1}.md"
     ;;
   -h|--help|help)
     usage

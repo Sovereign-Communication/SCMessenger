@@ -74,44 +74,95 @@ gate returns to the Implementer as a routed work item.
 
 ## Files
 
-- `DESIGN.md` — the full design (v7): problem, principles, roles,
+Canon (read in this order):
+
+- `DESIGN.md` — the full design (v8): problem, principles, roles,
   truth/fencing, failover playbook, main-health ownership, warm-handoff
   journal, OWNER QUEUE.
-- `DEFINITIONS.md` — full role definitions + message catalog + PR state
-  machine + conformance suite (C1–C12).
-- `shared-protocol.md` — canonical message catalog, state machine,
-  conformance.
-- `prompts/` — the Freebuff launch prompts, one per role. Each is
-  self-contained: paste it alone into a new Freebuff session.
-- `overseer.md` — the Overseer brief (failover playbook, conformance,
-  OWNER QUEUE). Not a Freebuff session.
+- `DEFINITIONS.md` — the normative layer: full role definitions, the
+  message catalog, the PR state machine (including the release
+  branch and close dispositions), conformance rules C1–C14. If DESIGN
+  and DEFINITIONS ever disagree, DEFINITIONS governs mechanics and
+  DESIGN governs intent.
+- `shared-protocol.md` — what every role session does the same way:
+  start-of-pass reads, checkpointing, journal and heartbeat etiquette,
+  escalation shape.
+- `CONTINUITY.md` — how roles exist when no session is running:
+  event-driven wakes, the duplicate-safe wake protocol, the 6-hour
+  audit backstop, watch/audit cross-supervision.
+- `WINDOWS-24-7.md` — running the lane sessions on the Windows box:
+  interactive-logon rule, watchdog, toolchain, power/standby settings.
+- `DUAL-ENGINE-24-7.md` — the two usage engines (Codex windows via
+  connected ChatGPT; Freebucks), the allocation doctrine (which work
+  rides which engine), the scheduler decision table, auto-redeem
+  arming, and the vision-driver duties incl. the decision escalation
+  protocol.
+- `MISSION-PROMPT.md` — the mission texts for Freebuff mission mode:
+  Part 0 (the ≤4,000-char paste text) and the burst variant, backed by
+  the repo-resident constitution.
+
+Launch artifacts:
+
+- `prompts/` — the Freebuff launch prompts, one per role
+  (`implementer.md`, `landing.md`, `shepherd.md`, `reviewer.md`,
+  `overseer.md`). Each is self-contained: paste it alone into a new
+  Freebuff session. The Overseer prompt is a brief for a function,
+  not a standing session.
 - `spin-up.sh` — prints any role's prompt: `./spin-up.sh landing`.
-- `state-seed.md` — the QUEUE / LEASES / HEARTBEATS / OPERATION JOURNAL /
-  OWNER QUEUE / AUTHORSHIP LOG sections to install in the canonical plan
-  doc.
+
+Runtime state:
+
+- `state-seed.md` — the QUEUE / LEASES / HEARTBEATS / OPERATION
+  JOURNAL / OWNER QUEUE / AUTHORSHIP LOG sections to install in the
+  canonical plan doc, with install instructions and the seeded
+  merge-train queue.
+
+## Terms in one breath
+
+- **Lease** — the recorded right to hold a role; carries an **epoch**
+  (a counter that increments on every handover, fencing out stale
+  holders).
+- **Train** — the merge queue Landing works strictly in order.
+- **OWNER QUEUE** — the only channel to Lucas; items are framed as
+  end-state or ramification questions, never technical ones.
+- **AUTHORSHIP LOG** — who wrote what; the basis for the rule that
+  nobody lands or reviews their own work.
 
 ## Spinning up (order matters)
 
 1. Install the state seed: if `docs/CANON_PLAN.md` does not yet carry the
-   sections from `state-seed.md`, that is Landing's first PR.
+   sections from `state-seed.md`, that is Landing's first PR (install
+   instructions are in `state-seed.md`, including how to handle #616
+   landing first).
 2. `./spin-up.sh landing` → paste into a new Freebuff session. Landing
    takes the lease and posts its first heartbeat.
 3. `./spin-up.sh implementer` → paste into a second Freebuff session.
 4. Shepherd and Reviewer spin up on demand (review requests carry the
    exact PR + head SHA).
 
+The system is **live** when all three are true: the seed is installed in
+`docs/CANON_PLAN.md`, the Landing lease is taken, and Landing's first
+heartbeat is posted. Until then the incumbent lane keeps its queue.
+
 ## Jev evidence
 
-The design went through 7 Jev assessment rounds (Choice-identified weakest
-link → fix → re-score), ending at completeness 93, risk coverage 97,
-boundary clarity 98, soundness 87 (plateau on a partly-predictive aspect —
-reported honestly, not ground further). The role definitions went through
-7 more: completeness 97, cohesion 90, gap-freedom 95, enforceability 89
-(+28 from v1). Real catches along the way: the Reviewer had no requester,
-the AUTHORSHIP LOG had no writer, advisory triage / branch hygiene / doc
-pruning were owned by nobody, and two Landing helpers could race on main
-(single-merger rule added). Full design and definitions histories are in
-`DESIGN.md` and `DEFINITIONS.md`.
+This package was built and revised under the unified Jev gate:
+repeated assessment rounds (Choice to find the weakest link → fix →
+re-score), including a full-package campaign for this PR in which
+every document was scored on four tailored aspects and revised
+against the results — structure de-duplicated (SHARED no longer
+copies DEFINITIONS), the state machine completed (CLOSED
+dispositions, head-move re-review, lease messages), the seed
+rebuilt as a derivation procedure with a diff-checked snapshot, and
+the mission prompt reconciled with the verified Freebuff mechanics.
+Final per-aspect scores for every document are recorded in the
+closing comment on PR #617 — they live there, not here, so this
+README cannot go stale against them. Real catches along the way:
+the Reviewer had no requester, the AUTHORSHIP LOG had no writer,
+advisory triage / branch hygiene / doc pruning were owned by
+nobody, two Landing helpers could race on main (single-merger rule
+added), and SHARED's copied catalog demonstrably drifted from
+DEFINITIONS within one editing session (de-duplication rule added).
 
 ## Adoption
 

@@ -32,7 +32,7 @@ their work.
    `lease revoked, reason: silent/stalled, time T`. The old holder is
    fenced out by the epoch rule even if it later wakes.
 3. **Spawn:** start a fresh session with the role prompt
-   (`~/workspace/scmessenger-roles/spin-up.sh <role>`) and one
+   (`docs/roles/spin-up.sh <role>`) and one
    instruction: read the state doc's QUEUE, LEASES, OPERATION JOURNAL,
    and last three HEARTBEATS, then take the lease at the new epoch.
 4. **Confirm:** the new holder's first heartbeat at the new epoch is the
@@ -46,28 +46,41 @@ If the Overseer function itself is the dead component, the 6h audit
 reports that directly to the owner — the audit does not depend on the
 Overseer.
 
-## Conformance (the audit runs C1–C12 verbatim each cycle)
+## Conformance (the audit runs the DEFINITIONS suite verbatim)
 
-- C1. Every merge in the window: actor ≠ author (AUTHORSHIP LOG + GitHub).
-- C2. Every merge: queue order respected; head-guard re-check recorded
-  in the journal.
-- C3. Every review-required merge: APPROVE verdict citing the merged head.
-- C4. Every VERDICT: independence declaration present; reviewer ≠ author.
-- C5. Every BOUNCED PR: comment names check, run ID, first failing step.
-- C6. Every REVIEW-REQUEST: REVIEW-STARTED followed, or orphan reported.
-- C7. Heartbeats: present per leased role per cycle; no role silent >2h
-  with work pending without a failover record.
-- C8. Doc sections edited only by their owner role (doc history).
-- C9. No transition occurred that the state machine does not list.
-- C10. OWNER QUEUE: no item older than one audit cycle without being
-  surfaced to the owner.
-- C11. Every published release: a GATE-VERDICT PASS artifact attached,
-  Jev-verified at ≥99/100, issued by a non-author Reviewer.
-- C12. Every tag: created only after its version-bump PR landed.
+The conformance suite is C1–C14 in `DEFINITIONS.md` — run it verbatim
+each audit cycle; do not work from a copied list (copies go stale; the
+suite in DEFINITIONS is the only normative one). Publish pass/fail per
+item, by role, in the audit report.
 
 Violations are reported by role and line in the audit. Two failures of
 the same item by the same leaseholder in consecutive audits ⇒ the
 Overseer revokes that lease.
+
+## The Overseer's own cycle (what each audit pass does, in order)
+
+An Overseer pass is triggered by the 6h audit, by a watch wake, or by
+an escalation; it is a checklist, not a session:
+
+1. **Liveness:** check every leased role's heartbeat age + stall rule;
+   run the failover playbook for any dead role.
+2. **Orphans:** check REVIEW-REQUEST / GATE-REQUEST entries for a
+   matching REVIEW-STARTED; re-spawn and report orphans.
+3. **Conformance:** run the DEFINITIONS suite over the window's
+   artifacts; record violations by role and line.
+4. **Truth check:** compare QUEUE/LEASES/journal state against GitHub;
+   flag every divergence as a doc bug for its owner role.
+5. **OWNER QUEUE:** surface every open item to the owner (C10);
+   record any answers as OWNER-RESOLVED, verbatim.
+6. **Spawn-failure ledger:** a wake whose spawn failed is retried on
+   the next cycle; three consecutive failed spawns for the same role
+   escalate to OWNER QUEUE — the only Overseer output that ever asks
+   the owner for anything, and it asks about state, not technique.
+7. **Cross-supervision:** verify the watch's liveness from its
+   event-processing watermarks; the watch in turn verifies the
+   audit's last-successful-run marker (CONTINUITY.md). If the audit
+   itself is impaired, report that to the owner directly — the audit
+   does not depend on the Overseer, and its absence is the alarm.
 
 ## OWNER QUEUE handling
 

@@ -14,23 +14,30 @@ Freebucks; Freebuff-native models burn ONLY Freebucks. The pools
 are independent and additive — a Codex wall never touches the
 Freebucks balance and vice versa. Plan against both at full size.
 
+Evidence classes used in this document: [code] = verified from the
+shipped Freebuff desktop code (v0.0.182); [web] = verified against
+the named public source; [owner] = owner-confirmed from Lucas's own
+account (no public source exists); [box] = only verifiable on the
+lane box, carried in the on-box checklist. Load-bearing numbers
+carry their class inline; the SOURCES appendix collects them.
+
 Engine A — Codex via the connected ChatGPT account (inside Freebuff),
 model GPT-6 Luna. THE ENDURANCE ENGINE (the workhorse): carries all
 lanes by default. It is metered in TOKENS (the 5h + weekly windows
-below) but its sessions have NO time limit — a session runs as long
+below) but its sessions have NO time limit [owner] — a session runs as long
 as it needs to run. So Engine A is spent on wall-clock, not tokens:
 work that waits, paces, supervises, and judges (see the ALLOCATION
 DOCTRINE below).
-- Why Luna: verified against OpenAI's Codex pricing figures —
-  Luna fits ~350–3,000 local messages per 5-hour window vs
-  ~5–45 for GPT-6 Astra. One to two orders of magnitude more lane
-  throughput per window; that is what makes 24/7 multi-lane work
-  fit inside a subscription at all.
-- Limit shape (account-shared, verified): a 5-hour window + a
+- Why Luna [web: OpenAI Codex pricing/usage figures]: Luna fits
+  ~350–3,000 local messages per 5-hour window vs ~5–45 for GPT-6
+  Astra. One to two orders of magnitude more lane throughput per
+  window; that is what makes 24/7 multi-lane work fit inside a
+  subscription at all.
+- Limit shape (account-shared) [web]: a 5-hour window + a
   weekly window, shared across EVERY Codex surface on the account
   (CLI, IDE, web, Freebuff connection) — parallel sessions do NOT
   multiply quota, they only spend it faster. Fast mode burns
-  included usage at ~2.5x — BANNED for lane work.
+  included usage at ~2.5x [web] — BANNED for lane work.
 - Banked resets: the account holds at least one banked "full
   reset" (restores BOTH windows). They expire; redeem late (when
   nearly out), never early — unused quota is lost at redemption.
@@ -359,9 +366,9 @@ SCHEDULING POLICY (watchdog-enforced, not session-enforced)
 
 RECOVERY — EXACTLY WHERE YOU LEFT OFF
 The mission prompt's checkpoint rule is the recovery mechanism:
-every cycle ends with work pushed, state docs updated, journal
-appended, and the next-cycle prompt written from the template.
-A limit wall is just an unscheduled cycle end: same checkpoint,
+every pass ends with work pushed, state docs updated, journal
+appended, and the end-of-pass handoff written from the template.
+A limit wall is just an unscheduled pass end: same checkpoint,
 plus LAST WALL (engine, limit, reset time from usage.json). The
 respawned session's first act is the state read — it resumes the
 recorded operation, never a reconstruction. Walls therefore cost
@@ -400,7 +407,7 @@ philosophy already contains the answer.
      built-in failure state ("Mission couldn't get a decision…
      Send a message to pick it back up") or sits idle with queue
      remaining: then the driver sends the pick-it-back-up message
-     (or the next-cycle prompt for non-mission sessions), so no
+     (or the Part 3 brief for spawned-mode sessions), so no
      human nudges a stalled tab at 3am.
   4. STATUS READS: /status card + Freebucks balance as telemetry
      fallback (above).

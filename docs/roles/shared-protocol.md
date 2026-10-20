@@ -1,8 +1,15 @@
-# Shared Protocol — SCMessenger Permanent Roles (canonical)
+# Shared Protocol — SCMessenger Permanent Roles
 
-This file is the canonical protocol. Every role prompt inlines its own
-slice of it; if a prompt and this file ever disagree, this file wins and
-the mismatch is a doc bug to fix on the spot.
+What every role session does the same way. This file is **behavioral**:
+how to start a pass, how to write state, how to checkpoint, how to
+escalate. The **normative** layer — the message catalog, the PR state
+machine, the conformance suite — lives in `DEFINITIONS.md` and is
+deliberately NOT copied here: two copies of a rule are a drift bug
+waiting for its audit. If this file and DEFINITIONS ever disagree,
+DEFINITIONS governs mechanics and this file's copy of any rule is the
+bug. Role prompts inline their own slices of this protocol; if a
+prompt and this file disagree, this file wins and the mismatch is a
+doc bug to fix on the spot.
 
 ## Substrate
 
@@ -10,147 +17,97 @@ the mismatch is a doc bug to fix on the spot.
 - State doc: `docs/CANON_PLAN.md` in the repo, sections: QUEUE, LEASES,
   HEARTBEATS, OPERATION JOURNAL, OWNER QUEUE, AUTHORSHIP LOG. Lessons
   live in `docs/EXPERIENCE.md` (PR #616).
-- GitHub is the source of truth for PR/CI state. The doc holds only what
-  GitHub cannot: intent, order, leases, reasons.
-- Every doc section has exactly ONE writer role. Every signal has a named
-  consumer. Roles never ask the owner technical questions; owner-bound
-  items go to OWNER QUEUE as end-state or ramification questions only.
-- Roles are functions, not sessions: a role is held under a lease with an
-  epoch number. Any capable session assumes a role by taking the lease;
-  one hat per session at a time; every assumption is logged.
-- Invariant: NOBODY LANDS OR REVIEWS THEIR OWN WORK. Authorship follows
-  the session (AUTHORSHIP LOG) across all hat changes.
+- GitHub is the source of truth for PR/CI state. The doc holds only
+  what GitHub cannot: intent, order, leases, reasons.
+- Every doc section has exactly ONE writer role (named in
+  DEFINITIONS). Every signal has a named consumer (the DEFINITIONS
+  message catalog). Roles never ask the owner technical questions;
+  owner-bound items go to OWNER QUEUE as end-state or ramification
+  questions only.
+- Roles are functions, not sessions: a role is held under a lease with
+  an epoch number. Any capable session assumes a role by taking the
+  lease; one hat per session at a time; every assumption is logged.
+- Invariant: NOBODY LANDS OR REVIEWS THEIR OWN WORK. Authorship
+  follows the session (AUTHORSHIP LOG) across all hat changes.
 
-## Message catalog
+## Start of every pass (all roles, in order)
 
-Every cross-role interface is one of these; fixed fields:
+1. Read LEASES and confirm your lease: your role, your epoch. If the
+   epoch in the doc is not the epoch you took, you are fenced — stop,
+   re-read state, and act only as the current doc directs.
+2. Read HEARTBEATS and the OPERATION JOURNAL: what the last holder
+   (possibly you) recorded as in flight — active batch, pending CI
+   waits, open bounces.
+3. Re-derive the live state you are about to act on from GitHub (PR
+   head SHAs, check-runs CI, review verdicts). The doc told you where
+   to look; GitHub tells you what is true. Any mismatch is a doc bug:
+   fix the doc entry as part of the pass and note it in the journal.
+4. Only then act. Every action cites the head SHA it was taken
+   against.
 
-- **READY** (Implementer → Landing, PR comment): PR, head SHA, green
-  checks, review-needed flag. Causes: Landing intake validation.
-- **QUEUED / NOT-READY** (Landing → Implementer, PR comment): QUEUE
-  position, or the exact validation discrepancy. Causes: PR enters QUEUE,
-  or Implementer repairs and re-issues READY.
-- **BOUNCED** (Landing → Implementer, PR comment + QUEUE): check name,
-  run ID, first failing step, head SHA tested. The Implementer must not
-  need to re-diagnose from scratch.
-- **RESPONDED** (Implementer → Landing, PR comment): `fixed in <sha>`
-  or `diagnosis: <text>`. Causes: PR re-enters intake.
-- **REVIEW-REQUEST** (Landing → Overseer, doc entry + PR comment): PR,
-  head SHA, protocol criteria met. Causes: Overseer spawns Reviewer.
-- **REVIEW-STARTED** (Reviewer → Landing, PR comment): request ID, head
-  SHA. Causes: Landing marks review in-flight in QUEUE.
-- **VERDICT** (Reviewer → all, PR comment): head SHA reviewed,
-  independence declaration (files/commits previously touched), APPROVE
-  or NEEDS_WORK with findings. NEEDS_WORK causes REVIEW-BLOCKED →
-  Implementer. Verdicts are commit-scoped: a new head voids the verdict.
-- **MAIN-RED / MAIN-GREEN** (Landing → all, doc + affected PR
-  comments): cause (ambient vs merge-caused), blocking check. MAIN-GREEN
-  only after verified green main. Causes: queue halt / resume.
-- **HEARTBEAT** (each leased role → Overseer, doc): role, epoch, ISO
-  time, queue counts, last action. Two stalled cycles → failover.
-- **OWNER-ITEM** (Overseer → owner, OWNER QUEUE): the end-state or
-  ramification question, what is blocked, what proceeds meanwhile.
-- **OWNER-RESOLVED** (Overseer → waiting role, OWNER QUEUE): the owner's
-  answer, verbatim. The waiting role records CONSUMED in its next
-  heartbeat; the blocked item re-enters its normal flow.
-- **LESSON** (any role → EXPERIENCE, doc): date, role, one-line lesson,
-  evidence link. Append-only; audit dedups.
-- **TAG-CREATED** (Landing → all, doc + repo): tag vX.Y.Z at SHA,
-  created after the version-bump PR landed.
-- **GATE-REQUEST** (Landing → Overseer, doc entry): tag, SHA, runbook
-  ref. Causes: Overseer spawns a Reviewer for the gate run.
-- **GATE-VERDICT** (Reviewer → all, release issue comment + doc):
-  GATE-PASSED (runbook exit 0, Jev ≥99/100, evidence attached) or
-  GATE-FAILED (failure report attached). Binding: publish allowed only
-  on GATE-PASSED.
+## Writing state (etiquette that keeps the substrate trustworthy)
 
-## PR state machine
+- Write only your own sections and your own heartbeat lines. Never
+  edit another role's entries — if one is wrong, journal the
+  discrepancy; its owner fixes it.
+- Timestamps are ISO-8601 UTC, always.
+- Append-only where the section is a log (HEARTBEATS, OPERATION
+  JOURNAL, AUTHORSHIP LOG, EXPERIENCE). Corrections are new lines,
+  never rewrites of history.
+- Every state-changing write names its cause: the message or event
+  that triggered it (READY, VERDICT, MAIN-RED, a wake, a wall).
+- Keep entries one-line-terse; narrative belongs in PR comments and
+  the journal's operation notes, not in state tables.
 
-A transition not listed here is a violation by definition; the audit
-checks artifacts against this table.
+## Messages — usage rules (the catalog itself is DEFINITIONS')
 
-- (none) → OPEN: Implementer opens the PR.
-- OPEN → READY: Implementer issues READY; precondition: named checks
-  green on the cited head.
-- READY → QUEUED: Landing issues QUEUED; precondition: intake validation
-  passed against live GitHub.
-- READY → OPEN: Landing issues NOT-READY naming the discrepancy.
-- QUEUED → IN-TRAIN: Landing journal entry; precondition: batch selected
-  and main green.
-- IN-TRAIN → REVIEW-PENDING: Landing issues REVIEW-REQUEST;
-  precondition: SECURITY_PROTOCOL criteria met.
-- REVIEW-PENDING → IN-TRAIN: Reviewer VERDICT APPROVE citing the current
-  head.
-- REVIEW-PENDING → REVIEW-BLOCKED: Reviewer VERDICT NEEDS_WORK.
-- REVIEW-BLOCKED → READY: Implementer RESPONDED + fresh READY (new head;
-  the old verdict is void).
-- IN-TRAIN → LANDED: Landing merges; preconditions: head-guard (main at
-  the verified SHA), APPROVE at this head if review was required;
-  postcondition: main verified green after the merge.
-- IN-TRAIN → BOUNCED: Landing issues BOUNCED; cause: CI red on the PR
-  head.
-- BOUNCED → READY: Implementer RESPONDED + READY.
-- BOUNCED → STUCK: Landing, on the second bounce for the same check;
-  requires a diagnosis note; exit only via Overseer release.
-- STUCK → QUEUED: Overseer releases after the diagnosis is addressed.
-- IN-TRAIN → QUEUED: Landing returns the PR when the head-guard fails
-  (main moved) or MAIN-RED is declared.
-- any state → HELD: owner decision only, recorded in OWNER QUEUE;
-  HELD → QUEUED: owner releases.
+- Post each message exactly where the DEFINITIONS catalog says it
+  lives (PR comment, doc entry, or both). A message posted in the
+  wrong place does not count as sent — its consumer will not see it.
+- Cite identifiers exactly: full PR number, exact head SHA, exact
+  check names. Never paraphrase a verdict, a failing check, or an
+  owner's answer (OWNER-RESOLVED carries the answer verbatim).
+- A message is a request or a record, never queue state by itself:
+  state changes happen only through the transitions in the
+  DEFINITIONS state machine, written by the role that owns them.
+- If you are about to invent a signal that is not in the catalog,
+  stop: either an existing message carries it, or it is a
+  DEFINITIONS change (propose it in the journal; the Overseer routes
+  it as a doc PR).
 
-MAIN-RED is a global flag, not a PR state: while set, no QUEUED →
-IN-TRAIN or IN-TRAIN → LANDED transition may occur.
+## Checkpointing
 
-## Release gate extension (three-node policy, issue #603)
+- Push work and write state at every **step boundary** (each commit,
+  each CI wait, each subagent or review return) — not only at pass
+  end. A session can die at any moment; the journal is the handoff.
+- End every pass with: heartbeat posted, journal current (active
+  operation, next step named), leases untouched unless you took or
+  released one.
+- At a usage wall (Codex window or Freebucks session end): the
+  checkpoint IS the last act — journal the exact step reached and
+  the wall's reset time, then stop. Never retry against a wall.
+  (Scheduling and walls: `DUAL-ENGINE-24-7.md`.)
 
-A release publishes ONLY if the tri-node verification gate passes.
-Runbook: `docs/runbooks/TRI_NODE_VERIFY.md`; exit 0 = verified; the gate
-verdict itself must be Jev-verified at 99/100. The Reviewer owns the
-gate; Landing owns tag + publish; on GATE-FAILED the failure report
-becomes an Implementer work item routed by Landing.
+## Escalation shape
 
-- LANDED (version-bump PR) → TAGGED: Landing creates the tag;
-  precondition: version-bump PR merged, no unlanded PRs in the release
-  scope.
-- TAGGED → GATE-RUNNING: Overseer spawns a Reviewer for the gate run
-  (from Landing's GATE-REQUEST).
-- GATE-RUNNING → GATE-PASSED: Reviewer issues GATE-VERDICT PASS
-  (runbook exit 0, Jev-verified ≥99/100).
-- GATE-PASSED → PUBLISHED: Landing publishes the release; postcondition:
-  release published with the verdict artifact attached.
-- GATE-RUNNING → GATE-FAILED: Reviewer issues GATE-VERDICT FAIL with
-  the failure report attached.
-- GATE-FAILED → Implementer work item: Landing routes the failure
-  report; the fix flows through the normal PR machine; the next cycle
-  restarts at TAGGED on the fix's merge.
-
-## Conformance suite (audit runs verbatim each cycle)
-
-- C1. Every merge in the window: actor ≠ author (AUTHORSHIP LOG + GitHub).
-- C2. Every merge: queue order respected; head-guard re-check recorded in
-  the journal.
-- C3. Every review-required merge: APPROVE verdict citing the merged head.
-- C4. Every VERDICT: independence declaration present; reviewer ≠ author.
-- C5. Every BOUNCED PR: comment names check, run ID, first failing step.
-- C6. Every REVIEW-REQUEST: REVIEW-STARTED followed, or orphan reported.
-- C7. Heartbeats: present per leased role per cycle; no role silent >2h
-  with work pending without a failover record.
-- C8. Doc sections edited only by their owner role (doc history).
-- C9. No transition occurred that the state machine does not list.
-- C10. OWNER QUEUE: no item older than one audit cycle without being
-  surfaced to the owner.
-- C11. Every published release: a GATE-VERDICT PASS artifact attached,
-  Jev-verified at ≥99/100, issued by a non-author Reviewer.
-- C12. Every tag: created only after its version-bump PR landed.
-
-Two failures of the same item by the same leaseholder in consecutive
-audits ⇒ lease revocation by the Overseer.
+- Role → Overseer → OWNER QUEUE. Nothing skips a level, and only the
+  Overseer writes OWNER QUEUE items.
+- An escalation is a complete packet, not a shout: what is blocked,
+  the evidence (links, SHAs, check names), what you already tried,
+  what proceeds meanwhile. The consumer must never need to
+  re-diagnose from scratch — the same standard BOUNCED sets for the
+  Implementer applies to every escalation.
+- Owner-bound items are framed as end-state or ramification
+  questions only. Technical choices with one philosophy-determined
+  answer are decided by the role that owns them, never escalated.
 
 ## Failover summary
 
 A leased role silent >2h with work pending, or stalled (two heartbeat
-cycles with work pending and no queue movement), is dead. The Overseer
-revokes the lease (epoch +1, note in LEASES), spawns a fresh session with
-the role prompt, and the new holder's first heartbeat at the new epoch
-confirms the transfer. The old holder is fenced out by the epoch rule
-even if it later wakes.
+cycles with work pending and no queue movement), is dead. The
+Overseer revokes the lease (epoch +1, LEASE-REVOKED in LEASES),
+spawns a fresh session with the role prompt, and the new holder's
+first heartbeat at the new epoch confirms the transfer. The old
+holder is fenced out by the epoch rule even if it later wakes. The
+full playbook is in `DESIGN.md`; wake mechanics are in
+`CONTINUITY.md`.

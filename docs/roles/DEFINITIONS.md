@@ -1,4 +1,4 @@
-SCMESSENGER ROLE DEFINITIONS (v7) — companion to the permanent-roles design
+SCMESSENGER ROLE DEFINITIONS (v8) — companion to the permanent-roles design
 
 Shared substrate (all roles):
 - State doc: the canonical plan doc (sections: QUEUE, LEASES, HEARTBEATS,
@@ -168,6 +168,26 @@ MESSAGE CATALOG (every cross-role interface is one of these; fixed fields):
   heartbeat; the blocked item re-enters its normal flow.
 - LESSON (any role -> EXPERIENCE, doc): date, role, one-line lesson,
   evidence link. Append-only; audit dedups.
+- LEASE-CLAIMED (incoming holder -> all, LEASES + heartbeat): role,
+  epoch (previous epoch + 1), session identity, ISO time. The claim is
+  valid only when the LEASES row and the holder's first heartbeat at
+  the new epoch both exist. Causes: holder may act for the role.
+- LEASE-REVOKED (Overseer -> all, LEASES revocation log): role, epoch
+  revoked, reason (silent / stalled / violations / handover), ISO time.
+  Causes: the old holder is fenced out immediately; failover spawns a
+  replacement, whose LEASE-CLAIMED opens the next epoch.
+- CLOSE-DISPOSITION (Landing -> all, PR comment + QUEUE): PR, reason —
+  exactly one of superseded-by <PR>, duplicate-of <PR>, owner-directed
+  (OWNER QUEUE ref), withdrawn-by-author — plus the evidence link.
+  Causes: the PR's CLOSED transition. A PR is never closed silently.
+- TAG-CREATED (Landing -> all, doc + repo): tag vX.Y.Z at SHA,
+  created after the version-bump PR landed.
+- GATE-REQUEST (Landing -> Overseer, doc entry): tag, SHA, runbook
+  ref. Causes: Overseer spawns a Reviewer for the gate run.
+- GATE-VERDICT (Reviewer -> all, release issue comment + doc):
+  GATE-PASSED (exit 0, Jev >=99/100, evidence attached) or
+  GATE-FAILED (failure report attached). Binding: publish allowed
+  only on GATE-PASSED.
 
 PR STATE MACHINE (the whole system on one table; a transition not listed
 here is a violation by definition, and the audit checks artifacts
@@ -198,8 +218,21 @@ against this table):
 - STUCK -> QUEUED: Overseer releases after the diagnosis is addressed.
 - IN-TRAIN -> QUEUED: Landing returns the PR when the head-guard fails
   (main moved) or MAIN-RED is declared.
+- REVIEW-PENDING -> IN-TRAIN: the PR's head moved during review; the
+  pending verdict is void for the new head. Landing re-issues
+  REVIEW-REQUEST when the new head is final.
+- any non-terminal state -> CLOSED: Landing closes the PR without
+  merging, or the owner directs the close; requires a
+  CLOSE-DISPOSITION message with its reason and evidence. CLOSED is
+  terminal, like LANDED. (HELD PRs are closed only by owner
+  direction.)
 - any state -> HELD: owner decision only, recorded in OWNER QUEUE;
-  HELD -> QUEUED: owner releases.
+  HELD -> QUEUED: owner releases. A released PR always re-enters at
+  QUEUED, whatever state it was held from; Landing re-validates its
+  head and CI before it can go IN-TRAIN again.
+The bounce counter for BOUNCED -> STUCK is per PR and per check name,
+cumulative across heads: two bounces for the same named check at any
+heads trigger it.
 MAIN-RED is a global flag, not a PR state: while set, no QUEUED ->
 IN-TRAIN or IN-TRAIN -> LANDED transition may occur.
 
@@ -221,6 +254,10 @@ C10. OWNER QUEUE: no item older than one audit cycle without being
 C11. Every published release: a GATE-VERDICT PASS artifact attached,
      Jev-verified at >=99/100, issued by a non-author Reviewer.
 C12. Every tag: created only after its version-bump PR landed.
+C13. Every CLOSED PR: a CLOSE-DISPOSITION artifact with a listed
+     reason and evidence; no silent closes.
+C14. Every lease epoch change: a LEASE-CLAIMED or LEASE-REVOKED
+     artifact; no holder acts at an epoch the doc does not record.
 Two failures of the same item by the same leaseholder in consecutive
 audits => lease revocation by the Overseer.
 
@@ -241,17 +278,9 @@ Role split:
   Landing routes it to the Implementer, and the next tag cycle starts
   when the fix's PR lands.
 
-New messages:
-- TAG-CREATED (Landing -> all, doc + repo): tag vX.Y.Z at SHA,
-  created after the version-bump PR landed.
-- GATE-REQUEST (Landing -> Overseer, doc entry): tag, SHA, runbook
-  ref. Causes: Overseer spawns a Reviewer for the gate run.
-- GATE-VERDICT (Reviewer -> all, release issue comment + doc):
-  GATE-PASSED (exit 0, Jev >=99/100, evidence attached) or
-  GATE-FAILED (failure report attached). Binding: publish allowed
-  only on GATE-PASSED.
-
-State machine additions (release branch of the machine):
+The release messages (TAG-CREATED, GATE-REQUEST, GATE-VERDICT) are
+defined in the MESSAGE CATALOG above; the release branch of the
+state machine:
 - LANDED (version-bump PR) -> TAGGED: Landing creates the tag;
   precondition: version-bump PR merged, no unlanded PRs in the release
   scope.

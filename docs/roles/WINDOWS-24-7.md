@@ -1,4 +1,4 @@
-WINDOWS + FREEBUFF 24/7 STRATEGY FOR SCMESSENGER LANES (v4)
+WINDOWS + FREEBUFF 24/7 STRATEGY FOR SCMESSENGER LANES (v5)
 
 Verified facts (from the freebuff npm package v0.2.30 itself, inspected
 2026-10-19):
@@ -32,12 +32,12 @@ LAYER 1 - SUPERVISION (Windows-native, zero agent cost):
   stays logged in (auto-login enabled once via Settings > Accounts >
   Sign-in options, or netplwiz). Both the watchdog and any freebuff.exe
   run as the lane user in that session. Task Scheduler 'run whether the
-  user is logged on or not' is BANNED for agent processes: it executes
-  in session 0 with no desktop, where a TUI agent hangs or fails
-  silently. The watchdog task itself is pure PowerShell and may use
-  either mode, but keep it in the interactive session for one simple
-  rule. Register tasks with the PowerShell cmdlets so settings are
-  explicit:
+  user is logged on or not' is BANNED for everything in this system:
+  it executes in session 0 with no desktop, where a TUI agent hangs or
+  fails silently, and a session-0 watchdog cannot reliably spawn into
+  the interactive desktop either. One rule, no exceptions: if it
+  touches the lanes, it runs in the interactive session. Register
+  tasks with the PowerShell cmdlets so settings are explicit:
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument
       '-NoProfile -ExecutionPolicy Bypass -File C:\scm\watchdog.ps1'
     $t = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)
@@ -81,7 +81,10 @@ LAYER 2 - FREEBUFF SESSIONS (metered; batch, don't sprinkle):
   and respawning starts a new metered hour. It idle-polls its queue
   inside the session until the hour block ends or new work arrives,
   then exits. Sleep still costs zero; the saving is avoiding
-  respawn-per-drizzle.
+  respawn-per-drizzle. (Which engine a session rides, and the burst
+  protocol for token-dense work inside an hour, are DUAL-ENGINE
+  subjects — DUAL-ENGINE-24-7.md; this doc governs the box, that doc
+  governs the meters.)
 - Daily burn ledger in the state doc: the watchdog records session-
   hours per role per day against a per-role cap. On exhaustion the
   system degrades gracefully: Landing keeps priority on remaining
@@ -97,10 +100,22 @@ Residual verification (cannot be done off-box; 5-minute checklist):
 - freebuff --help on the box: confirm one-shot instruction invocation
   (freebuff "instruction" / stdin) the watchdog's spawn line uses; the
   spawn line is a single variable in watchdog.ps1 for exactly this.
-- Confirm a Task Scheduler 'run whether logged on or not' task can
-  start freebuff.exe (if not, run the watchdog in the logged-on session
-  with auto-login enabled — noted trade-off).
 - Confirm login persistence across reboots for the lane user.
+
+Acceptance drills (run once at setup; the design is not live until
+all three pass):
+- REBOOT DRILL: reboot the box mid-work. Expected: auto-login, the
+  AtLogOn sweep runs, leases are treated as suspect, queues are
+  re-derived from GitHub, and pending roles respawn with no human
+  touch. Any step needing a human fails the drill.
+- KILL DRILL: kill one lane session's process mid-pass. Expected:
+  the watchdog sees the stale heartbeat at its next cycle, journals
+  the death, and the role is respawned or its work is picked up per
+  CONTINUITY.md — the recorded operation continues, nothing restarts
+  from scratch.
+- LOCK DRILL: lock the console for 30 minutes with work in flight.
+  Expected: sessions keep running (lock is not logoff); heartbeats
+  stay fresh throughout.
 
 
 Windows realities (v3 additions, learned the hard way by Windows users):
