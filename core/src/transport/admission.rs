@@ -107,12 +107,6 @@ pub const SNAPSHOT_MAX_AGE_SAMPLES: u32 = 3;
 /// at most one line per category per quantum.
 pub const LOG_INTERVAL: Duration = EVAL_QUANTUM;
 
-/// Most non-known pending inbound connections admitted at zero headroom. Each
-/// distinct /24 gets one slot during fd exhaustion, but the total never
-/// exceeds this, so a source spread across many networks cannot open an
-/// unbounded number of sockets.
-pub const ZERO_HEADROOM_PENDING_CEILING: usize = 4;
-
 // ---------------------------------------------------------------------------
 // OS exhaustion detection
 // ---------------------------------------------------------------------------
@@ -711,7 +705,19 @@ impl AdmissionBehaviour {
     /// `to_close` in `poll`; test-only.
     #[cfg(test)]
     pub fn next_close_request(&mut self) -> Option<(PeerId, ConnectionId)> {
-        self.to_close.pop_front()
+        self.pop_close_request()
+    }
+
+    /// Take the next still-valid close request. A path can close naturally
+    /// after its eviction was queued but before poll dispatches it; preserve
+    /// that path if it has become the peer's only remaining live connection.
+    fn pop_close_request(&mut self) -> Option<(PeerId, ConnectionId)> {
+        while let Some((peer, id)) = self.to_close.pop_front() {
+            if self.ledger.prepare_close_request(&peer, &id) {
+                return Some((peer, id));
+            }
+        }
+        None
     }
 
     fn occupancy(&self) -> Occupancy {
@@ -991,16 +997,24 @@ impl AdmissionBehaviour {
             // One concurrent handshake per known address: a shared address
             // (carrier NAT) cannot take an allowance that belongs to every contact.
             let open = self.pending_by_ip.get(&ip).copied().unwrap_or(0);
-            return (open >= 1).then_some("known-pool");
+            if open >= 1 {
+                return Some("known-pool");
+            }
+            // At zero headroom the one-slot exception is per /24 (/48),
+            // regardless of whether the source address is known.
+            if cap == 0 && self.pending_by_prefix.contains_key(&source_prefix(ip)) {
+                return Some("cap");
+            }
+            return None;
         }
         let general = self.pending_inbound.saturating_sub(self.pending_known);
         // Zero headroom: a source on a /24 with no pending connection still gets
         // one slot, so a roaming contact on a new network is not refused during
         // fd exhaustion. A second source from an already-pending /24 is shed, and
-        // the slots are capped in total at ZERO_HEADROOM_PENDING_CEILING.
+        // each distinct /24 gets one slot, without a global prefix ceiling.
         let new_prefix =
             src.is_some_and(|ip| !self.pending_by_prefix.contains_key(&source_prefix(ip)));
-        let zero_headroom_slot = cap == 0 && new_prefix && general < ZERO_HEADROOM_PENDING_CEILING;
+        let zero_headroom_slot = cap == 0 && new_prefix;
         if general >= cap && !zero_headroom_slot {
             return Some("cap");
         }
@@ -1037,9 +1051,9 @@ impl AdmissionBehaviour {
         }
         let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
         self.queue(evictions, now);
-        // A peer's last path is pinned while authenticated, trafficked or in
-        // grace, so the bound can stay exceeded. Report it as a soft bound
-        // rather than evicting those peers.
+        // A peer's last live path is always preserved, so the bound can stay
+        // exceeded when only last paths could satisfy it. Report it as a soft
+        // bound rather than disconnecting peers.
         let after = self.occupancy();
         if after.total > derived.limits.total || after.fd > derived.limits.fd {
             if let Some(suppressed) = self.soft_bound_log.permit(now, LOG_INTERVAL) {
@@ -1256,7 +1270,7 @@ impl NetworkBehaviour for AdmissionBehaviour {
         if self.tick_due(now) {
             self.tick(now);
         }
-        if let Some((peer_id, id)) = self.to_close.pop_front() {
+        if let Some((peer_id, id)) = self.pop_close_request() {
             return Poll::Ready(ToSwarm::CloseConnection {
                 peer_id,
                 connection: CloseConnection::One(id),
@@ -1542,23 +1556,49 @@ mod tests {
     #[test]
     fn eviction_logging_is_rate_limited_but_closes_are_not() {
         let base = Instant::now();
-        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
-        // 40 single-path peers arrive inside one quantum. Each is inside its
-        // own grace window, so none is a victim yet: the total bound is soft
-        // until the window has passed.
-        for n in 0..40usize {
-            b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
+        let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
+        let peers: Vec<PeerId> = (0..40).map(|_| PeerId::random()).collect();
+        // Each peer has two route classes, so every queued eviction can leave
+        // that peer connected. The generous initial bound keeps the fixture
+        // intact until the later resource sample lowers it.
+        for (n, peer) in peers.iter().enumerate() {
+            b.path_established(
+                *peer,
+                cid(n * 2),
+                &lan(9_000 + n as u16),
+                true,
+                at(base, (n * 2) as u64),
+            );
+            b.path_established(
+                *peer,
+                cid(n * 2 + 1),
+                &wan(),
+                true,
+                at(base, (n * 2 + 1) as u64),
+            );
         }
         assert_eq!(
             b.ledger.occupancy().0,
-            40,
-            "protected paths are never shed early"
+            peers.len() * 2,
+            "all redundant routes fit under the initial bound"
         );
         assert!(drain(&mut b).is_empty());
-        // One arrival after every grace window has closed sheds the excess
-        // (41 paths against a bound of 4) in one pass, logged once per reason.
-        b.path_established(PeerId::random(), cid(40), &wan(), true, at(base, 60_000));
-        assert_eq!(drain(&mut b).len(), 37);
+        // Once all grace windows have closed, the lower sample queues one
+        // close per peer while logging the flood once per reason.
+        b.tick_with(at(base, 60_000), Some(fd_limit_8()), true);
+        let closes = drain(&mut b);
+        assert_eq!(
+            closes.len(),
+            peers.len(),
+            "every redundant path gets a close request"
+        );
+        for peer in &peers {
+            assert_eq!(
+                b.ledger.live_paths(peer),
+                1,
+                "every peer keeps one live path"
+            );
+        }
         let gate = b.evict_logs.get("over-total").expect("gate exists");
         assert!(gate.suppressed >= 30, "suppressed: {}", gate.suppressed);
     }
@@ -1569,18 +1609,27 @@ mod tests {
     fn over_total_evicts_across_peers_and_never_the_new_connection() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
-        let peers: Vec<PeerId> = (0..6).map(|_| PeerId::random()).collect();
-        for (n, peer) in peers.iter().enumerate() {
-            // The first four settle inside one quantum and stay protected by
-            // their grace windows; the last two arrive after those windows
-            // have closed, so the bound can shed the excess.
-            let when = if n < 4 {
-                at(base, n as u64 * 10)
-            } else {
-                at(base, 60_000 + n as u64 * 10)
-            };
-            b.path_established(*peer, cid(n), &wan(), true, when);
+        let peers: Vec<PeerId> = (0..3).map(|_| PeerId::random()).collect();
+        for (n, peer) in peers.iter().take(2).enumerate() {
+            // Each settled peer has two distinct route classes. Their grace
+            // windows expire before the third peer's paths arrive.
+            b.path_established(
+                *peer,
+                cid(n * 2),
+                &lan(9_000 + n as u16),
+                true,
+                at(base, n as u64 * 10),
+            );
+            b.path_established(
+                *peer,
+                cid(n * 2 + 1),
+                &wan(),
+                true,
+                at(base, n as u64 * 10 + 1),
+            );
         }
+        b.path_established(peers[2], cid(4), &lan(9_002), true, at(base, 60_000));
+        b.path_established(peers[2], cid(5), &wan6(), true, at(base, 60_010));
         assert_eq!(b.ledger.occupancy().0, 4, "bound = half the descriptors");
         let closes = drain(&mut b);
         assert_eq!(closes.len(), 2);
@@ -1588,6 +1637,12 @@ mod tests {
             !closes.iter().any(|(_, id)| *id == cid(5)),
             "the connection that triggered the check is never its own victim"
         );
+        for peer in &peers {
+            assert!(
+                b.ledger.live_paths(peer) >= 1,
+                "every peer keeps at least one live path"
+            );
+        }
         let derived = b.total_budget().expect("derived");
         assert_eq!(derived.limits.total, 4);
     }
@@ -1600,14 +1655,11 @@ mod tests {
         b.path_established(honest, cid(0), &wan(), true, base);
         b.stamp_traffic(&honest, &cid(0), at(base, 5));
         b.note_reputation(honest, 70.0);
-        for n in 1..20usize {
-            b.path_established(
-                PeerId::random(),
-                cid(n),
-                &wan(),
-                false,
-                at(base, 10_000 + n as u64 * 2_000),
-            );
+        for n in 0..3usize {
+            let sybil = PeerId::random();
+            let established = at(base, 10_000 + n as u64 * 2_000);
+            b.path_established(sybil, cid(1 + n * 2), &wan(), false, established);
+            b.path_established(sybil, cid(2 + n * 2), &wan6(), false, at(established, 1));
         }
         let closes = drain(&mut b);
         assert!(
@@ -1831,8 +1883,23 @@ mod tests {
         let honest = PeerId::random();
         b.path_established(honest, cid(0), &wan(), true, base);
         b.note_authenticated(honest);
-        for n in 1..=11usize {
-            b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
+        let strangers: Vec<PeerId> = (0..11).map(|_| PeerId::random()).collect();
+        for (n, stranger) in strangers.iter().enumerate() {
+            let first = 1 + n * 2;
+            b.path_established(
+                *stranger,
+                cid(first),
+                &lan(9_000 + n as u16),
+                true,
+                at(base, (n * 2) as u64),
+            );
+            b.path_established(
+                *stranger,
+                cid(first + 1),
+                &wan(),
+                true,
+                at(base, (n * 2 + 1) as u64),
+            );
         }
         for tick in 1..=15u64 {
             b.note_os_exhaustion(PressureKind::Fd);
@@ -1845,6 +1912,13 @@ mod tests {
         assert_eq!(distinct.len(), 11, "every stranger shed, bound converged");
         assert!(!closes.iter().any(|(peer, _)| *peer == honest));
         assert_eq!(b.ledger.live_paths(&honest), 1);
+        for stranger in &strangers {
+            assert_eq!(
+                b.ledger.live_paths(stranger),
+                1,
+                "each stranger keeps one path"
+            );
+        }
     }
 
     #[test]
@@ -2253,16 +2327,29 @@ mod tests {
     fn connect_flood_keeps_counters_exact_and_the_bound_enforced() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
+        let peers: Vec<PeerId> = (0..4).map(|_| PeerId::random()).collect();
+        let routes = [lan(9_000), wan(), wan6(), circuit()];
         for n in 0..3_000usize {
-            // One arrival every two seconds: each grace window closes before
-            // the next arrival, so the bound is enforced rather than the window.
+            // Reuse four peers, advancing through distinct route classes.
+            // Each extra path is redundant, so the bound can converge without
+            // disconnecting an identity.
             let t = at(base, n as u64 * 2_000);
-            b.path_established(PeerId::random(), cid(n), &wan(), false, t);
-            if let Some((peer, id)) = b.next_close_request() {
-                b.path_closed(&peer, &id, 0, t);
+            let peer = peers[n % peers.len()];
+            let route = &routes[(n / peers.len()) % routes.len()];
+            b.path_established(peer, cid(n), route, false, t);
+            while let Some((closing_peer, id)) = b.next_close_request() {
+                let remaining = b.ledger.live_paths(&closing_peer);
+                b.path_closed(&closing_peer, &id, remaining, t);
             }
         }
         assert_eq!(b.ledger.occupancy().0, 4);
+        for peer in &peers {
+            assert_eq!(
+                b.ledger.live_paths(peer),
+                1,
+                "each flood peer keeps one path"
+            );
+        }
         assert!(b.ledger.counters_consistent());
     }
 
@@ -2320,6 +2407,60 @@ mod tests {
     }
 
     #[test]
+    fn poll_preserves_the_last_path_when_a_queued_victim_loses_its_survivor() {
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut b = AdmissionBehaviour::new();
+        let peer = PeerId::random();
+        let now = Instant::now();
+        let Some(long_ago) = now.checked_sub(Duration::from_secs(30)) else {
+            return;
+        };
+        b.last_eval = long_ago;
+        b.path_established(peer, cid(1), &circuit(), true, long_ago);
+        b.path_established(peer, cid(2), &wan(), true, long_ago);
+        b.tick_with(now, Some(ResourceSnapshot::default()), true);
+        assert!(
+            b.ledger.is_closing(&peer, &cid(1)),
+            "the circuit is queued as victim"
+        );
+        assert_eq!(b.to_close.front().copied(), Some((peer, cid(1))));
+        assert_eq!(
+            b.ledger.live_paths(&peer),
+            1,
+            "the WAN path is the survivor"
+        );
+
+        let endpoint = dialed(wan());
+        b.on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
+            peer_id: peer,
+            connection_id: cid(2),
+            endpoint: &endpoint,
+            cause: None,
+            remaining_established: 1,
+        }));
+        assert_eq!(
+            b.ledger.live_paths(&peer),
+            0,
+            "only the queued victim remains"
+        );
+
+        assert!(matches!(b.poll(&mut cx), Poll::Pending));
+        assert_eq!(
+            b.ledger.live_paths(&peer),
+            1,
+            "poll restores the final path"
+        );
+        assert_eq!(b.ledger.pending_closes(), 0);
+        assert_eq!(b.ledger.tracked_paths(&peer), 1);
+        assert!(b.ledger.counters_consistent());
+        assert!(
+            b.to_close.is_empty(),
+            "stale and duplicate close requests are dropped"
+        );
+    }
+
+    #[test]
     fn idle_behaviour_arms_no_timer() {
         let waker = futures::task::noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -2345,6 +2486,29 @@ mod tests {
     }
 
     #[test]
+    fn zero_headroom_applies_prefix_slot_to_known_sources_at_inbound_entrypoint() {
+        let mut b = AdmissionBehaviour::new();
+        b.pending_cap = Some(0);
+        let first: Multiaddr = "/ip4/10.0.1.10/tcp/4001".parse().expect("valid multiaddr");
+        let same_prefix: Multiaddr = "/ip4/10.0.1.11/tcp/4001".parse().expect("valid multiaddr");
+        let other_prefix: Multiaddr = "/ip4/10.0.2.11/tcp/4001".parse().expect("valid multiaddr");
+        b.note_known_source(&first);
+        b.note_known_source(&same_prefix);
+        b.note_known_source(&other_prefix);
+
+        assert!(b
+            .handle_pending_inbound_connection(cid(1), &lan(5001), &first)
+            .is_ok());
+        assert!(b
+            .handle_pending_inbound_connection(cid(2), &lan(5002), &same_prefix)
+            .is_err());
+        assert!(b
+            .handle_pending_inbound_connection(cid(3), &lan(5003), &other_prefix)
+            .is_ok());
+        assert_eq!(b.pending_inbound, 2);
+    }
+
+    #[test]
     fn positive_cap_still_sheds_a_new_slash24_once_full() {
         let mut b = AdmissionBehaviour::new();
         let now = Instant::now();
@@ -2354,23 +2518,32 @@ mod tests {
     }
 
     #[test]
-    fn zero_headroom_total_is_capped_across_many_slash24s() {
+    fn zero_headroom_admits_one_pending_per_distinct_slash24_without_global_cap() {
         let mut b = AdmissionBehaviour::new();
         let now = Instant::now();
-        // Each distinct /24 gets its one slot until the global ceiling is reached.
-        for net in 1..=ZERO_HEADROOM_PENDING_CEILING as u8 {
+        // More than the former global ceiling of four networks each get one slot.
+        let prefix_count = 8u8;
+        for net in 1..=prefix_count {
             let src = src_ip(1, net);
             assert_eq!(
                 b.pending_refusal(0, Some(src)),
                 None,
-                "/24 {net} within ceiling"
+                "/24 {net} gets its one slot"
             );
             b.track_pending(cid(usize::from(net)), now, true, Some(src));
+            assert_eq!(
+                b.pending_refusal(0, Some(src_ip(2, net))),
+                Some("cap"),
+                "/24 {net} has only one pending slot"
+            );
         }
-        assert_eq!(b.pending_inbound, ZERO_HEADROOM_PENDING_CEILING);
-        // A new /24 past the ceiling is shed, and so is another source on a pending /24.
-        let beyond = ZERO_HEADROOM_PENDING_CEILING as u8 + 1;
-        assert_eq!(b.pending_refusal(0, Some(src_ip(1, beyond))), Some("cap"));
+        assert_eq!(b.pending_inbound, usize::from(prefix_count));
+        // A ninth, distinct /24 still gets a slot, while a second address on an
+        // already-pending /24 is refused.
+        let beyond = prefix_count + 1;
+        assert_eq!(b.pending_refusal(0, Some(src_ip(1, beyond))), None);
+        b.track_pending(cid(usize::from(beyond)), now, true, Some(src_ip(1, beyond)));
+        assert_eq!(b.pending_inbound, usize::from(beyond));
         assert_eq!(b.pending_refusal(0, Some(src_ip(2, 1))), Some("cap"));
     }
 }
