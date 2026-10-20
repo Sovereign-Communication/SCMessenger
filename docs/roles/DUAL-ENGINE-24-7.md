@@ -1,0 +1,352 @@
+DUAL-ENGINE 24/7 ORCHESTRATION (v1) — addendum to WINDOWS-24-7.md
+and CONTINUITY.md. The lanes no longer run on one meter. There are
+two engines, two different limit shapes, and one scheduler that
+treats limits as terrain, not accidents: hit the wall exactly,
+checkpoint, resume at the reset second. Lucas's goal is deliberate:
+burn the full Codex weekly allowance, spend the banked reset, burn
+the next week too — with zero human whack-a-mole in between.
+
+THE ENGINES
+TWO METERS, ONE WARNING: whether a Freebuff session running a
+connected-ChatGPT model ALSO consumes Freebuff session-hours is
+NOT verified. Until the on-box check settles it, the scheduler
+treats every connected-model hour as drawing on BOTH ledgers —
+the conservative assumption; if the check proves otherwise, the
+ledgers decouple and capacity roughly doubles. Never plan against
+the optimistic reading.
+
+Engine A — Codex via the connected ChatGPT account (inside Freebuff),
+model GPT-6 Luna. THE WORKHORSE: carries all lanes by default.
+- Why Luna: verified against OpenAI's Codex pricing figures —
+  Luna fits ~350–3,000 local messages per 5-hour window vs
+  ~5–45 for GPT-6 Astra. One to two orders of magnitude more lane
+  throughput per window; that is what makes 24/7 multi-lane work
+  fit inside a subscription at all.
+- Limit shape (account-shared, verified): a 5-hour window + a
+  weekly window, shared across EVERY Codex surface on the account
+  (CLI, IDE, web, Freebuff connection) — parallel sessions do NOT
+  multiply quota, they only spend it faster. Fast mode burns
+  included usage at ~2.5x — BANNED for lane work.
+- Banked resets: the account holds at least one banked "full
+  reset" (restores BOTH windows). They expire; redeem late (when
+  nearly out), never early — unused quota is lost at redemption.
+
+Engine B — Freebuff's own allowance, $8/mo plan. Two surfaces
+report this tier differently: Lucas's account shows 250
+Freebucks/day; the official plans page expresses the same tier
+as ~50 session-hours/day refilled daily + 60 monthly bonus hours,
+metered per model multiplier (GPT-6 Luna ~13 hrs/day in that
+table). The scheduler NEVER hardcodes either number — it reads
+the live balance/ledger and plans against what the product
+actually reports that day. THE OVERFLOW + SPECIALIST engine:
+- One-off needs, single-role bursts, and any work that arrives
+  while Engine A is walled.
+- Hour-block discipline from WINDOWS-24-7.md still applies:
+  sessions batch inside a started hour; sleep itself is free.
+- Named non-retaining models only (stealth betas retain prompts).
+
+Engine C — Freebuff's cheap/unmetered lanes (MiMo Flash Slow etc.)
+for Shepherd-class work: watching CI, polling, journal upkeep —
+judgment-light work that should never burn Luna quota.
+
+USAGE TELEMETRY (the scheduler's eyes — scripted, zero agent time)
+- Source of truth: Codex `/status` — shows 5-hour % left, weekly
+  % left, exact reset timestamps, credits, and banked resets.
+  Caveat (verified): values go stale; if >15 min old, send one
+  message to refresh before trusting them.
+- Scripted read — THE SOURCE FOLLOWS THE SURFACE. Which surface
+  runs Luna decides where the numbers live; do not assume the
+  Codex CLI's files exist for work done inside Freebuff:
+  * Freebuff-connected sessions (the default lanes): the
+    in-session /status card is the source, read by the vision
+    driver (fallback 2 below is, for these lanes, the primary
+    path). The on-box checklist confirms this session's /status
+    reports the ChatGPT account's windows.
+  * Standalone Codex CLI sessions (if used): the rollout-file
+    parse (path 1 below) is primary — it is cheaper and exact.
+  Both paths write the same usage.json; the scheduler neither
+  knows nor cares which surface produced it.
+  1. Parse the newest Codex session rollout file on the box
+     (%USERPROFILE%\.codex\sessions\**\*.jsonl): in current Codex
+     CLI versions, token_count events carry rate_limits (primary
+     = 5h window, secondary = weekly, used_percent + resets_at).
+     HEDGE: this field layout is version-dependent and is NOT
+     depended on until the on-box checklist confirms it on the
+     actual install; the parser validates every field and, on
+     any mismatch, logs the failure and falls back to (2) rather
+     than guessing. Pure file read — no UI, no agent tokens.
+     usage-ledger.ps1 polls this every 10 min alongside
+     watchdog.ps1 and writes usage.json (box-local path, below).
+  2. Fallback: the Jev vision driver reads the /status card off
+     the screen (see VISION DRIVER below).
+  3. Freebuff side: watchdog records session-hours per role per
+     day in the burn ledger (existing WINDOWS-24-7 mechanism);
+     Freebucks balance is read from the Freebuff UI by the vision
+     driver when visible, else estimated from the ledger.
+  resets_at values are absolute timestamps from Codex itself;
+  the scheduler compares them against GitHub server time (the
+  CONTINUITY.md clock rule), never the box's local clock math.
+- usage.json lives OUTSIDE every git checkout, at
+  C:\scm\state\usage.json (box-local, never committed): it is
+  rewritten every 10 minutes, and a file like that inside a
+  checkout would invite exactly the commit/pull conflicts the
+  ff-only discipline exists to avoid. State docs name the path;
+  sessions and watchdog read it from there.
+- usage.json fields: engineA {h5_used_pct, h5_resets_at,
+  weekly_used_pct, weekly_resets_at, banked_resets, as_of},
+  engineB {freebucks_est, hours_used_today per role}, engineC
+  {unmetered: true}. Every spawn decision reads usage.json first.
+  Stale (>20 min) usage.json = scheduler flies blind: it may run
+  ONE Luna session only until telemetry refreshes.
+- Engine choice never changes the quality bar: every merge path
+  passes the same Jev gate and cross-role review regardless of
+  which engine ran the cycle, and the two judgment-heaviest acts
+  — Rule-8 review verdicts and the three-node release gate —
+  run on Engine A (Luna) cycles only. Weaker engines do volume;
+  they never get the final say.
+
+DRIVER OWNERSHIP (who continues a session — exactly one at a time)
+Three mechanisms can move a session forward: Freebuff's mission
+mode (inside the session), the vision driver (pasting prompts),
+and the watchdog (spawning fresh sessions). Two of them driving
+the same session at once is a defect: the watchdog would park a
+session mission mode meant to continue, or mission mode would
+retry against a wall the watchdog is already scheduling around.
+The split is by phase, and it is absolute:
+- INSIDE a live session, within a usage window: mission mode
+  owns continuation. The watchdog never injects, pastes, or
+  interrupts; vision duty 2 (mission feeding) applies ONLY to
+  sessions NOT running mission mode.
+- AT a wall, at session death, and across windows: the watchdog
+  owns recovery (park, schedule, respawn). Mission mode's job at
+  a wall is defined in the mission prompt's hard lines: stop,
+  checkpoint, exit — never retry against the wall, never loop
+  waiting for a reset from inside a metered session.
+- The vision driver is the watchdog's hands, never a third
+  driver: it performs watchdog-decided actions (wall watch,
+  status reads, reset click) and originates nothing.
+MID-RUN WALL DISCIPLINE (the running session's own duty)
+Walls do not only arrive between sessions. Telemetry updates as
+messages flow, so a session deep in a long build can cross 90%
+without any spawn decision ever seeing it. Therefore: at every
+step boundary (each commit, each CI wait, each subagent return),
+the running session re-reads usage.json — a local file read,
+near-zero cost. At >=90% on either window it executes the
+checkpoint immediately, mid-objective if necessary: the
+journal records the exact step reached, so the next session
+resumes the step, not the objective. A wall hit mid-response
+with no checkpoint is the accepted residual loss: one response
+tail, bounded by the push-at-every-step-boundary rule.
+
+SCHEDULER DECISION TABLE (usage.json + queue state -> action;
+the watchdog evaluates top-to-bottom, first matching row wins)
+1. Telemetry stale >20 min -> run at most ONE Engine-A session;
+   refresh telemetry before any further spawns.
+2. Role queue empty -> no spawn (sleep is free), any engine.
+3. Engine A 5h <75% AND weekly <95% -> spawn on Engine A (Luna).
+4. Engine A 5h 75-90% -> spawn Engine A only for checkpointable
+   work (reviews, docs, CI shepherding); long builds wait.
+5. Engine A 5h >90% or weekly =100%, no banked reset -> park A;
+   role's next cycle on Engine B if its ledger allows, else C
+   for Shepherd-class work, else sleep until the reset.
+6. Weekly =100% AND banked reset exists AND AUTO_REDEEM on ->
+   vision driver redeems; immediate Luna start (new weekly
+   clock); all parked A roles resume per the herd stagger.
+7. Weekly =100% AND banked reset exists AND AUTO_REDEEM off ->
+   OWNER-ITEM (one line, with the reset's expiry); lanes run on
+   B/C meanwhile. Never nag: one item, updated in place.
+8. Both engines exhausted, queue non-empty -> sessions park;
+   watchdog wakes at the earliest reset (5h, daily refill, or
+   weekly, whichever is first); audit reports the stall once.
+9. Respawn verification: any spawned session must heartbeat
+   within 10 minutes or the spawn counts as failed — retry once,
+   then follow CONTINUITY.md's spawn-failure rule (3 consecutive
+   failures -> OWNER QUEUE).
+10. Engine B dies mid-hour (allowance end): the Freebuff session
+    ends wherever it stands; the cycle's checkpoint rule is the
+    only protection, which is why cycles keep work pushed at
+    every step boundary, not just at cycle end.
+
+COMPONENT SPEC — usage-ledger.ps1 (new; ~120 LoC PowerShell)
+- Runs from the same 10-min Task Scheduler cadence as watchdog.
+- Reads the newest rollout JSONL under %USERPROFILE%\.codex\
+  sessions (by last-write time), extracts the LAST token_count
+  event's rate_limits; validates: both windows present,
+  used_percent in 0-100, resets_at parseable. Any validation
+  failure -> writes usage.json with telemetry_status: "degraded"
+  + the failure reason, and exits 0 (never crashes the watchdog).
+- Merges the Freebuff burn ledger (per-role session-hours today)
+  and writes usage.json atomically (temp file + rename) next to
+  the state docs. Fields as listed under USAGE TELEMETRY above,
+  plus telemetry_status and as_of (GitHub server time anchor).
+COMPONENT SPEC — watchdog.ps1 deltas (extends WINDOWS-24-7 L1)
+- Before any spawn: read usage.json, apply the DECISION TABLE.
+- On any Engine-A park: record the wake time (earliest applicable
+  resets_at) in the state docs so a box reboot cannot lose it;
+  the AtLogOn sweep re-derives it from usage.json anyway.
+- Post-redemption: trigger one immediate Luna spawn (row 6).
+
+SCHEDULING POLICY (watchdog-enforced, not session-enforced)
+- Window shaping: the 5h window is a budget to SPEND WELL, not
+  merely survive. Early in a fresh window: launch the big
+  implementation batches. Above ~75% used: no new long builds —
+  only work that checkpoints cleanly in minutes. Above ~90%:
+  checkpoint-and-park (write state + next prompt, exit); the
+  watchdog respawns at h5_resets_at + 60s.
+- Reset herd control: when several roles are parked on the same
+  reset, they do NOT all respawn at once — a simultaneous restart
+  burns the fresh window's first slice on duplicated state reads
+  and lease contention. Respawn order: Landing first, then one
+  Implementer, then the rest, staggered 3 minutes apart; each
+  confirms its lease before the next starts.
+- Concurrency: at most 3 Engine-A sessions at once (Landing +
+  2 Implementer/Shepherd checkouts), because quota is shared —
+  more sessions add coordination burn, not throughput. Engine B
+  sessions don't count against this cap.
+- Weekly strategy: run the week at full pace; do not ration Luna
+  early in the week to "save" quota — unspent weekly quota does
+  not roll over, so rationing is pure loss. When weekly hits
+  ~100%: if a banked reset exists, redeem it (below), which
+  restarts BOTH windows; else park Engine A until weekly_resets_at
+  and shift live lanes to Engine B/C.
+- Banked-reset redemption: an account action on the usage page
+  (Settings -> Usage -> "Use reset"). DEFAULT: the scheduler
+  posts an OWNER-ITEM and the vision driver performs the click
+  only with AUTO_REDEEM_BANKED_RESET = $true in watchdog config —
+  that flag is Lucas's one-time call, asked once in the OWNER
+  QUEUE, never per-redemption. Expiry watch: if a banked reset
+  expires within 48h and weekly usage is already >50%, the
+  OWNER-ITEM escalates (redeem-before-expiry beats lose-it).
+  Immediately after any redemption, the scheduler starts one
+  Luna session at once: the new weekly window's clock starts at
+  the first post-reset message, so an idle redeemed week starts
+  its 7-day countdown late and wastes allowance.
+- Engine failover is per-role, not global: a walled Engine A
+  moves THAT role's next cycle to Engine B with the same prompt
+  (the mission prompt is engine-agnostic; only the STATE block's
+  LAST WALL line changes). Roles return to Engine A at its reset.
+
+RECOVERY — EXACTLY WHERE YOU LEFT OFF
+The mission prompt's checkpoint rule is the recovery mechanism:
+every cycle ends with work pushed, state docs updated, journal
+appended, and the next-cycle prompt written from the template.
+A limit wall is just an unscheduled cycle end: same checkpoint,
+plus LAST WALL (engine, limit, reset time from usage.json). The
+respawned session's first act is the state read — it resumes the
+recorded operation, never a reconstruction. Walls therefore cost
+the tail of one response, never the thread of the work.
+
+THE JEV VISION DRIVER (supervision of the GUI itself)
+Why it exists: Freebuff mission mode is a GUI/TUI loop — the model
+writes its next prompt and a fresh session must receive it. CLI
+spawning covers headless starts; the vision driver covers
+everything the CLI can't see: a session sitting at a limit banner,
+a mission waiting for its next prompt to be pasted, a "Use reset"
+button that needs clicking.
+- Build line (already in flight, harness repo): driver-core
+  screenshot -> Jev judgment -> action, per docs/hourglass-vision.md
+  and the computer-control plan (issues #270-273: launch_app, NL
+  planner, vision verification at Jev >= 0.85, GUI wiring).
+  Vendored driver-core in harness is v3.4.0; repo is at v3.5.0
+  (audit infra only — no capability change; don't chase it).
+- Driver duties, in order of value:
+  1. WALL WATCH: recognize the Codex/Freebuff limit screens;
+     confirm the session checkpointed; record the wall; do NOT
+     click through or retry — schedule the resume.
+  2. MISSION FEEDING: when a Freebuff mission session is idle at
+     a fresh prompt, paste the next-cycle prompt from the state
+     docs and submit — the mechanical half of mission recursion,
+     so no human pastes prompts at 3am.
+  3. STATUS READS: /status card + Freebucks balance as telemetry
+     fallback (above).
+  4. RESET REDEMPTION: on the usage page, click "Use reset" —
+     only under the AUTO_REDEEM flag (above).
+  5. HUNG-SESSION EVIDENCE: screenshot the stuck state into the
+     journal BEFORE the watchdog's PID reap, so a kill leaves a
+     diagnosis, not a mystery.
+- Every vision judgment that triggers an ACTION is Jev-gated
+  (>= 0.85 floor from the vision plan; >= 0.90 for the reset
+  click and for declaring a session hung). A judgment below bar
+  means the driver does nothing and journals the screenshot —
+  a vision driver that guesses is worse than none.
+- Degraded mode: until the vision driver lands on the box, the
+  watchdog + CLI spawn path (WINDOWS-24-7 Layer 1/2) runs the
+  whole system; mission feeding is done by Freebuff's own
+  mission mode internally, and walls are detected from
+  usage.json + heartbeat staleness instead of screenshots.
+  Nothing in this document waits on the vision driver except
+  duties 2-4 being fully hands-free.
+
+A WALL NIGHT, WORKED EXAMPLE (illustrative, from the rules above)
+23:10 — Implementer is mid-batch; usage.json shows 5h at 88%,
+  resets 00:40. Scheduler has already barred new long builds.
+23:25 — 5h crosses ~90%: session checkpoints (branch pushed,
+  journal + next prompt written, LAST WALL recorded), exits.
+  Landing's session hits the same wall 23:31, same checkpoint.
+00:41 — Watchdog respawns Landing (resets_at + 60s). 00:44 one
+  Implementer. 00:47 the second. Each reads state, takes its
+  lease, resumes the recorded operation.
+04:55 — Weekly crosses 100% mid-window. A banked reset is on the
+  account and AUTO_REDEEM is on: vision driver redeems on the
+  usage page (Jev-verified click), scheduler immediately starts
+  a Luna session so the new weekly clock starts, lanes continue
+  into the fresh week. Total human involvement: none. The 6h
+  audit reports: 2 walls, 3 resumes, 1 reset redeemed.
+
+WHAT LUCAS EVER SEES
+- The 6h audit gains three lines: Engine A (5h %, weekly %,
+  next reset), Engine B (Freebucks/hours burned today per role),
+  walls hit + resumes executed since last audit.
+- OWNER QUEUE items only: the AUTO_REDEEM one-time flag, a
+  banked reset about to expire unused, both engines walled at
+  once with queue non-empty. Everything else is machinery.
+
+ON-BOX CHECKLIST (unverified off-box, ~10 min, one time):
+- Confirm the rollout-JSONL rate_limits fields on the actual
+  Codex install (path + field names) and pin them in
+  usage-ledger.ps1; fall back to vision reads if absent.
+- Confirm Freebuff's mission mode entry point and whether it
+  accepts the mission text from a file/clipboard (vision driver
+  duty 2 depends on the paste path).
+- Confirm the connected-ChatGPT model picker exposes GPT-6 Luna
+  by that name in Freebuff on the box, and that /status inside
+  that session reports the ChatGPT account's windows.
+- Settle the two-meters question: run one connected-Luna session
+  for a known duration and observe whether the Freebuff
+  session-hour/Freebucks ledger moved. Record the answer in this
+  doc; until then the both-ledgers assumption governs.
+
+SOURCES & CONFIDENCE (every load-bearing claim, 2026-10-19)
+- /status shows 5h %, weekly %, reset timestamps, credits;
+  values can go stale (>15 min = refresh with a message):
+  multiple independent Codex-usage guides describing the actual
+  CLI card. HIGH confidence.
+- 5h + weekly windows are account-shared across Codex surfaces
+  (CLI/IDE/web/Work); a banked reset restores BOTH and moves the
+  weekly reset date; the new weekly clock starts at the first
+  post-reset message; banked resets expire unreplaced:
+  OpenAI help-center guidance as reported by whenresets.com,
+  tiboreset.com, vanja.io (consistent across all three). HIGH.
+- Luna throughput ~350-3,000 local messages per 5h window (Plus
+  class) vs Astra ~5-45; Fast mode burns included usage ~2.5x:
+  OpenAI Codex pricing page figures via madrobot.blog's dated
+  reading of it. MEDIUM-HIGH (secondary reporting of the
+  official page; message counts are ranges, not quotas).
+- Freebuff $8 tier: Lucas's account reports 250 Freebucks/day
+  (owner-reported, authoritative for HIS account); official
+  plans page (freebuff.com/plans, read 2026-10-19) expresses the
+  tier in session-hours (50/day + 60 monthly bonus; Luna ~13
+  hrs/day). Both recorded; the scheduler trusts neither number
+  and reads the live balance.
+- Freebuff mission mode (model writes its own next prompt; fresh
+  session continues): owner-reported from the product itself;
+  no public documentation found 2026-10-19, and the npm launcher
+  package (v0.2.30) contains no mission code — the feature lives
+  in the binary/newer builds. Design treats Lucas's description
+  as the spec.
+- Vision driver: harness docs/hourglass-vision.md + computer-
+  control plan (issues #270-273) + driver-core versions, all
+  read from the local harness checkout 2026-10-19. HIGH.
+- Rollout-JSONL rate_limits layout: pattern from current Codex
+  CLI versions; explicitly NOT relied on until the on-box
+  checklist confirms it (see telemetry hedge).
