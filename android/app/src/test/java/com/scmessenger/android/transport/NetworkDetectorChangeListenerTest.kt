@@ -53,4 +53,14 @@ class NetworkDetectorChangeListenerTest {
         detector.updateNetworkType(NetworkType.WIFI)
         assertEquals(NetworkType.WIFI, detector.networkType.value)
     }
+
+    @Test
+    fun throwingListenerStillDeliversToRemainingListeners() {
+        detector.networkChangeListener =
+            NetworkDetector.NetworkChangeListener { _, _ -> throw IllegalStateException("boom") }
+        val calls = mutableListOf<Pair<Boolean, Boolean>>()
+        detector.addNetworkChangeListener { wifi, cell -> calls.add(wifi to cell) }
+        detector.updateNetworkType(NetworkType.WIFI)
+        assertEquals(listOf(true to false), calls)
+    }
 }

@@ -23,6 +23,7 @@ import com.scmessenger.android.transport.discovery.NetworkEventFilter
 import com.scmessenger.android.transport.discovery.NetworkSignature
 import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -63,6 +64,17 @@ class NetworkDetector @Inject constructor(
 
     @Volatile
     var networkChangeListener: NetworkChangeListener? = null
+
+    /** Additional listeners; each real change reaches every one of them. */
+    private val extraChangeListeners = CopyOnWriteArrayList<NetworkChangeListener>()
+
+    fun addNetworkChangeListener(listener: NetworkChangeListener) {
+        extraChangeListeners.addIfAbsent(listener)
+    }
+
+    fun removeNetworkChangeListener(listener: NetworkChangeListener) {
+        extraChangeListeners.remove(listener)
+    }
 
     /** Last non-VPN transport seen; the underlying link of any active VPN. */
     @Volatile
@@ -405,7 +417,11 @@ class NetworkDetector @Inject constructor(
      * break network classification, so it is contained here.
      */
     private fun notifyNetworkChange(newType: NetworkType) {
-        val listener = networkChangeListener ?: return
+        val primary = networkChangeListener
+        val listeners = ArrayList<NetworkChangeListener>(extraChangeListeners.size + 1)
+        if (primary != null) listeners.add(primary)
+        listeners.addAll(extraChangeListeners)
+        if (listeners.isEmpty()) return
         val flags = NetworkAvailability.flagsFor(newType, lastPhysicalType) ?: return
         // A VPN switch over the same transport yields the same flags; the core
         // must see each real change exactly once.
@@ -413,10 +429,18 @@ class NetworkDetector @Inject constructor(
             if (lastNotifiedFlags == flags) return
             lastNotifiedFlags = flags
         }
-        try {
-            listener.onNetworkChanged(flags.first, flags.second)
-        } catch (e: Exception) {
-            Timber.w(e, "Network change listener failed")
+        // One failing listener must not starve the others of this state: each
+        // is isolated, and the failure is logged with the state it missed.
+        for (listener in listeners) {
+            try {
+                listener.onNetworkChanged(flags.first, flags.second)
+            } catch (e: Exception) {
+                Timber.w(
+                    e,
+                    "Network change listener failed (wifi=%s cellular=%s); delivering to remaining listeners",
+                    flags.first, flags.second
+                )
+            }
         }
     }
 
