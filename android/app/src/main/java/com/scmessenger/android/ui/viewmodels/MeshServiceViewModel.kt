@@ -124,29 +124,22 @@ class MeshServiceViewModel @Inject constructor(
      * Toggle the mesh service on/off.
      */
     fun toggleService() {
-        // Read the repository source directly so a lifecycle transition is not
-        // hidden by this ViewModel's WhileSubscribed stateIn cache when the
-        // user taps during STARTING or STOPPING.
-        when (meshRepository.serviceState.value) {
-            uniffi.api.ServiceState.STOPPED -> startService()
-            uniffi.api.ServiceState.RUNNING -> stopService()
-            uniffi.api.ServiceState.STARTING -> {
-                // A second tap while startup is still in flight must remain
-                // actionable. Treat it as a request to cancel startup instead
-                // of silently ignoring the user's input.
-                Timber.i("Mesh toggle requested during STARTING; stopping pending service")
-                stopService()
+        // STOP-TEARDOWN-TIMEOUT-001 (2026-09-21): teardown is asynchronous, and
+        // a stop the user thinks failed is a stop the user repeats. Measured on
+        // the Pixel: every tap did call stopService(), each one re-entered the
+        // wedged teardown and blocked on the same lifecycle monitor, and the
+        // state read RUNNING throughout, so the UI kept claiming Active. A tap in
+        // STOPPING or STARTING used to be a silent no-op (the old else-branch only
+        // logged). Restart stays reachable only from STOPPED, and every other
+        // state resolves to another stop request rather than a no-op.
+        val state = serviceState.value
+        if (shouldStartFrom(state)) {
+            startService()
+        } else {
+            if (state != uniffi.api.ServiceState.RUNNING) {
+                Timber.i("Toggle in state %s: re-requesting stop", state)
             }
-            uniffi.api.ServiceState.STOPPING -> {
-                // Stop teardown is asynchronous. An explicit second tap means
-                // resume once the service receives the start command; the
-                // foreground service serializes the lifecycle transition.
-                Timber.i("Mesh toggle requested during STOPPING; starting service")
-                startService()
-            }
-            else -> {
-                Timber.w("Cannot toggle service in state: ${meshRepository.serviceState.value}")
-            }
+            stopService()
         }
     }
 
@@ -186,6 +179,18 @@ class MeshServiceViewModel @Inject constructor(
             appendLine("Bytes Transferred: ${formatBytes(stats.bytesTransferred)}")
             appendLine("Uptime: ${formatDuration(stats.uptimeSecs)}")
         }
+    }
+
+    companion object {
+        /**
+         * STOP-TEARDOWN-TIMEOUT-001: only STOPPED may start the mesh. Any other
+         * state -- RUNNING, STARTING, and especially the asynchronous STOPPING --
+         * resolves to a stop request, so a retry can never resurrect a mesh the
+         * user just stopped. Pure, so it is unit-testable without an Android
+         * runtime.
+         */
+        internal fun shouldStartFrom(state: uniffi.api.ServiceState): Boolean =
+            state == uniffi.api.ServiceState.STOPPED
     }
 
     private fun formatBytes(bytes: ULong): String {

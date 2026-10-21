@@ -230,4 +230,43 @@ class MainViewModelTest {
         degradedFlow.value = true
         assertEquals(true, viewModel.isStorageDegraded.value)
     }
+
+    // ---- #469 T3: shared invite hand-off to the join screen ----
+
+    @Test
+    fun `offerInvite keeps only a well-formed SCI1 token and consumeInvite takes it once`() {
+        viewModel.offerInvite("hello, join me: SCI1:abcDEF123_-xyz. thanks")
+
+        assertEquals("SCI1:abcDEF123_-xyz", viewModel.pendingInvite.value)
+        assertEquals("SCI1:abcDEF123_-xyz", viewModel.consumeInvite())
+        assertNull(viewModel.pendingInvite.value)
+        assertNull(viewModel.consumeInvite())
+    }
+
+    @Test
+    fun `offerInvite ignores text without an invite and keeps a pending one`() {
+        viewModel.offerInvite("SCI1:firstToken")
+        viewModel.offerInvite("just a chat message")
+        viewModel.offerInvite(null)
+        viewModel.offerInvite("SCI1:")
+
+        assertEquals("SCI1:firstToken", viewModel.pendingInvite.value)
+    }
+
+    @Test
+    fun `racing consumers get the pending invite exactly once`() {
+        viewModel.offerInvite("SCI1:onlyOneWinner")
+        val winners = java.util.concurrent.atomic.AtomicInteger(0)
+        val start = java.util.concurrent.CountDownLatch(1)
+        val threads = (0 until 12).map {
+            Thread {
+                start.await()
+                if (viewModel.consumeInvite() != null) winners.incrementAndGet()
+            }.also { t -> t.start() }
+        }
+        start.countDown()
+        threads.forEach { it.join(20_000) }
+
+        assertEquals(1, winners.get())
+    }
 }

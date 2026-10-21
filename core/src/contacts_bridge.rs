@@ -100,31 +100,85 @@ fn contact_database_registry() -> &'static Mutex<HashMap<PathBuf, WeakContactDat
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Per-path open gate (#413 review F1). Serialises concurrent opens of the
+/// SAME path only, so the lock-contention retry (up to ~5 s) is never run while
+/// holding the global registry mutex: opens of other paths and every registry
+/// lookup stay unblocked.
+fn contact_open_gate(path: &std::path::Path) -> Arc<Mutex<()>> {
+    static GATES: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    GATES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .entry(path.to_path_buf())
+        .or_default()
+        .clone()
+}
+
+/// Short registry lookup; the lock is released before returning.
+fn registered_contact_database(path: &std::path::Path) -> Option<SharedContactDatabase> {
+    contact_database_registry()
+        .lock()
+        .get(path)
+        .and_then(Weak::upgrade)
+}
+
 #[uniffi::export]
 impl ContactManager {
     /// Create or open contact database at the given path
     #[uniffi::constructor]
     pub fn new(storage_path: String) -> Result<Self, crate::IronCoreError> {
         let path = PathBuf::from(storage_path).join("contacts.db");
-        let mut registry = contact_database_registry().lock();
 
-        if let Some(existing) = registry.get(&path).and_then(Weak::upgrade) {
+        if let Some(existing) = registered_contact_database(&path) {
             return Ok(Self { db: existing });
         }
 
-        // A previous manager may have been released after an app lifecycle
-        // transition. Drop its expired weak entry before opening a new store.
-        registry.remove(&path);
-        let db = sled::Config::default()
-            .path(&path)
-            .mode(sled::Mode::LowSpace)
-            .use_compression(false)
-            .open()
-            .context("Failed to open contacts database")
-            .map_err(|_| crate::IronCoreError::StorageError)?;
+        // #413 review F1: the open below can sleep up to ~5 s in the lock
+        // retry. The global registry mutex must NOT be held across it, so we
+        // serialise on a per-path gate instead, then re-check the registry
+        // (another caller may have opened this path while we waited).
+        let gate = contact_open_gate(&path);
+        let _open_guard = gate.lock();
+        if let Some(existing) = registered_contact_database(&path) {
+            return Ok(Self { db: existing });
+        }
+
+        // MESSAGE-STORE-LOCK-001 (2026-09-21): a just-stopped MeshService can
+        // still hold this store's sled lock, because its UniFFI wrapper is
+        // released by the GC/cleaner rather than by `stop()` -- and a
+        // stop -> Start on the Pixel reaches exactly here. Open through the
+        // shared, teardown-sized retry so a transient holder is not reported
+        // as a broken store; a real holder still fails loud.
+        let (db, open_attempt) = crate::store::backend::open_with_lock_retry(|| {
+            sled::Config::default()
+                .path(&path)
+                .mode(sled::Mode::LowSpace)
+                .use_compression(false)
+                .open()
+        })
+        .map_err(|(attempts, err)| {
+            tracing::error!(
+                "ContactManager::new: sled failed to open {:?} after {} attempts: {}",
+                path,
+                attempts,
+                err
+            );
+            crate::IronCoreError::StorageError
+        })?;
+        if open_attempt > 1 {
+            tracing::warn!(
+                "ContactManager::new: opened {:?} on attempt {} (previous holder still releasing)",
+                path,
+                open_attempt
+            );
+        }
 
         let db: SharedContactDatabase = Arc::new(Mutex::new(db));
-        registry.insert(path, Arc::downgrade(&db));
+        // Short lock: replaces any expired weak entry left by a manager that
+        // was released after an app lifecycle transition.
+        contact_database_registry()
+            .lock()
+            .insert(path, Arc::downgrade(&db));
 
         Ok(Self { db })
     }
@@ -153,7 +207,7 @@ impl ContactManager {
         Ok(())
     }
 
-    /// Get a contact by peer ID
+    /// Get a contact by peer ID, public key, or identity ID
     // UNIFICATION verbose logging for nickname load
     pub fn get(&self, peer_id: String) -> Result<Option<Contact>, crate::IronCoreError> {
         let db = self.db.lock();
@@ -171,17 +225,22 @@ impl ContactManager {
                 local_nickname = ?contact.local_nickname,
                 "UNIFICATION loaded contact nickname"
             );
-            Ok(Some(contact))
-        } else {
-            Ok(None)
+            return Ok(Some(contact));
         }
+        // Fallback: the row may be filed under a different spelling of the
+        // same identity (libp2p peer id vs public-key hex vs identity id).
+        Ok(Self::scan_for_identifier(&db, &peer_id)?.map(|(_, contact)| contact))
     }
 
-    /// Remove a contact
+    /// Remove a contact by peer ID, public key, or identity ID
     pub fn remove(&self, peer_id: String) -> Result<(), crate::IronCoreError> {
         let db = self.db.lock();
         db.remove(peer_id.as_bytes())
             .map_err(|_| crate::IronCoreError::StorageError)?;
+        if let Some((key, _)) = Self::scan_for_identifier(&db, &peer_id)? {
+            db.remove(key)
+                .map_err(|_| crate::IronCoreError::StorageError)?;
+        }
         Ok(())
     }
 
@@ -441,6 +500,48 @@ impl ContactManager {
     }
 }
 
+// Internal helpers: kept out of the `#[uniffi::export]` block (associated
+// functions without `self` are not exportable).
+impl ContactManager {
+    /// Does `contact` answer to `identifier` (peer id or public key, case
+    /// insensitive, or the identity id derived from its public key)?
+    fn contact_answers_to(contact: &Contact, identifier: &str) -> bool {
+        if identifier.is_empty() {
+            return false;
+        }
+        // A libp2p peer id is base58 and therefore case-SENSITIVE: two distinct
+        // peer ids can differ only by case, so it must match exactly (a
+        // case-insensitive match could remove the wrong contact). Only the hex
+        // spellings (public key, identity id) are case-folded, and only when the
+        // identifier is itself hex-shaped.
+        if contact.peer_id == identifier {
+            return true;
+        }
+        let hex_shaped = identifier.bytes().all(|b| b.is_ascii_hexdigit());
+        hex_shaped
+            && (contact.peer_id.eq_ignore_ascii_case(identifier)
+                || contact.public_key.eq_ignore_ascii_case(identifier)
+                || crate::identity::identity_id_from_public_key_hex(&contact.public_key)
+                    .is_some_and(|id| id.eq_ignore_ascii_case(identifier)))
+    }
+
+    fn scan_for_identifier(
+        db: &Db,
+        identifier: &str,
+    ) -> Result<Option<(sled::IVec, Contact)>, crate::IronCoreError> {
+        let trimmed = identifier.trim();
+        for item in db.iter() {
+            let (key, value) = item.map_err(|_| crate::IronCoreError::StorageError)?;
+            if let Ok(contact) = serde_json::from_slice::<Contact>(&value) {
+                if Self::contact_answers_to(&contact, trimmed) {
+                    return Ok(Some((key, contact)));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
 fn current_timestamp() -> u64 {
     web_time::SystemTime::now()
         .duration_since(web_time::UNIX_EPOCH)
@@ -481,6 +582,58 @@ mod tests {
     use super::*;
     use crate::test_support::self_certifying_keypair;
 
+    /// #413 review F1: while one caller is sleeping in the lock-contention
+    /// retry for path A, the global registry mutex must stay free and an open
+    /// of an unrelated path B must not wait behind A's retry.
+    #[test]
+    fn registry_lock_is_not_held_across_open_retry() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let a = dir_a.path().to_str().unwrap().to_string();
+        let b = dir_b.path().to_str().unwrap().to_string();
+
+        // An outside holder keeps A's sled lock, forcing the retry path.
+        let held = sled::open(dir_a.path().join("contacts.db")).unwrap();
+        let waiter = std::thread::spawn(move || ContactManager::new(a).map(|_| ()));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        let started = std::time::Instant::now();
+        assert!(
+            contact_database_registry().try_lock().is_some(),
+            "registry mutex must be free while a retry is sleeping"
+        );
+        ContactManager::new(b).expect("unrelated path opens promptly");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "unrelated open waited behind the retry: {:?}",
+            started.elapsed()
+        );
+
+        drop(held);
+        waiter
+            .join()
+            .expect("waiter thread")
+            .expect("retry succeeds once the holder releases");
+    }
+
+    /// Two callers on the same path share one Db (the registry contract is
+    /// preserved by the per-path gate + re-check).
+    #[test]
+    fn concurrent_opens_of_one_path_share_one_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let p = path.clone();
+                std::thread::spawn(move || ContactManager::new(p).expect("open"))
+            })
+            .collect();
+        let managers: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        for m in &managers[1..] {
+            assert!(Arc::ptr_eq(&managers[0].db, &m.db));
+        }
+    }
+
     #[test]
     fn test_contact_creation() {
         let contact = Contact::new("12D3KooTest".to_string(), "abcd1234".to_string())
@@ -488,6 +641,74 @@ mod tests {
 
         assert_eq!(contact.display_name(), "Alice");
         assert_eq!(contact.peer_id, "12D3KooTest");
+    }
+
+    #[test]
+    fn contact_manager_resolves_and_removes_by_any_identity_spelling(
+    ) -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let (peer_id, key_hex) = self_certifying_keypair(b"scm-idv2-bridge");
+        let identity_id = crate::identity::identity_id_from_public_key_hex(&key_hex).unwrap();
+        manager
+            .add(Contact::new(peer_id.clone(), key_hex.clone()).with_nickname("A".to_string()))?;
+
+        assert!(manager.get(peer_id.clone())?.is_some());
+        assert!(manager.get(key_hex.clone())?.is_some());
+        assert!(manager.get(key_hex.to_uppercase())?.is_some());
+        assert!(manager.get(identity_id.clone())?.is_some());
+        assert!(manager.get("unrelated".to_string())?.is_none());
+        assert!(manager.get(String::new())?.is_none());
+
+        manager.remove(identity_id)?;
+        assert!(manager.get(peer_id)?.is_none());
+        assert!(manager.get(key_hex)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn contact_manager_rejects_non_key_identifiers_and_keeps_peer_id_case_exact(
+    ) -> Result<(), crate::IronCoreError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().to_str().unwrap_or_default().to_string();
+        let manager = ContactManager::new(storage_path)?;
+
+        let (peer_a, key_a) = self_certifying_keypair(b"scm-idv2-neg-a");
+        let (peer_b, key_b) = self_certifying_keypair(b"scm-idv2-neg-b");
+        manager.add(Contact::new(peer_a.clone(), key_a.clone()))?;
+        manager.add(Contact::new(peer_b.clone(), key_b.clone()))?;
+
+        // Non-key identifiers never resolve and never delete anything.
+        for junk in ["not-a-key", "12D3KooWnotakey", "zz", " "] {
+            assert!(manager.get(junk.to_string())?.is_none(), "{junk}");
+            manager.remove(junk.to_string())?;
+        }
+        assert_eq!(manager.list()?.len(), 2);
+
+        // A base58 peer id is case-sensitive: a case-flipped spelling must not
+        // resolve to (or remove) the contact.
+        let flipped: String = peer_a
+            .chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect();
+        assert!(manager.get(flipped.clone())?.is_none());
+        manager.remove(flipped)?;
+        assert!(manager.get(peer_a.clone())?.is_some());
+
+        // The hex spelling of a different contact does not touch the first.
+        manager.remove(key_b.to_uppercase())?;
+        assert!(manager.get(peer_b)?.is_none());
+        assert!(manager.get(peer_a)?.is_some());
+        assert_eq!(manager.list()?.len(), 1);
+        Ok(())
     }
 
     #[test]

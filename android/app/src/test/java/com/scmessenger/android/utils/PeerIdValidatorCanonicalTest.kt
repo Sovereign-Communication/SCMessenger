@@ -52,4 +52,27 @@ class PeerIdValidatorCanonicalTest {
         }
         assertNull(PeerIdValidator.normalizePublicKeyHex("zz"))
     }
+
+    @Test
+    fun `isSameIdentity bridges spellings through the canonicalizer`() {
+        val canon: (String) -> String = { if (it == winP2p || it == "idhash") winPk else "" }
+        assertTrue(PeerIdValidator.isSameIdentity(winP2p, "idhash", canon))
+        assertTrue(PeerIdValidator.isSameIdentity(winPk, winPk.uppercase(), canon))
+        assertFalse(PeerIdValidator.isSameIdentity(winP2p, awsP2p, canon))
+    }
+
+    @Test
+    fun `isSameIdentity never matches two unresolved ids`() {
+        val none: (String) -> String = { "" }
+        assertFalse(PeerIdValidator.isSameIdentity("a", "b", none))
+        assertTrue(PeerIdValidator.isSameIdentity("a", "a", none))
+    }
+
+    @Test
+    fun `threadKey folds spellings and keeps unresolved ids separate`() {
+        val canon: (String) -> String = { if (it == winP2p || it == winPk) winPk.uppercase() else "" }
+        assertEquals(winPk, PeerIdValidator.threadKey(winP2p, canon))
+        assertEquals(PeerIdValidator.threadKey(winPk, canon), PeerIdValidator.threadKey(winP2p, canon))
+        assertEquals("unresolved-peer", PeerIdValidator.threadKey("unresolved-peer", canon))
+    }
 }

@@ -105,7 +105,7 @@ class MeshServiceViewModelTest {
     }
 
     @Test
-    fun `toggle during STOPPING sends explicit start instead of becoming a no-op`() = runTest {
+    fun `toggle during STOPPING re-requests stop instead of starting`() = runTest {
         val stateFlow = MutableStateFlow(uniffi.api.ServiceState.STOPPING)
         every { mockMeshRepository.serviceState } returns stateFlow
         viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
@@ -114,8 +114,8 @@ class MeshServiceViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         verify(exactly = 1) {
-            mockContext.startForegroundService(match {
-                it.action == MeshForegroundService.ACTION_START
+            mockContext.startService(match {
+                it.action == MeshForegroundService.ACTION_STOP
             })
         }
     }
