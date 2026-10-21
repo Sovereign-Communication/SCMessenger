@@ -400,6 +400,16 @@ impl ConnectionLedger {
         self.core.merge_shared_entries(entries)
     }
 
+    /// Like [`Self::merge_shared_entries`], tagging the
+    /// `ledger_address_learned` marker with the source (`via`).
+    pub fn merge_shared_entries_via(
+        &self,
+        entries: &[scmessenger_core::transport::SharedPeerEntry],
+        via: &str,
+    ) -> usize {
+        self.core.merge_shared_entries_via(entries, via)
+    }
+
     /// A summary string for display.
     pub fn summary(&self) -> String {
         self.core.summary()

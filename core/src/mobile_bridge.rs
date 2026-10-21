@@ -298,6 +298,9 @@ pub struct MeshService {
     relay_budget: std::sync::Arc<Mutex<u32>>,
     swarm_headless_mode: std::sync::Arc<Mutex<Option<bool>>>,
     current_device_profile: Mutex<Option<DeviceProfile>>,
+    /// Last (has_wifi, has_cellular) reported by the platform, so only a
+    /// genuine change is forwarded to the swarm as a revival wake.
+    last_network: Mutex<Option<(bool, bool)>>,
     device_state: RwLock<Option<DeviceState>>,
     auto_adjust: Arc<AutoAdjustEngine>,
     wifi_aware_bridge: Arc<Mutex<Option<Arc<PlatformWifiAwareBridge>>>>,
@@ -330,6 +333,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -362,6 +366,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -398,6 +403,7 @@ impl MeshService {
             relay_budget: std::sync::Arc::new(Mutex::new(200)),
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
+            last_network: Mutex::new(None),
             device_state: RwLock::new(None),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
@@ -920,6 +926,9 @@ impl MeshService {
                         rt.block_on(async move {
                             let mut startup_signal = Some(startup_tx);
                             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
+                            // [RX-STALL] drain-loop watchdog state (see the thread
+                            // spawned just before the drain loop below).
+                            let drain_watch_tx = event_tx.downgrade();
 
                             // This site already cloned out of the guard rather than
                             // holding it; stated directly now so it reads the same
@@ -1015,12 +1024,60 @@ impl MeshService {
                                             }
                                         });
                                     }
+                                    // [RX-STALL] watchdog. The drain loop runs on a
+                                    // current_thread runtime and its handlers are
+                                    // synchronous, so a stalled handler also stalls any
+                                    // task on this runtime: the watchdog is a plain OS
+                                    // thread. It holds only a WeakSender, so it does not
+                                    // keep the channel open and exits once the swarm drops.
+                                    let drain_started = std::time::Instant::now();
+                                    let drain_progress_ms =
+                                        Arc::new(std::sync::atomic::AtomicU64::new(0));
+                                    {
+                                        let progress = Arc::clone(&drain_progress_ms);
+                                        let weak_tx = drain_watch_tx;
+                                        let spawn_result = std::thread::Builder::new()
+                                            .name("rx-stall-watchdog".to_string())
+                                            .spawn(move || loop {
+                                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                                let Some(tx) = weak_tx.upgrade() else { break };
+                                                let backlog =
+                                                    tx.max_capacity().saturating_sub(tx.capacity());
+                                                drop(tx);
+                                                let idle_ms = (drain_started.elapsed().as_millis() as u64)
+                                                    .saturating_sub(
+                                                        progress.load(std::sync::atomic::Ordering::Relaxed),
+                                                    );
+                                                if backlog > 0 && idle_ms >= 30_000 {
+                                                    tracing::warn!(
+                                                        "{}",
+                                                        crate::message_events::fmt_rx_stall_drain(
+                                                            idle_ms, backlog
+                                                        )
+                                                    );
+                                                }
+                                            });
+                                        // The watchdog is diagnostics only; the drain loop is
+                                        // fully functional without it. The failure is logged
+                                        // with context and the node degrades to "no stall
+                                        // reports" rather than aborting startup.
+                                        let _watchdog_running =
+                                            note_rx_stall_watchdog_spawn(spawn_result);
+                                    }
+                                    let registration_gate = RegistrationGate::new();
                                     while let Some(event) = event_rx.recv().await {
+                                        drain_progress_ms.store(
+                                            drain_started.elapsed().as_millis() as u64,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
                                         match event {
                                             crate::transport::SwarmEvent::MessageReceived {
                                                 peer_id,
                                                 envelope_data,
                                             } => {
+                                                // Event-driven retry: an inbound from a peer whose
+                                                // registration is waiting out a backoff retries now.
+                                                registration_gate.kick(&peer_id.to_string());
                                                 // Clone the Arc and RELEASE the mutex before calling
                                                 // into the core. Holding it across receive_message
                                                 // serialises every other core user behind this call.
@@ -1073,7 +1130,19 @@ impl MeshService {
 
                                                                         let mut s = stats_clone.lock();
                                                                         s.messages_relayed += 1;
+                                                                    } else {
+                                                                        crate::message_events::log_rx_drop(
+                                                                            Some(&msg.id),
+                                                                            "onion_relay",
+                                                                            "next_hop_key_invalid",
+                                                                        );
                                                                     }
+                                                                } else {
+                                                                    crate::message_events::log_rx_drop(
+                                                                        Some(&msg.id),
+                                                                        "onion_relay",
+                                                                        "next_hop_not_hex",
+                                                                    );
                                                                 }
                                                             } else {
                                                                 tracing::info!(
@@ -1107,6 +1176,11 @@ impl MeshService {
                                                         }
                                                     }
                                                 } else {
+                                                    crate::message_events::log_rx_drop(
+                                                        None,
+                                                        "bridge_dispatch",
+                                                        "core_not_initialized",
+                                                    );
                                                     eprintln!(
                                                         "[IronCore] [ERROR] receive_message SKIPPED from {}: core not initialized",
                                                         peer_id
@@ -1171,15 +1245,26 @@ impl MeshService {
                                                         })
                                                 };
                                                 if let Some(request) = registration_request {
-                                                    if let Err(err) =
-                                                        handle.register_identity(peer_id, request).await
-                                                    {
-                                                        tracing::warn!(
-                                                            "Failed to register local identity with {}: {:?}",
-                                                            peer_id,
-                                                            err
-                                                        );
-                                                    }
+                                                    // MUST NOT be awaited inline: this loop is the sole
+                                                    // consumer of the swarm event channel, and a
+                                                    // registration round trip to a slow or silent
+                                                    // peer stalled it for minutes. While stalled,
+                                                    // every inbound MessageReceived queued behind it
+                                                    // (Pixel 2026-10-08: Drift Data frames from the
+                                                    // swarm never reached receive_message). Detach it
+                                                    // with a hard timeout.
+                                                    let reg_handle = handle.clone();
+                                                    spawn_registration(
+                                                        &registration_gate,
+                                                        peer_id.to_string(),
+                                                        REGISTRATION_ATTEMPT_TIMEOUT,
+                                                        REGISTRATION_RETRY_BASE,
+                                                        move || {
+                                                            let h = reg_handle.clone();
+                                                            let req = request.clone();
+                                                            async move { h.register_identity(peer_id, req).await }
+                                                        },
+                                                    );
                                                 }
                                                 tracing::info!(
                                                     "Peer identified via Swarm: {} (agent: {})",
@@ -1750,7 +1835,7 @@ impl MeshService {
         self.update_device_state(profile);
     }
 
-    pub fn on_network_changed(&self, has_wifi: bool, _has_cellular: bool) {
+    pub fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
         let mut profile = self
             .current_device_profile
             .lock()
@@ -1759,6 +1844,22 @@ impl MeshService {
         profile.has_wifi = has_wifi;
         // profile doesn't have has_cellular yet, but we've ingested it.
         self.update_device_state(profile);
+
+        // Revival wake: a genuine interface change (for example the Wi-Fi to
+        // cellular handover) is a reason to expect previously unreachable
+        // peers may now be reachable. The first report only records the
+        // baseline; repeated identical reports are not events. The swarm
+        // rate limits wakes per source, so a flapping platform callback
+        // cannot hold addresses at the backoff floor.
+        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
+        if let Some((prev_wifi, prev_cellular)) = previous {
+            if prev_wifi != has_wifi {
+                self.dispatch_network_event(crate::transport::NetworkEvent::WifiChanged);
+            }
+            if prev_cellular != has_cellular {
+                self.dispatch_network_event(crate::transport::NetworkEvent::CellularChanged);
+            }
+        }
     }
 
     pub fn on_motion_changed(&self, motion: MotionState) {
@@ -2227,6 +2328,18 @@ impl MeshService {
 
 // Non-UniFFI internal methods for MeshService
 impl MeshService {
+    /// Fan one local network event out to both revival queues: the swarm's
+    /// dial-policy backoff (non-blocking command send) and the IronCore
+    /// reconnect queue. The core handle is cloned out so the `core` mutex is
+    /// not held while waking; nothing here awaits.
+    fn dispatch_network_event(&self, event: crate::transport::NetworkEvent) {
+        self.swarm_bridge.notify_network_event(event);
+        let core = self.core.lock().clone();
+        if let Some(core) = core {
+            core.wake_reconnects_on_network_event(event);
+        }
+    }
+
     /// WP2: record a verified platform data link in the shared routing engine.
     ///
     /// A proximity frame that arrived, or a Wi-Fi Aware / Wi-Fi Direct data
@@ -3402,6 +3515,147 @@ pub struct HistoryStats {
 /// reachable only by pubkey queries (residual, matches the core store's
 /// behavior). `filter_identity_id` is precomputed once per query (Ed25519
 /// curve validation + blake3), never per record.
+/// Upper bound for one background identity-registration attempt.
+const REGISTRATION_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// First retry delay after a failed or timed-out registration attempt.
+const REGISTRATION_RETRY_BASE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Ceiling for the exponential retry delay.
+const REGISTRATION_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Coalescing per-peer single-flight for detached identity registration.
+///
+/// There is deliberately no global cap: concurrency is bounded by the number
+/// of distinct peers, each of which holds one parked task (a timer and a
+/// pending reply), not a thread. A duplicate request for a peer that already
+/// has a registration in flight merges into it and wakes it for an immediate
+/// retry instead of competing for a slot or being dropped.
+#[derive(Clone, Default)]
+struct RegistrationGate {
+    in_flight: Arc<Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>>,
+}
+
+impl RegistrationGate {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    #[cfg(test)]
+    fn pending(&self) -> usize {
+        self.in_flight.lock().len()
+    }
+
+    /// Event-driven retry trigger (inbound from `peer`, connect, identify).
+    /// Wakes a registration that is waiting out its backoff. Returns true when
+    /// one was in flight.
+    fn kick(&self, peer: &str) -> bool {
+        match self.in_flight.lock().get(peer) {
+            Some(notify) => {
+                notify.notify_one();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Outcome handling for the `[RX-STALL]` watchdog thread spawn. Returns true
+/// when the watchdog is running. On failure it logs the error with context and
+/// returns false: the caller then continues without stall reports (a defined
+/// degraded state), it never aborts the drain loop.
+fn note_rx_stall_watchdog_spawn(result: std::io::Result<std::thread::JoinHandle<()>>) -> bool {
+    match result {
+        Ok(_handle) => true,
+        Err(e) => {
+            tracing::warn!(
+                "[RX-STALL] watchdog thread spawn failed (kind={:?}); continuing without stall reports: {}",
+                e.kind(),
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Last 8 characters of a peer id, for compact log lines.
+fn short_peer(peer: &str) -> String {
+    let skip = peer.chars().count().saturating_sub(8);
+    peer.chars().skip(skip).collect()
+}
+
+/// Run a registration round trip off the swarm-event drain loop. Returns
+/// immediately. Each attempt is bounded by `timeout`; a timeout or error is
+/// never a drop: it logs `[RX-DEFER]` and retries with exponential backoff
+/// (`retry_base` doubling up to `REGISTRATION_RETRY_MAX`) until it succeeds,
+/// waking early on `RegistrationGate::kick`. Returns true when a new task was
+/// started, false when the request coalesced into one already in flight (which
+/// is kicked to retry now).
+fn spawn_registration<F, Fut, E>(
+    gate: &RegistrationGate,
+    peer: String,
+    timeout: std::time::Duration,
+    retry_base: std::time::Duration,
+    make_attempt: F,
+) -> bool
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), E>> + Send + 'static,
+    E: fmt::Debug,
+{
+    let notify = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut map = gate.in_flight.lock();
+        if let Some(existing) = map.get(&peer) {
+            existing.notify_one();
+            return false;
+        }
+        map.insert(peer.clone(), notify.clone());
+    }
+    let in_flight = gate.in_flight.clone();
+    tokio::spawn(async move {
+        let mut delay = retry_base;
+        let mut attempt: u32 = 0;
+        loop {
+            attempt = attempt.saturating_add(1);
+            match tokio::time::timeout(timeout, make_attempt()).await {
+                Ok(Ok(())) => break,
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        "[RX-DEFER] register_identity peer={} attempt={} err={:?} retry_ms={}",
+                        short_peer(&peer),
+                        attempt,
+                        err,
+                        delay.as_millis()
+                    );
+                }
+                Err(_) => {
+                    let pending = in_flight.lock().len();
+                    tracing::info!(
+                        "[RX-STALL] register_identity peer={} timeout_ms={} pending={}",
+                        short_peer(&peer),
+                        timeout.as_millis(),
+                        pending
+                    );
+                    tracing::info!(
+                        "[RX-DEFER] register_identity peer={} attempt={} retry_ms={}",
+                        short_peer(&peer),
+                        attempt,
+                        delay.as_millis()
+                    );
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = notify.notified() => {}
+            }
+            delay = (delay * 2).min(REGISTRATION_RETRY_MAX);
+        }
+        in_flight.lock().remove(&peer);
+    });
+    true
+}
+
 fn history_peer_matches(filter: &str, record_peer: &str, filter_identity_id: Option<&str>) -> bool {
     if record_peer.eq_ignore_ascii_case(filter) {
         return true;
@@ -3956,6 +4210,70 @@ fn get_global_runtime() -> tokio::runtime::Handle {
     handle
 }
 
+/// True when a swarm dial error string is the core guard's neutral
+/// `skipped:` reply (see `SwarmCommand::Dial` handling in the swarm loop).
+fn dial_error_is_skip(err: &str) -> bool {
+    err.trim_start().starts_with("skipped:")
+}
+
+/// Bridge-level outcome of a swarm dial `skipped:` reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialSkipOutcome {
+    /// Exact socket / peer id already connected: genuine connectivity evidence.
+    AlreadyConnected,
+    /// Self / own address / rate-limited probe: no evidence either way.
+    Neutral,
+}
+
+/// Classify a swarm dial error string. `None` means it is a real failure.
+fn classify_dial_skip(err: &str) -> Option<DialSkipOutcome> {
+    if !dial_error_is_skip(err) {
+        return None;
+    }
+    if err.contains(crate::transport::swarm::DIAL_SKIP_CONNECTED_MARKER) {
+        Some(DialSkipOutcome::AlreadyConnected)
+    } else {
+        Some(DialSkipOutcome::Neutral)
+    }
+}
+
+/// Map a swarm dial result onto the FFI contract: `Ok` only for real
+/// dispatch or an already-connected skip; `DialSkipped` for non-evidence
+/// skips; the usual typed errors otherwise.
+fn map_dial_result(dial_result: anyhow::Result<()>) -> Result<(), crate::IronCoreError> {
+    if let Err(e) = &dial_result {
+        match classify_dial_skip(&e.to_string()) {
+            Some(DialSkipOutcome::AlreadyConnected) => {
+                tracing::debug!("Dial skipped (already connected): {}", e);
+                return Ok(());
+            }
+            Some(DialSkipOutcome::Neutral) => {
+                tracing::debug!("Dial skipped by swarm guard (no evidence): {}", e);
+                return Err(crate::IronCoreError::DialSkipped);
+            }
+            None => {}
+        }
+    }
+    dial_result.map_err(|e| {
+        let err_str = e.to_string().to_lowercase();
+        if err_str.contains("dialing self") || err_str.contains("dialself") {
+            crate::IronCoreError::DialSelf
+        } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
+            crate::IronCoreError::NoAddresses
+        } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
+            // TODO(#521): live today (behaviour.rs connection_limits); revisit
+            // and drop this mapping if #521 removes the deny path.
+            crate::IronCoreError::ConnectionLimit
+        } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported") {
+            crate::IronCoreError::MultiaddrNotSupported
+        } else if err_str.contains("io") {
+            crate::IronCoreError::IoError
+        } else {
+            crate::IronCoreError::NetworkError
+        }
+    })
+}
+
 #[uniffi::export]
 impl SwarmBridge {
     #[uniffi::constructor]
@@ -4122,23 +4440,11 @@ impl SwarmBridge {
         let addr =
             Multiaddr::from_str(&multiaddr).map_err(|_| crate::IronCoreError::InvalidInput)?;
 
-        handle.dial(addr).await.map_err(|e| {
-            let err_str = e.to_string().to_lowercase();
-            if err_str.contains("dialing self") || err_str.contains("dialself") {
-                crate::IronCoreError::DialSelf
-            } else if err_str.contains("no addresses") || err_str.contains("noaddresses") {
-                crate::IronCoreError::NoAddresses
-            } else if err_str.contains("connection limit") || err_str.contains("connectionlimit") {
-                crate::IronCoreError::ConnectionLimit
-            } else if err_str.contains("not supported") || err_str.contains("multiaddrnotsupported")
-            {
-                crate::IronCoreError::MultiaddrNotSupported
-            } else if err_str.contains("io") {
-                crate::IronCoreError::IoError
-            } else {
-                crate::IronCoreError::NetworkError
-            }
-        })
+        // A "skipped:" reply is a deliberate non-dispatch by the swarm guard.
+        // Already-connected skips (exact socket / peer id) are Ok: genuine
+        // connectivity evidence. Self / own-address / rate-limited skips are
+        // the typed `DialSkipped` error: neither success nor failure.
+        map_dial_result(handle.dial(addr).await)
     }
 
     pub async fn get_peers(&self) -> Vec<String> {
@@ -4313,6 +4619,16 @@ impl SwarmBridge {
     /// This must be called after starting the swarm to wire up network operations.
     pub fn set_handle(&self, handle: SwarmHandle) {
         *self.handle.lock() = Some(handle);
+    }
+
+    /// Forward a platform network event to the swarm's dial policy so waiting
+    /// peers get a (rate-limited) revival wake. Non-blocking; a no-op when no
+    /// swarm is running.
+    pub fn notify_network_event(&self, event: crate::transport::NetworkEvent) {
+        let handle = self.handle.lock().clone();
+        if let Some(handle) = handle {
+            handle.notify_network_event(event);
+        }
     }
 
     /// Internal helper to get the runtime handle for spawning
@@ -4634,9 +4950,219 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn wait_idle(gate: &super::RegistrationGate) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while gate.pending() != 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "registrations never drained"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn burst_far_beyond_old_cap_loses_no_registration() {
+        let gate = super::RegistrationGate::new();
+        let done = std::sync::Arc::new(AtomicUsize::new(0));
+        let n = 200;
+        for i in 0..n {
+            let d = done.clone();
+            assert!(super::spawn_registration(
+                &gate,
+                format!("peer-{i}"),
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_millis(5),
+                move || {
+                    let d = d.clone();
+                    async move {
+                        d.fetch_add(1, Ordering::SeqCst);
+                        Ok::<(), String>(())
+                    }
+                },
+            ));
+        }
+        wait_idle(&gate).await;
+        assert_eq!(done.load(Ordering::SeqCst), n);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn same_identity_requests_coalesce() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let mk = |a: std::sync::Arc<AtomicUsize>| {
+            move || {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    // Fail once so the task stays in flight long enough to coalesce.
+                    if n < 1 {
+                        Err("not yet".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        };
+        let long = std::time::Duration::from_secs(30);
+        assert!(super::spawn_registration(
+            &gate,
+            "peer-x".into(),
+            long,
+            long,
+            mk(attempts.clone())
+        ));
+        tokio::task::yield_now().await;
+        assert!(
+            !super::spawn_registration(&gate, "peer-x".into(), long, long, mk(attempts.clone())),
+            "duplicate must merge into the in-flight registration"
+        );
+        assert_eq!(gate.pending(), 1);
+        // The coalesced request kicked the 30s backoff, so the retry runs now.
+        wait_idle(&gate).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn timeout_defers_then_later_retry_succeeds() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        assert!(super::spawn_registration(
+            &gate,
+            "peer-slow".into(),
+            std::time::Duration::from_millis(30),
+            std::time::Duration::from_millis(10),
+            move || {
+                let n = a.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if n == 0 {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok::<(), String>(())
+                }
+            },
+        ));
+        wait_idle(&gate).await;
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "timeout must retry, not drop"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn kick_wakes_backoff_and_unknown_peer_is_noop() {
+        let gate = super::RegistrationGate::new();
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let a = attempts.clone();
+        let long = std::time::Duration::from_secs(60);
+        super::spawn_registration(&gate, "peer-k".into(), long, long, move || {
+            let n = a.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    Err("down".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(gate.kick("peer-k"));
+        assert!(!gate.kick("peer-none"));
+        wait_idle(&gate).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
+
+    #[test]
+    fn dial_error_is_skip_matches_only_the_neutral_prefix() {
+        assert!(dial_error_is_skip(
+            "skipped: host already connected -- respond over existing link"
+        ));
+        assert!(dial_error_is_skip(
+            "skipped: target is self (local peer id)"
+        ));
+        assert!(!dial_error_is_skip("Dial failed: connection refused"));
+        assert!(!dial_error_is_skip("marked as dead, skipped: later"));
+    }
+
+    #[test]
+    fn dial_skip_ffi_contract_ok_only_for_connected_evidence() {
+        // Exact socket / peer id connected: Ok (evidence).
+        for msg in [
+            "skipped: exact socket already connected -- respond over existing link",
+            "skipped: peer already connected -- respond over existing link",
+        ] {
+            assert!(map_dial_result(Err(anyhow::anyhow!(msg))).is_ok(), "{msg}");
+        }
+        // Self / own address / rate-limited probe: typed DialSkipped.
+        for msg in [
+            "skipped: target is self (local peer id)",
+            "skipped: address is our own listener/external/interface addr -- self-dial",
+            "skipped: host already has a live direct link in this path class; different-port probe skipped",
+        ] {
+            assert!(
+                matches!(
+                    map_dial_result(Err(anyhow::anyhow!(msg))),
+                    Err(crate::IronCoreError::DialSkipped)
+                ),
+                "{msg}"
+            );
+        }
+        // Real failures keep their typed mapping and are never DialSkipped.
+        // (Message avoids the substring "io": the generic mapping treats it as IoError.)
+        assert!(matches!(
+            map_dial_result(Err(anyhow::anyhow!("Dial failed: refused by peer"))),
+            Err(crate::IronCoreError::NetworkError)
+        ));
+        assert!(map_dial_result(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn swarm_skip_reasons_classify_as_expected() {
+        assert_eq!(
+            classify_dial_skip(
+                "skipped: exact socket already connected -- respond over existing link"
+            ),
+            Some(DialSkipOutcome::AlreadyConnected)
+        );
+        assert_eq!(
+            classify_dial_skip("skipped: target is self (local peer id)"),
+            Some(DialSkipOutcome::Neutral)
+        );
+        assert_eq!(classify_dial_skip("Network error"), None);
+    }
+
+    #[test]
+    fn hostile_dial_error_strings_are_never_classified_as_skips() {
+        // Only the swarm's own `skipped:`-prefixed replies are skips. An error
+        // that merely mentions the marker or the prefix mid-string, or is
+        // empty/oversized, is a real failure (or unclassified), never a skip.
+        for msg in [
+            "Dial failed: respond over existing link",
+            "libp2p error: skipped: target is self",
+            "",
+            "   ",
+        ] {
+            assert_eq!(classify_dial_skip(msg), None, "{msg:?}");
+            assert!(!matches!(
+                map_dial_result(Err(anyhow::anyhow!(msg.to_string()))),
+                Err(crate::IronCoreError::DialSkipped)
+            ));
+        }
+        let oversized = "x".repeat(1 << 20);
+        assert_eq!(classify_dial_skip(&oversized), None);
+        // The marker only upgrades a real skip to AlreadyConnected.
+        assert_eq!(
+            classify_dial_skip("skipped: odd reason respond over existing link"),
+            Some(DialSkipOutcome::AlreadyConnected)
+        );
+    }
 
     // -----------------------------------------------------------------------
     // DeviceState / BehaviorAdjustment tests
@@ -4658,6 +5184,55 @@ mod tests {
     /// S5: a malformed key must produce an empty string, not an all-zero
     /// 60-digit number that looks like a real (matching) safety number a
     /// user could mistakenly "verify".
+    #[test]
+    fn network_change_wakes_core_reconnect_queue() {
+        use crate::transport::abstraction::{TransportEvent, TransportType};
+        use crate::transport::NetworkEvent;
+
+        let core = Arc::new(crate::IronCore::new());
+        let peer = [7u8; 32];
+        {
+            let manager = core.transport_manager_for_test();
+            let manager = manager.read();
+            manager.add_target_peer(peer, vec![1]);
+            manager.handle_event(TransportEvent::PeerDiscovered {
+                peer_id: peer,
+                transport: TransportType::BLE,
+                addr: vec![1],
+            });
+            manager.handle_event(TransportEvent::PeerDisconnected {
+                peer_id: peer,
+                transport: TransportType::BLE,
+            });
+            for _ in 0..12 {
+                manager.record_reconnect_failure(&peer);
+            }
+        }
+
+        let service = super::MeshService::new(super::MeshServiceConfig {
+            discovery_interval_ms: 5_000,
+            battery_floor_pct: 20,
+        });
+        *service.core.lock() = Some(core.clone());
+
+        // The first report only records the baseline; it is not an event.
+        service.on_network_changed(true, false);
+        assert!(core.peers_needing_reconnect().is_empty());
+
+        // A Wi-Fi to cellular handover is a genuine change: it wakes the
+        // backed-off entry, spending its one-shot credit for this source.
+        service.on_network_changed(false, true);
+        assert_eq!(
+            core.wake_reconnects_on_network_event(NetworkEvent::WifiChanged),
+            0,
+            "the handover must already have woken the queued peer"
+        );
+        // The wake bounds the wait to the base interval, so the peer is due
+        // long before its 12-failure backoff would have elapsed.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(core.peers_needing_reconnect().len(), 1);
+    }
+
     #[test]
     fn test_safety_number_returns_empty_string_on_malformed_keys() {
         assert_eq!(safety_number("not-hex".to_string(), "junk".to_string()), "");
@@ -7424,5 +7999,19 @@ mod tests {
                 "{name}: spellings of one id must not mint extra peers"
             );
         }
+    }
+
+    #[test]
+    fn rx_stall_watchdog_spawn_failure_degrades_without_panicking() {
+        let failed: std::io::Result<std::thread::JoinHandle<()>> = Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "thread limit reached",
+        ));
+        assert!(!note_rx_stall_watchdog_spawn(failed));
+
+        let ok = std::thread::Builder::new()
+            .name("rx-stall-watchdog-test".to_string())
+            .spawn(|| {});
+        assert!(note_rx_stall_watchdog_spawn(ok));
     }
 }

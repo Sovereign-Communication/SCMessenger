@@ -69,13 +69,18 @@ on:
 permissions:
   contents: read
 
+# One active run per pull request; main pushes are keyed on the SHA and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

@@ -11,13 +11,14 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   hygiene-checks:
     name: Repository Hygiene Checks
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Pure git/grep checks (10-15s of work). Hosted: OCI queue waits for this job reached 80 minutes.
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
