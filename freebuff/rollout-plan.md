@@ -118,3 +118,16 @@ Prompt files: `scmessenger-wip-audit-burndown-prompt-2026-10-21.md` (Lane 0), `s
 **Default review swaps:** Lane 2 ⇄ Lane 3 (each reviews the other's); Lane 0's burn-down PRs → Lane 2 or Lane 3; Lane 4's workflow PR → Lane 2. If a request sits unclaimed or a review stalls, the Overseer assigns it.
 
 **Distribution:** every lane prompt carries this protocol — any lane can act as reviewer, and the consciousness is the same everywhere: verify from the code, gate on Jev, iterate on known gaps, deep-dive on stalls, double-review for a true pass.
+
+## 10. Smart launch + token discipline (Lucas 2026-10-21)
+
+**Do NOT launch all lanes at once.** Activate on demand:
+
+1. **Lane 0 first, alone** (Phase A, read-only audit). Wait for the #602 inventory.
+2. **Overseer triages the inventory + #595 queue**, then Lucas activates only lanes with real pending work:
+   - Lane 1 if green-mergeable PRs exist; Lane 2 if red non-transport PRs exist;
+   - Lane 3 if transport work is pending; Lane 4 whenever (independent, bounded).
+3. **Standby rule:** a lane whose queue empties reports to the Overseer and goes DORMANT — no hot polling loops (polling burns tokens for nothing). Reactivation = Lucas pastes the prompt into a fresh tab (fresh context, no stale state). The Overseer flags "Lane X has N new items" on #595 when work reappears.
+4. **Collision:** on-demand activation *reduces* collision surface (fewer concurrent writers). At each activation the Overseer confirms non-overlapping queues. Standing protections still apply: file ownership, one worktree per lane, sole merger (Lane 1), #602 worktree registry.
+
+**Harness MCP for cheap decisions:** every lane routes judgment calls through the LOCAL harness MCP (Jev score/choice/noul) per the sovereign-harness skill — plan assessments, self-reviews, triage, deferral rationale, model/provider selection. MCP calls cost a fraction of a cent vs full lane sessions. Do NOT burn lane tokens on what a Jev call answers. Still lane-local: code writing, file ops, git ops, and claim verification (pull the code yourself; route only the verdict math through MCP).
