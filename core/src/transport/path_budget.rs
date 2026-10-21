@@ -354,6 +354,11 @@ pub struct BudgetStats {
 /// first, so a connection flood cannot hold descriptors or memory past a fixed
 /// multiple of what the machine can afford. Authenticated paths and paths that
 /// carried validated traffic are never released by the ceiling.
+///
+/// The multiple is only an upper estimate: [`TotalLimits::with_caps`] clamps
+/// the ceiling to a physical cap (the soft descriptor limit minus a reserve, and
+/// a share of the memory pool strictly below the whole) so the ceiling never
+/// reaches the limit itself.
 pub const HARD_CEILING_FACTOR: usize = 2;
 
 /// Resource-derived bounds across all peers (see `conn_resources`).
@@ -363,6 +368,34 @@ pub struct TotalLimits {
     pub total: usize,
     /// Bound on live paths that own a file descriptor.
     pub fd: usize,
+    /// Hard ceiling on live paths of every kind; never below `total`.
+    pub ceiling_total: usize,
+    /// Hard ceiling on live descriptor-owning paths; never below `fd`.
+    pub ceiling_fd: usize,
+}
+
+impl TotalLimits {
+    /// Bounds whose ceilings are `HARD_CEILING_FACTOR` times the bound, with no
+    /// physical cap. For callers without a resource snapshot (tests).
+    pub fn new(total: usize, fd: usize) -> Self {
+        Self::with_caps(total, fd, usize::MAX, usize::MAX)
+    }
+
+    /// Bounds with ceilings of `HARD_CEILING_FACTOR` times the bound, clamped to
+    /// `cap_total` / `cap_fd` (the physical headroom limits) but never below the
+    /// bound itself: a bound is always honoured, the cap only removes grace
+    /// tolerance above it.
+    pub fn with_caps(total: usize, fd: usize, cap_total: usize, cap_fd: usize) -> Self {
+        Self {
+            total,
+            fd,
+            ceiling_total: total
+                .saturating_mul(HARD_CEILING_FACTOR)
+                .min(cap_total)
+                .max(total),
+            ceiling_fd: fd.saturating_mul(HARD_CEILING_FACTOR).min(cap_fd).max(fd),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -988,7 +1021,9 @@ where
     /// that had several paths to zero.
     ///
     /// The total bound is soft for paths inside their grace window, but only up
-    /// to [`HARD_CEILING_FACTOR`] times the bound: past that ceiling the
+    /// to the hard ceiling (`TotalLimits::ceiling_total`, at most
+    /// [`HARD_CEILING_FACTOR`] times the bound and always below the physical
+    /// limit): past that ceiling the
     /// unauthenticated, trafficless paths in grace are evictable too (youngest
     /// first) until the counts are back at the ceiling.
     ///
@@ -1009,12 +1044,12 @@ where
         if excess_total == 0 && excess_fd == 0 {
             return Vec::new();
         }
-        // Grace-window paths released above the hard ceiling: how far each
-        // count is past the ceiling, so eviction stops once back at it.
-        let mut grace_release_total =
-            live_total.saturating_sub(limits.total.saturating_mul(HARD_CEILING_FACTOR));
-        let mut grace_release_fd =
-            live_fd.saturating_sub(limits.fd.saturating_mul(HARD_CEILING_FACTOR));
+        // Live counts as victims are chosen. Grace-window paths are released
+        // only while these remain past the hard ceiling, so the release target
+        // is recomputed from the remaining occupancy after every eviction
+        // (unprotected victims included) and stops once back at the ceiling.
+        let mut left_total = live_total;
+        let mut left_fd = live_fd;
         #[derive(Clone, Copy)]
         struct Candidate<C, I> {
             peer: C,
@@ -1090,6 +1125,8 @@ where
                 // A grace-window path is released only when it is neither
                 // authenticated nor carrying traffic and a count is past the
                 // hard ceiling (a descriptor-free path cannot relieve fd).
+                let grace_release_total = left_total.saturating_sub(limits.ceiling_total);
+                let grace_release_fd = left_fd.saturating_sub(limits.ceiling_fd);
                 let grace_pinned = c.protected
                     && !(grace_release_total > 0 || (c.uses_fd && grace_release_fd > 0));
                 let pinned = c.authenticated || c.traffic || grace_pinned || c.peer_live > 1;
@@ -1105,11 +1142,9 @@ where
                 };
                 let due = mark_closing(&mut self.counts, path, now);
                 let class = path.class;
-                if c.protected && !c.authenticated && !c.traffic {
-                    grace_release_total = grace_release_total.saturating_sub(1);
-                    if c.uses_fd {
-                        grace_release_fd = grace_release_fd.saturating_sub(1);
-                    }
+                left_total = left_total.saturating_sub(1);
+                if c.uses_fd {
+                    left_fd = left_fd.saturating_sub(1);
                 }
                 if let Some(n) = remaining.get_mut(&c.peer) {
                     *n = n.saturating_sub(1);
@@ -2075,7 +2110,7 @@ mod tests {
                 at(base, 10_000 + u64::from(n)),
             );
         }
-        let limits = TotalLimits { total: 10, fd: 10 };
+        let limits = TotalLimits::new(10, 10);
         let ev = ledger.evict_over_total(limits, at(base, 20_000), None);
         assert_eq!(ev.len(), 21);
         assert!(ev.iter().all(|e| e.reason == EvictReason::OverTotal));
@@ -2099,11 +2134,11 @@ mod tests {
         ledger.note_reputation(2, 10.0);
         ledger.note_reputation(3, 80.0);
         let now = at(base, 30_000);
-        let limits = TotalLimits { total: 3, fd: 3 };
+        let limits = TotalLimits::new(3, 3);
         let ev = ledger.evict_over_total(limits, now, None);
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].peer, 1, "a redundant path goes before any sole path");
-        let limits = TotalLimits { total: 2, fd: 2 };
+        let limits = TotalLimits::new(2, 2);
         let ev = ledger.evict_over_total(limits, now, None);
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].peer, 2, "then the lowest reputation");
@@ -2116,7 +2151,7 @@ mod tests {
         for n in 0..5u32 {
             ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, u64::from(n)));
         }
-        let limits = TotalLimits { total: 0, fd: 0 };
+        let limits = TotalLimits::new(0, 0);
         let ev = ledger.evict_over_total(limits, at(base, 50_000), Some(4));
         assert_eq!(ev.len(), 4);
         assert!(!ev.iter().any(|e| e.id == 4));
@@ -2141,8 +2176,8 @@ mod tests {
                 at(base, 2 + u64::from(n)),
             );
         }
-        let limits = TotalLimits { total: 4, fd: 4 };
-        let ceiling = limits.total * HARD_CEILING_FACTOR;
+        let limits = TotalLimits::new(4, 4);
+        let ceiling = limits.ceiling_total;
         let now = at(base, 100);
         let ev = ledger.evict_over_total(limits, now, None);
         assert_eq!(
@@ -2156,6 +2191,46 @@ mod tests {
         assert!(!ev.iter().any(|e| e.id == 100));
         assert!(ev.iter().any(|e| e.id == 119));
         assert!(ledger.counters_consistent());
+    }
+
+    #[test]
+    fn ceilings_are_factor_multiples_clamped_by_caps_and_never_below_the_bound() {
+        let l = TotalLimits::new(4, 4);
+        assert_eq!((l.ceiling_total, l.ceiling_fd), (8, 8));
+        let capped = TotalLimits::with_caps(100, 100, 150, 120);
+        assert_eq!((capped.ceiling_total, capped.ceiling_fd), (150, 120));
+        // A cap below the bound never lowers the ceiling under the bound.
+        let floored = TotalLimits::with_caps(100, 100, 10, 0);
+        assert_eq!((floored.ceiling_total, floored.ceiling_fd), (100, 100));
+        assert_eq!(
+            TotalLimits::new(usize::MAX, usize::MAX).ceiling_fd,
+            usize::MAX
+        );
+    }
+
+    #[test]
+    fn grace_release_target_shrinks_with_unprotected_evictions() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        // 6 peers past grace (unprotected) and 6 inside grace: 12 live, bound 4,
+        // ceiling 8. Evicting the 6 unprotected paths already brings the count
+        // to 6, below the ceiling, so no grace path may be released.
+        for n in 0..6u32 {
+            ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, 0));
+        }
+        for n in 0..6u32 {
+            ledger.on_established(
+                100 + n,
+                100 + n,
+                PathClass::WanV4,
+                rtt(),
+                at(base, 59_500 + u64::from(n)),
+            );
+        }
+        let ev = ledger.evict_over_total(TotalLimits::new(4, 4), at(base, 60_000), None);
+        assert_eq!(ev.len(), 6, "{ev:?}");
+        assert!(ev.iter().all(|e| e.id < 100), "{ev:?}");
+        assert_eq!(ledger.occupancy().0, 6);
     }
 
     #[test]
@@ -2176,11 +2251,11 @@ mod tests {
         }
         assert_eq!(ledger.occupancy(), (10, 4));
         // fd bound 2: only fd-owning paths can relieve it; total is satisfied.
-        let ev = ledger.evict_over_total(TotalLimits { total: 10, fd: 2 }, at(base, 30_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(10, 2), at(base, 30_000), None);
         assert_eq!(ev.len(), 2);
         assert!(ev.iter().all(|e| e.id >= 6), "only TCP paths: {ev:?}");
         // Total bound 5 now evicts across both kinds.
-        let ev = ledger.evict_over_total(TotalLimits { total: 5, fd: 2 }, at(base, 30_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(5, 2), at(base, 30_000), None);
         assert_eq!(ev.len(), 3);
         assert_eq!(ledger.occupancy().0, 5);
     }
@@ -2190,7 +2265,7 @@ mod tests {
         let base = Instant::now();
         let mut ledger = Ledger::new();
         ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
-        let ev = ledger.evict_over_total(TotalLimits { total: 1, fd: 1 }, at(base, 1_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(1, 1), at(base, 1_000), None);
         assert!(ev.is_empty());
     }
 
@@ -2226,7 +2301,7 @@ mod tests {
                 at(base, 1_000 + u64::from(n)),
             );
         }
-        let ev = ledger.evict_over_total(TotalLimits { total: 5, fd: 5 }, at(base, 60_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(5, 5), at(base, 60_000), None);
         assert_eq!(ev.len(), 10);
         assert!(ev.iter().all(|e| (200..210).contains(&e.id)), "{ev:?}");
         assert!(!ev.iter().any(|e| e.id == 1), "the idle contact is kept");
@@ -2242,7 +2317,7 @@ mod tests {
         ledger.on_established(1, 10, PathClass::Lan, rtt(), at(base, 0));
         ledger.on_established(1, 11, PathClass::WanV4, rtt(), at(base, 0));
         ledger.on_established(2, 20, PathClass::WanV4, rtt(), at(base, 0));
-        let ev = ledger.evict_over_total(TotalLimits { total: 1, fd: 1 }, at(base, 60_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(1, 1), at(base, 60_000), None);
         assert_eq!(ev.len(), 2, "{ev:?}");
         assert_eq!(ledger.live_paths(&1), 1, "one path of peer 1 survives");
         assert_eq!(ev.iter().filter(|e| e.peer == 1).count(), 1);
@@ -2255,7 +2330,7 @@ mod tests {
         ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
         ledger.on_established(2, 2, PathClass::WanV4, rtt(), at(base, 0));
         ledger.note_reputation(1, 5.0);
-        let ev = ledger.evict_over_total(TotalLimits { total: 1, fd: 1 }, at(base, 60_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(1, 1), at(base, 60_000), None);
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].peer, 2, "no data at all ranks lowest");
     }
@@ -2274,7 +2349,7 @@ mod tests {
         // Only the twenty paths that carried traffic count as active.
         assert_eq!(ledger.active_paths(), 20);
         assert!(ledger.counters_consistent());
-        let ev = ledger.evict_over_total(TotalLimits { total: 20, fd: 20 }, at(base, 60_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(20, 20), at(base, 60_000), None);
         assert_eq!(ev.len(), 30);
         assert_eq!(ledger.occupancy(), (20, 20));
         assert_eq!(ledger.pending_closes(), 30);
@@ -2454,7 +2529,7 @@ mod tests {
                         let before = ledger.occupancy().0;
                         let peer_before = ledger.live_paths(&PEER);
                         evictions = ledger.evict_over_total(
-                            TotalLimits { total: limit, fd: usize::MAX },
+                            TotalLimits::new(limit, usize::MAX),
                             now,
                             None,
                         );

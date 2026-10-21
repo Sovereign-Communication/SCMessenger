@@ -22,9 +22,10 @@ const ENVELOPE_MAX_FUTURE_SKEW_SECS: u32 = 300;
 /// TTL, so anything older has expired on its own terms.
 const ENVELOPE_MAX_AGE_SECS: u32 = crate::drift::envelope::DEFAULT_TTL_SECS;
 /// Model parameter: most message IDs the replay record holds at once. At 16 bytes
-/// of ID plus index overhead this is a few tens of MiB at worst. When full, the
-/// ID with the earliest expiry is evicted; a replay of an evicted ID can only
-/// re-earn one traffic bit, it cannot block other signers.
+/// of ID plus index overhead this is a few tens of MiB at worst. When full, no
+/// new ID is recorded and none earns a traffic bit until expired entries are
+/// pruned; a still-fresh recorded ID is never evicted to make room, because
+/// evicting it would let a captured envelope be replayed to earn the bit again.
 const RECENT_ENVELOPE_IDS_CAP: usize = 262_144;
 /// Model parameter: the record is shared by at most this many full-quota
 /// signers, so one saved contact can hold only `1 / SIGNER_QUOTA_DIVISOR` of it.
@@ -45,9 +46,9 @@ type SignerKey = [u8; 32];
 
 /// Message IDs that earned the contact-signed traffic bit, each kept until its
 /// envelope falls out of the freshness window. A captured envelope replayed
-/// while still fresh cannot earn the bit again unless capacity pressure evicted
-/// it first. Capacity is bounded globally and per signer; eviction removes the
-/// entry that expires soonest.
+/// while still fresh can never earn the bit again: only expiry removes an entry.
+/// Capacity is bounded globally and per signer; at either bound new IDs are
+/// refused rather than evicting a fresh one.
 #[derive(Default)]
 pub(super) struct RecentEnvelopeIds {
     /// Message ID -> (last unix second at which it is still fresh, signer).
@@ -64,8 +65,9 @@ impl RecentEnvelopeIds {
     /// Records `id` from `signer` and returns true when it was not already in its
     /// window. An envelope stays fresh through `created_at + ENVELOPE_MAX_AGE_SECS`,
     /// subject to the exclusive `ttl_expiry`. Remember its ID through the last
-    /// second it can pass. At the signer quota that signer's soonest-expiring ID
-    /// is evicted, and at the global cap the soonest-expiring ID overall is.
+    /// second it can pass. Returns false, recording nothing, when the signer is at
+    /// its quota (that signer is quarantined until its oldest entry expires) or
+    /// the record is at the global cap. A recorded, unexpired ID is never evicted.
     fn first_seen(
         &mut self,
         id: [u8; 16],
@@ -83,19 +85,8 @@ impl RecentEnvelopeIds {
             .by_signer
             .get(&signer)
             .is_some_and(|ids| ids.len() >= SIGNER_IDS_CAP);
-        if signer_full {
-            let victim = self
-                .by_signer
-                .get(&signer)
-                .and_then(|ids| ids.first().copied());
-            if let Some((_, victim_id)) = victim {
-                self.remove(&victim_id);
-            }
-        }
-        if self.until.len() >= RECENT_ENVELOPE_IDS_CAP {
-            if let Some((_, victim_id)) = self.by_expiry.first().copied() {
-                self.remove(&victim_id);
-            }
+        if signer_full || self.until.len() >= RECENT_ENVELOPE_IDS_CAP {
+            return false;
         }
         self.until.insert(id, (until, signer));
         self.by_expiry.insert((until, id));
@@ -365,16 +356,16 @@ mod contact_envelope_gate_tests {
     }
 
     #[test]
-    fn full_record_evicts_soonest_expiring_id_instead_of_blocking() {
+    fn full_record_refuses_new_ids_and_never_evicts_a_fresh_one() {
         let mut recent = RecentEnvelopeIds::default();
         // Fill the record from many signers, each under its own quota.
         for n in 0..RECENT_ENVELOPE_IDS_CAP as u64 {
-            assert!(recent.first_seen(id(n), signer(n % 128), NOW, NOW + 2, NOW));
+            assert!(recent.first_seen(id(n), signer(n % 128), NOW, NOW + 100, NOW));
         }
         assert_eq!(recent.until.len(), RECENT_ENVELOPE_IDS_CAP);
-        // A new signer is not blocked; the soonest-expiring entry makes room.
+        // A new ID is refused while every recorded one is fresh.
         let new_id = id(RECENT_ENVELOPE_IDS_CAP as u64);
-        assert!(contact_envelope_earns_traffic(
+        assert!(!contact_envelope_earns_traffic(
             new_id,
             signer(9_999),
             NOW,
@@ -385,26 +376,52 @@ mod contact_envelope_gate_tests {
             &mut recent
         ));
         assert_eq!(recent.until.len(), RECENT_ENVELOPE_IDS_CAP);
-        assert!(recent.until.contains_key(&new_id));
-        // Its replay is still rejected while it is recorded.
-        assert!(!recent.first_seen(new_id, signer(9_999), NOW, NOW + 100, NOW));
+        assert!(!recent.until.contains_key(&new_id));
+        // Every previously recorded ID is still recorded: no replay by eviction.
+        for n in 0..RECENT_ENVELOPE_IDS_CAP as u64 {
+            assert!(recent.until.contains_key(&id(n)));
+        }
+        assert!(!recent.first_seen(id(0), signer(0), NOW, NOW + 100, NOW));
+        // Once the recorded entries expire the space is reclaimed.
+        assert!(recent.first_seen(new_id, signer(9_999), NOW + 100, 0, NOW + 100));
+        assert_eq!(recent.until.len(), 1);
     }
 
     #[test]
-    fn one_signer_cannot_consume_more_than_its_quota() {
+    fn alternating_replays_cannot_cycle_ids_through_a_full_signer_quota() {
         let mut recent = RecentEnvelopeIds::default();
         let hostile = signer(7);
-        for n in 0..(SIGNER_IDS_CAP as u64 * 2) {
+        for n in 0..SIGNER_IDS_CAP as u64 {
             assert!(recent.first_seen(id(n), hostile, NOW, 0, NOW));
         }
+        // E_a was never recorded; replaying it earns nothing and evicts nothing.
+        let e_a = id(u64::MAX);
+        assert!(!recent.first_seen(e_a, hostile, NOW, 0, NOW + 1));
+        assert!(!recent.first_seen(id(0), hostile, NOW, 0, NOW + 1));
+        assert!(!recent.first_seen(e_a, hostile, NOW, 0, NOW + 2));
+        assert!(!recent.first_seen(id(0), hostile, NOW, 0, NOW + 2));
+        assert_eq!(recent.until.len(), SIGNER_IDS_CAP);
+    }
+
+    #[test]
+    fn one_signer_is_quarantined_at_its_quota_without_affecting_others() {
+        let mut recent = RecentEnvelopeIds::default();
+        let hostile = signer(7);
+        for n in 0..SIGNER_IDS_CAP as u64 {
+            assert!(recent.first_seen(id(n), hostile, NOW, 0, NOW));
+        }
+        assert!(!recent.first_seen(id(u64::MAX), hostile, NOW, 0, NOW));
         assert_eq!(
             recent.by_signer.get(&hostile).map(|ids| ids.len()),
             Some(SIGNER_IDS_CAP)
         );
         assert_eq!(recent.until.len(), SIGNER_IDS_CAP);
         // Another signer is unaffected.
-        assert!(recent.first_seen(id(u64::MAX), signer(8), NOW, 0, NOW));
+        assert!(recent.first_seen(id(u64::MAX - 1), signer(8), NOW, 0, NOW));
         assert_eq!(recent.until.len(), SIGNER_IDS_CAP + 1);
+        // After the hostile signer's entries expire it earns bits again.
+        let later = NOW + ENVELOPE_MAX_AGE_SECS + 1;
+        assert!(recent.first_seen(id(u64::MAX), hostile, later, 0, later));
     }
 
     #[test]

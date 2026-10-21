@@ -66,6 +66,29 @@ pub const FD_SHARE: f64 = 0.5;
 /// the application and the OS page cache pressure it already causes.
 pub const MEMORY_SHARE: f64 = 0.5;
 
+/// Model parameter: smallest number of descriptors the hard ceiling always
+/// leaves unclaimed by connections, for sled, log files, listeners and outbound
+/// dials, even at the peak of a connection flood.
+pub const FD_CEILING_RESERVE_MIN: u64 = 64;
+
+/// Model parameter: the ceiling also leaves `1 / FD_CEILING_RESERVE_DIVISOR` of
+/// the soft descriptor limit unclaimed. The reserve is the larger of this share
+/// and [`FD_CEILING_RESERVE_MIN`].
+pub const FD_CEILING_RESERVE_DIVISOR: u64 = 8;
+
+/// Model parameter: fraction of the memory pool (the paths already held plus
+/// the available memory) the hard ceiling may reach. Strictly below 1.0, so a
+/// flood can never claim the whole pool.
+pub const MEMORY_CEILING_SHARE: f64 = 0.875;
+
+/// Highest descriptor count the hard ceiling may allow connections: the soft
+/// limit minus the reserve. Strictly below the soft limit whenever it is
+/// nonzero; saturates at zero for limits smaller than the reserve.
+pub fn fd_hard_cap(soft_limit: u64) -> usize {
+    let reserve = FD_CEILING_RESERVE_MIN.max(soft_limit / FD_CEILING_RESERVE_DIVISOR);
+    to_usize(soft_limit.saturating_sub(reserve))
+}
+
 /// Descriptors connections may use out of a soft limit (the rest is for sled,
 /// log files, listeners, DNS and the host application).
 pub fn connection_fd_share(soft_limit: u64) -> usize {
@@ -314,6 +337,21 @@ impl ResourceModel {
     ) -> Option<Derived> {
         let descriptor_free = occupancy.total.saturating_sub(occupancy.fd);
         let b_fd = snapshot.fd_soft_limit.map(connection_fd_share);
+        // Physical caps for the hard ceiling (see `TotalLimits`); unbounded
+        // when the matching input is unavailable.
+        let cap_fd = snapshot.fd_soft_limit.map(fd_hard_cap);
+        let cap_mem = snapshot.mem_available.map(|avail| {
+            let per = self.per_connection_bytes();
+            let pool = occupancy.total as f64 * per + avail as f64;
+            to_usize((pool * MEMORY_CEILING_SHARE / per) as u64)
+        });
+        let cap_total = match (cap_fd, cap_mem) {
+            (Some(fd), Some(mem)) => fd.saturating_add(descriptor_free).min(mem),
+            (Some(fd), None) => fd.saturating_add(descriptor_free),
+            (None, Some(mem)) => mem,
+            (None, None) => usize::MAX,
+        };
+        let cap_fd = cap_fd.unwrap_or(usize::MAX);
         let b_mem = snapshot.mem_available.map(|avail| {
             let per = self.per_connection_bytes();
             let pool = occupancy.total as f64 * per + avail as f64;
@@ -373,12 +411,12 @@ impl ResourceModel {
             derived = Some((total, fd, source));
         }
 
-        derived.map(|(total, fd, source)| Derived {
-            limits: TotalLimits {
-                total: total.max(1),
-                fd: fd.max(1),
-            },
-            source,
+        derived.map(|(total, fd, source)| {
+            let (total, fd) = (total.max(1), fd.max(1));
+            Derived {
+                limits: TotalLimits::with_caps(total, fd, cap_total, cap_fd),
+                source,
+            }
         })
     }
 }
@@ -673,6 +711,55 @@ mod tests {
         assert_eq!(d.limits.total, 512);
         assert_eq!(d.limits.fd, 512);
         assert_eq!(d.source, BudgetSource::Fd);
+    }
+
+    #[test]
+    fn hard_ceiling_leaves_descriptor_reserve_below_the_soft_limit() {
+        let model = ResourceModel::new();
+        let at_limit = |soft: u64| {
+            let snap = ResourceSnapshot {
+                fd_soft_limit: Some(soft),
+                mem_available: None,
+                rss: None,
+            };
+            model
+                .derive(&snap, occ(0, 0), 1000)
+                .expect("derived")
+                .limits
+        };
+        // 1024: reserve is max(64, 1024 / 8) = 128, so the cap is 896 < 1024
+        // (the doubled bound would be 1024, the whole limit).
+        let l = at_limit(1024);
+        assert_eq!((l.ceiling_total, l.ceiling_fd), (896, 896));
+        // 256: reserve is 64, the cap 192 sits between the bound and the limit.
+        let l = at_limit(256);
+        assert_eq!((l.total, l.ceiling_fd), (128, 192));
+        // 8: the reserve exceeds the limit, so the cap saturates and the
+        // ceiling is floored at the bound (4), still below the limit.
+        let l = at_limit(8);
+        assert_eq!((l.total, l.ceiling_total, l.ceiling_fd), (4, 4, 4));
+        for soft in [8u64, 64, 256, 1024, 65_536] {
+            assert!((at_limit(soft).ceiling_fd as u64) < soft, "soft {soft}");
+        }
+    }
+
+    #[test]
+    fn hard_ceiling_stays_strictly_below_the_memory_pool() {
+        let model = ResourceModel::new();
+        let snap = ResourceSnapshot {
+            fd_soft_limit: None,
+            mem_available: Some(GIB),
+            rss: None,
+        };
+        let d = model.derive(&snap, occ(100, 100), 1000).expect("derived");
+        // Pool is 100 + 4096 paths; the bound is half, the ceiling at most
+        // MEMORY_CEILING_SHARE of the pool, never the whole of it.
+        assert!(d.limits.ceiling_total > d.limits.total);
+        assert!(d.limits.ceiling_total < 100 + 4096);
+        assert_eq!(
+            d.limits.ceiling_total,
+            ((100 + 4096) as f64 * 0.875) as usize
+        );
     }
 
     #[test]

@@ -1566,9 +1566,11 @@ mod tests {
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         // 40 single-path peers arrive inside one quantum. Each is inside its
         // own grace window, so the total bound (4) is soft up to the hard
-        // ceiling (HARD_CEILING_FACTOR times the bound). Past the ceiling the
-        // youngest grace-window paths are shed, holding occupancy at the ceiling.
-        let ceiling = 4 * crate::transport::path_budget::HARD_CEILING_FACTOR;
+        // ceiling. The ceiling is the smaller of HARD_CEILING_FACTOR times the
+        // bound (8) and the soft descriptor limit (8) minus the reserve, which
+        // saturates to 0 here; it is floored at the bound, so it is 4. Past it
+        // the youngest grace-window paths are shed, holding occupancy there.
+        let ceiling = 4;
         for n in 0..40usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
