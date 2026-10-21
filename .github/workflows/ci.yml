@@ -35,8 +35,10 @@ jobs:
 
   handoff-scope:
     name: Handoff ownership scope
-    # Python/git only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
-    runs-on: ubuntu-latest
+    # Python/git only (about 10s of work). Runner selection is the same unified
+    # expression every OCI-eligible job uses (see lint.yml for the contract).
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,7 +127,7 @@ jobs:
     # Required check: always run so it reports a real result; a failed `changes`
     # job must fail this check, not skip it (a skipped required check is green).
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - name: Fail closed if change detection failed
@@ -134,14 +136,19 @@ jobs:
           echo "[FAIL] changes job result: ${{ needs.changes.result }}"
           exit 1
       - uses: actions/checkout@v7
+      # On the OCI runner rustc/clippy 1.99.0 are preinstalled; this puts them on
+      # PATH and fails closed if the host drifted off the pin. A no-op hosted.
+      - name: Use preinstalled Rust (self-hosted)
+        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: needs.changes.outputs.rust_relevant == 'true'
+        if: needs.changes.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust_relevant == 'true'
         with:
           key: lint-clippy
+          cache-bin: ${{ runner.environment != 'self-hosted' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
         if: needs.changes.outputs.rust_relevant == 'true'
@@ -163,6 +170,10 @@ jobs:
           fi
       - run: cargo deny check
         if: needs.changes.outputs.rust_relevant == 'true'
+      - name: Clean self-hosted workspace
+        if: always()
+        uses: ./.github/actions/self-hosted-cleanup
+
   orchestration:
     name: Orchestration control plane
     # Python only (about 10s of work): hosted. OCI queue waits for this job reached 2 hours.
@@ -196,7 +207,7 @@ jobs:
     if: ${{ !cancelled() }}
     # Matrix value stays 'ubuntu-latest' so the required check name
     # 'Test (ubuntu-latest)' is unchanged.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -212,11 +223,17 @@ jobs:
           exit 1
       - uses: actions/checkout@v7
         if: matrix.os == 'ubuntu-latest' || needs.changes.outputs.rust_relevant == 'true'
+      # On the OCI runner rustc 1.99.0 is preinstalled; this puts it on PATH and
+      # fails closed if the host drifted off the pin. A no-op hosted.
+      - name: Use preinstalled Rust (self-hosted)
+        if: matrix.os == 'ubuntu-latest'
+        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: needs.changes.outputs.rust_relevant == 'true'
+        if: needs.changes.outputs.rust_relevant == 'true' && runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust_relevant == 'true'
         with:
+          cache-bin: ${{ runner.environment != 'self-hosted' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install libdbus-1-dev (Ubuntu)
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true'
@@ -237,39 +254,38 @@ jobs:
       - name: Run workspace tests
         if: matrix.os != 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
         run: cargo test --workspace --features test-utils
+      - name: Clean self-hosted workspace
+        if: always() && matrix.os == 'ubuntu-latest'
+        uses: ./.github/actions/self-hosted-cleanup
 
   docs:
     name: Docs
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Optional compile check; keep it off the two-runner OCI pool so required
+    # branch-protection checks are not queued behind documentation builds.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux build dependencies
         uses: ./.github/actions/linux-build-deps
       - run: cargo doc --workspace --no-deps
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   ffi-surface:
     name: FFI Surface Contract
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Optional binding generation; keep it off the two-runner OCI pool.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - name: Use preinstalled Rust (self-hosted)
-        uses: ./.github/actions/self-hosted-rust
       - uses: dtolnay/rust-toolchain@1.99.0
-        if: runner.environment != 'self-hosted'
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -284,9 +300,6 @@ jobs:
       - run: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
       - run: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
       - run: scripts/ffi_surface.sh
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
 
   windows-cli-artifact:
     name: Windows CLI Artifact
