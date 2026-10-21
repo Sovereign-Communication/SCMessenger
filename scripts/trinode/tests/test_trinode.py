@@ -41,8 +41,7 @@ class TestMarkerTable(unittest.TestCase):
             self.assertNotIn(m.name, names)
             names.add(m.name)
         not_in_code = [m.name for m in markers.MARKERS if m.src.startswith("NOT-IN-CODE")]
-        self.assertEqual(sorted(not_in_code), ["custody_accept_proposed", "ledger_address_learned_proposed",
-                                               "legacy_msg_rx"])
+        self.assertEqual(sorted(not_in_code), ["legacy_msg_rx"])
 
     def test_transport_ack_markers_never_score(self):
         for m in markers.MARKERS:
@@ -341,6 +340,163 @@ class TestDecideAndExit(unittest.TestCase):
         self.assertEqual(v["exit_code"], 2)
 
 
+class TestObservabilityMarkers(unittest.TestCase):
+    def _ev(self, node, text):
+        return parse.parse_text(node, f"{node}.log", synth.win(1, text) + "\n", 2026, 0)
+
+    def test_transport_marker_with_and_without_peer_count(self):
+        e = self._ev("windows", "[TRANSPORT] kind=ble state=unavailable detail=no_adapter")
+        self.assertEqual(e[0]["event"], "transport_status")
+        self.assertEqual(e[0]["detail"]["tkind"], "ble")
+        self.assertEqual(e[0]["detail"]["state"], "unavailable")
+        self.assertEqual(e[0]["detail"]["reason"], "no_adapter")
+        self.assertNotIn("peers", e[0]["detail"])
+        e = self._ev("aws", "[TRANSPORT] kind=quic state=connected peers=3 detail=periodic_total_3")
+        self.assertEqual(e[0]["detail"]["peers"], "3")
+
+    def test_routing_marker(self):
+        e = self._ev("android", "[ROUTING] peer_seen peer=abcdef0123456789 source=ble")
+        self.assertEqual(e[0]["event"], "routing_peer_seen")
+        self.assertEqual(e[0]["peer"], "abcdef0123456789")
+        self.assertEqual(e[0]["detail"]["source"], "ble")
+
+    def test_rx_markers_feed_receiver_legs(self):
+        e = self._ev("windows", "rx_decrypt msg=m1 from=abcdef0123456789 type=text result=ok")
+        self.assertEqual((e[0]["event"], e[0]["msg_id"], e[0]["detail"]["kind"]), ("rx_decrypted", "m1", "text"))
+        e = self._ev("windows", "rx_history msg=m1 from=abcdef0123456789 result=ok dup=false hidden=false")
+        self.assertEqual(e[0]["event"], "rx_history")
+        e = self._ev("windows", "rx_history msg=m1 from=abcdef0123456789 result=failed dup=false hidden=false")
+        self.assertEqual(e[0]["event"], "rx_history_failed")
+
+    def test_rx_drop_without_msg_and_kind_forms(self):
+        e = self._ev("windows", "[RX-DROP] msg=- stage=inbox reason=duplicate")
+        self.assertEqual(e[0]["event"], "rx_drop")
+        e = self._ev("windows", "[RX] forwarded kind=peer_exchange")
+        self.assertEqual((e[0]["event"], e[0]["detail"]["kind"]), ("rx_forwarded", "peer_exchange"))
+        e = self._ev("windows", "[RX-STALL] drain_loop idle_ms=31000 backlog=4")
+        self.assertEqual(e[0]["event"], "rx_stall")
+
+    def test_rx_drop_suppressed_and_stall(self):
+        e = self._ev("android", "[RX-DROP] suppressed=7 stage=decode")
+        self.assertEqual(e[0]["event"], "rx_drop_suppressed")
+        self.assertEqual(e[0]["detail"]["count"], "7")
+        e = self._ev("android", "[RX-STALL] idle_ms=30000")
+        self.assertEqual(e[0]["event"], "rx_stall")
+
+    def test_rx_drop_and_mesh_stop(self):
+        e = self._ev("android", "[RX-DROP] msg=m9 stage=decode reason=bad_sig")
+        self.assertEqual((e[0]["event"], e[0]["msg_id"], e[0]["detail"]["stage"], e[0]["detail"]["reason"]),
+                         ("rx_drop", "m9", "decode", "bad_sig"))
+        e = self._ev("android", "[MESH-STOP] swarm_shutdown timeout ms=5000")
+        self.assertEqual((e[0]["event"], e[0]["detail"]["phase"], e[0]["detail"]["result"], e[0]["detail"]["ms"]),
+                         ("mesh_stop", "swarm_shutdown", "timeout", "5000"))
+        e = self._ev("android", "[MESH-STOP] complete")
+        self.assertEqual(e[0]["detail"]["phase"], "complete")
+
+    def test_custody_and_ledger_markers_are_in_code_now(self):
+        e = self._ev("aws", "custody_accept msg=m5 from=aaaa1111bbbb2222 dest=cccc3333dddd4444")
+        self.assertEqual((e[0]["event"], e[0]["msg_id"]), ("relay_custody_accept", "m5"))
+        e = self._ev("windows", "ledger_address_learned peer=aaaa1111bbbb2222 via=ledger_exchange:cccc3333dddd4444 "
+                                "addr=/ip4/1.2.3.4/tcp/9001")
+        self.assertEqual(e[0]["detail"]["via"], "ledger_exchange:cccc3333dddd4444")
+
+    def test_explicit_ledger_via_prefix_resolves_to_node(self):
+        lines = synth.connect_lines()
+        lines["android"].append(synth.andj(
+            35, f"ledger_address_learned peer={synth.AWS_ID[:16]} via=ledger_exchange:{synth.WIN_ID[:16]} "
+                f"addr={synth.AWS_ADDR}"))
+        ev = events_for(lines)
+        skew = correlate.estimate_skew(ev, synth.IDS, ["aws", "windows", "android"])
+        learned = correlate.ledger_learning(ev, synth.IDS, skew)
+        hit = [x for x in learned if x["evidence"] == "explicit"]
+        self.assertTrue(hit and hit[0]["via"] == "windows" and hit[0]["learned"] == "aws", hit)
+
+    def test_transport_table_marks_silent_kinds_and_tracks_changes(self):
+        lines = synth.connect_lines()
+        lines["windows"] += [
+            synth.win(2, "[TRANSPORT] kind=ble state=unavailable detail=no_adapter"),
+            synth.win(3, "[TRANSPORT] kind=tcp4 state=listening detail=listen_port_9001"),
+            synth.win(4, "[TRANSPORT] kind=tcp4 state=connected peers=2 detail=periodic_total_2_unclassified_0"),
+            synth.win(5, "[TRANSPORT] kind=tcp4 state=error detail=listener_failed"),
+        ]
+        ev = events_for(lines)
+        tab = correlate.transport_availability(ev, ["aws", "windows", "android"])
+        self.assertEqual(tab["windows"]["ble"]["state"], "unavailable")
+        self.assertEqual(tab["windows"]["ble"]["detail"], "no adapter")
+        self.assertEqual(tab["windows"]["tcp4"]["state"], "error")
+        self.assertEqual(tab["windows"]["tcp4"]["max_peers"], 2)
+        self.assertEqual(tab["windows"]["tcp4"]["changes"], 2)
+        self.assertEqual(tab["aws"]["ble"]["state"], "no-marker")
+        self.assertEqual(tab["android"]["cellular"]["state"], "no-marker")
+
+    def test_rx_drop_becomes_note_not_status(self):
+        lines = synth.merge(synth.connect_lines(), synth.msg_lines())
+        lines["windows"].append(synth.win(80.5, "[RX-DROP] msg=m-partial stage=decode reason=bad_sig"))
+        _, _, _, by = analyse(lines)
+        self.assertEqual(by["m-partial"]["status"], "PARTIAL")
+        self.assertTrue(any("rx_drop on windows stage=decode" in n for n in by["m-partial"]["notes"]))
+
+    def test_explicit_rx_legs_verify_a_message(self):
+        lines = synth.connect_lines()
+        lines["android"].append(synth.andlog(
+            60.0, "delivery_state msg=m-x state=pending detail=message_prepared_local_history_written"))
+        lines["windows"] += [
+            synth.win(60.3, f"rx_decrypt msg=m-x from={synth.AND_ID[:16]} type=text result=ok"),
+            synth.win(60.4, f"rx_history msg=m-x from={synth.AND_ID[:16]} result=ok dup=false hidden=false"),
+        ]
+        lines["android"].append(synth.andlog(60.9, "[RECEIPT-RX] Received from core: msg=m-x status=delivered"))
+        _, _, _, by = analyse(lines)
+        self.assertEqual(by["m-x"]["status"], "VERIFIED", by["m-x"])
+
+    def test_failed_history_write_is_not_the_history_leg(self):
+        lines = synth.connect_lines()
+        lines["android"].append(synth.andlog(
+            60.0, "delivery_state msg=m-y state=pending detail=message_prepared_local_history_written"))
+        lines["windows"] += [
+            synth.win(60.3, f"rx_decrypt msg=m-y from={synth.AND_ID[:16]} type=text result=ok"),
+            synth.win(60.4, f"rx_history msg=m-y from={synth.AND_ID[:16]} result=failed dup=false hidden=false"),
+        ]
+        lines["android"].append(synth.andlog(60.9, "[RECEIPT-RX] Received from core: msg=m-y status=delivered"))
+        _, _, _, by = analyse(lines)
+        self.assertEqual(by["m-y"]["status"], "PARTIAL")
+        self.assertIn("history", by["m-y"]["missing"])
+
+    def test_mesh_stop_summary_flags_timeout(self):
+        lines = synth.connect_lines()
+        lines["android"] += [
+            synth.andlog(50, "[MESH-STOP] requested"),
+            synth.andlog(51, "[MESH-STOP] swarm_shutdown ok ms=40"),
+            synth.andlog(52, "[MESH-STOP] rust_stop timeout ms=5000"),
+            synth.andlog(53, "[MESH-STOP] complete"),
+        ]
+        ev = events_for(lines)
+        ds = correlate.drop_and_stop_summary(ev, ["aws", "windows", "android"])
+        self.assertFalse(ds["mesh_stop"]["android"]["clean"])
+        self.assertEqual(len(ds["mesh_stop"]["android"]["sequence"]), 4)
+        self.assertIsNone(ds["mesh_stop"]["windows"]["clean"])
+
+    def test_verdict_md_has_transport_table_and_default_ports(self):
+        self.assertIn(":9876/", cli.build_parser().get_default("win_diag_url"))
+        lines = synth.merge(synth.connect_lines(), synth.msg_lines())
+        lines["windows"].append(synth.win(2, "[TRANSPORT] kind=ble state=unavailable detail=no_D-Bus"))
+        lines["android"].append(synth.andlog(2, "[TRANSPORT] kind=cellular state=connected detail=validated_internet"))
+        import shutil
+        src, root = tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, src, True)
+        self.addCleanup(shutil.rmtree, root, True)
+        synth.build(src, lines)
+        cli.run(["--from-dir", src, "--repo-root", root, "--run-id", "tx1"], out=io.StringIO())
+        md = None
+        for dp, dn, fn in os.walk(os.path.join(root, "tmp", "evidence")):
+            if "verdict.md" in fn:
+                with open(os.path.join(dp, "verdict.md"), encoding="utf-8") as fh:
+                    md = fh.read()
+        self.assertIn("## Transport availability per node", md)
+        self.assertIn("unavailable (no D-Bus)", md)
+        self.assertIn("connected (validated internet)", md)
+        self.assertIn("NO-MARKER", md)
+
+
 class FakeRunner:
     def __init__(self):
         self.calls = []
@@ -478,6 +634,74 @@ class TestEndToEnd(unittest.TestCase):
             code = cli.run(["--from-dir", src, "--map", "windows=w.log", "--repo-root", root, "--run-id", "f1"],
                            out=io.StringIO())
             self.assertIn(code, (1, 2))
+
+
+class TestRealPixelLogcat(unittest.TestCase):
+    """Real 2026-10-10 Pixel `logcat -d -v threadtime -v year -v UTC` lines, sanitized
+    (peer/sender/key ids replaced by REDACTED; message ids kept)."""
+
+    FIXTURE = os.path.join(REAL, "android", "logcat_rx_sanitized.log.fixture")
+
+    def _events(self, text):
+        return parse.parse_text("android", "raw/android/logcat.txt", text, 2026, 0)
+
+    def test_fixture_is_sanitized(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("12D3KooW", text)
+        self.assertNotIn("publicKey=69", text)
+
+    def test_crlf_and_buffer_header_accepted(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            text = fh.read().replace("\n", "\r\n")
+        ev = self._events(text)
+        self.assertTrue(ev)
+        self.assertTrue(all(e["ts_utc"].startswith("2026-10-10T21:") for e in ev))
+
+    def test_receiver_history_is_explicit_evidence(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            ev = self._events(fh.read())
+        hist = [e for e in ev if e["event"] == "rx_history" and e["msg_id"] == "f1159fea-bf0d-4547-80ee-bb33d1ed1360"]
+        self.assertEqual({e["detail"]["marker"] for e in hist},
+                         {"android_rx_history_ok", "android_rx_stored_in_history"})
+        self.assertFalse(any(e["detail"].get("inferred") for e in hist))
+        self.assertEqual(hist[0]["ts_utc"][:23], "2026-10-10T21:54:25.866")
+
+    def test_decrypt_receipt_and_mdns_events(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            ev = self._events(fh.read())
+        names = {e["event"] for e in ev}
+        self.assertIn("rx_decrypted", names)
+        self.assertIn("receipt_sent", names)
+        self.assertIn("transport_ack", names)
+        self.assertIn("mdns_resolved", names)
+        self.assertNotIn("mdns_resolved", {e["event"] for e in ev if e["detail"].get("evidence") is True})
+
+    def test_real_format_has_no_unmatched_envelopes(self):
+        with open(self.FIXTURE, encoding="utf-8") as fh:
+            lines = [l for l in fh.read().splitlines() if l.strip()]
+        for l in lines[1:]:
+            self.assertIsNotNone(parse.parse_envelope(l, 2026), l)
+
+    def test_passive_refuses_device_sources(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as root:
+            code = cli.run(["--passive", "--android", "--repo-root", root, "--run-id", "p1"], out=err)
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(os.path.join(root, "tmp")))
+
+    def test_passive_from_dir_never_calls_runner(self):
+        calls = []
+        def spy(argv, timeout):
+            calls.append(list(argv))
+            raise AssertionError("runner must not be called in passive mode")
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(src, "logcat.txt"), "w", encoding="utf-8") as fh:
+                with open(self.FIXTURE, encoding="utf-8") as src_fh:
+                    fh.write(src_fh.read())
+            cli.run(["--passive", "--from-dir", src, "--map", "android=logcat.txt",
+                     "--repo-root", root, "--run-id", "p2"], runner=spy, out=io.StringIO())
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

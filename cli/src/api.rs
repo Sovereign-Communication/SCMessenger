@@ -220,6 +220,34 @@ pub struct DiscoveryPeersResponse {
     pub peers: Vec<DiscoveredPeer>,
 }
 
+/// Default invite lifetime when `ttl_secs` is omitted (24 hours).
+pub const DEFAULT_INVITE_TTL_SECS: u64 = 24 * 3600;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteCreateRequest {
+    pub ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteCreateResponse {
+    pub payload: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteRedeemRequest {
+    pub payload: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteRedeemResponse {
+    pub inviter_id: String,
+    pub inviter_peer_id: Option<String>,
+    pub addresses_offered: u32,
+    pub addresses_imported: u32,
+    pub dial_attempted: u32,
+    pub dial_succeeded: u32,
+}
+
 // Farm Test Harness Types
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,6 +649,58 @@ pub async fn get_identity_via_api() -> Result<serde_json::Value> {
     Ok(value)
 }
 
+async fn post_json_via_api(path: &str, json: String) -> Result<(StatusCode, Vec<u8>)> {
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::Bytes;
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let req = hyper::Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{}{}", API_ADDR, path))
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(json)))?;
+    let resp = client.request(req).await?;
+    let status = resp.status();
+    let body = resp.into_body().collect().await?.to_bytes();
+    Ok((status, body.to_vec()))
+}
+
+/// Ask the running node to mint a signed `SCI1:` invite (issue #469 T2).
+pub async fn create_invite_via_api(ttl_secs: u64) -> Result<String> {
+    let json = serde_json::to_string(&InviteCreateRequest {
+        ttl_secs: Some(ttl_secs),
+    })?;
+    let (status, body) = post_json_via_api("/api/invite/create", json).await?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "invite create failed ({}): {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let response: InviteCreateResponse =
+        serde_json::from_slice(&body).context("Failed to parse invite create response")?;
+    Ok(response.payload)
+}
+
+/// Ask the running node to verify, import and dial an `SCI1:` invite.
+pub async fn redeem_invite_via_api(payload: &str) -> Result<InviteRedeemResponse> {
+    let json = serde_json::to_string(&InviteRedeemRequest {
+        payload: payload.to_string(),
+    })?;
+    let (status, body) = post_json_via_api("/api/invite/redeem", json).await?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "invite rejected ({}): {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
+    }
+    serde_json::from_slice(&body).context("Failed to parse invite redeem response")
+}
+
 // Server implementation
 
 #[derive(Clone)]
@@ -859,6 +939,95 @@ pub async fn stop_node_via_api() -> Result<()> {
     Ok(())
 }
 
+/// Whether `target` is in the set of peers we hold a live connection to.
+///
+/// A swarm `send_message` that resolves `Ok` is only a confirmation from the
+/// recipient when it went over a direct link. When the recipient is not
+/// connected, `Ok` means a relay node accepted custody of the envelope
+/// (store-and-carry), which says nothing about the recipient having received
+/// it. Callers use this to decide whether the transport ACK may release the
+/// outbox entry or whether it must stay until an application receipt arrives.
+pub(crate) fn recipient_in_connected_set(
+    connected: &[libp2p::PeerId],
+    target: &libp2p::PeerId,
+) -> bool {
+    connected.iter().any(|p| p == target)
+}
+
+/// Connected peer ids from the swarm. A failed query is logged and treated as
+/// "no direct link", which is the safe direction (the outbox entry is kept).
+async fn connected_peers(swarm: &scmessenger_core::transport::SwarmHandle) -> Vec<libp2p::PeerId> {
+    match swarm.get_peers().await {
+        Ok(peers) => peers,
+        Err(e) => {
+            tracing::warn!("get_peers failed; treating recipient as not directly connected: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Whether a transport ACK may release the sender's outbox entry.
+///
+/// Release only when the dispatch succeeded AND the recipient held a live
+/// connection both before and after it. A link that appeared or vanished
+/// during the send means the ACK may have come from a relay custody handoff,
+/// so the entry stays for the reconnect flush and retry sweep. The connected
+/// set cannot distinguish a relay circuit from a direct link, so that case
+/// remains a known limit until the swarm reply reports the route taken.
+pub(crate) fn should_release_outbox(
+    send_ok: bool,
+    direct_before: bool,
+    direct_after: bool,
+) -> bool {
+    send_ok && direct_before && direct_after
+}
+
+/// Dispatch, then release the outbox entry only per `should_release_outbox`.
+/// Generic over the three effects so every send site shares one tested path.
+pub(crate) async fn dispatch_then_release<P, PF, S, SF, R>(
+    target: &libp2p::PeerId,
+    peers: P,
+    send: S,
+    release: R,
+) -> Result<()>
+where
+    P: Fn() -> PF,
+    PF: std::future::Future<Output = Vec<libp2p::PeerId>>,
+    S: FnOnce() -> SF,
+    SF: std::future::Future<Output = Result<()>>,
+    R: FnOnce(),
+{
+    let direct_before = recipient_in_connected_set(&peers().await, target);
+    let result = send().await;
+    if result.is_ok() {
+        let direct_after = recipient_in_connected_set(&peers().await, target);
+        if should_release_outbox(true, direct_before, direct_after) {
+            release();
+        }
+    }
+    result
+}
+
+/// Send over the swarm and release the outbox entry on a direct-link ACK.
+pub(crate) async fn swarm_send_releasing_on_direct_ack(
+    swarm: &scmessenger_core::transport::SwarmHandle,
+    core: &scmessenger_core::IronCore,
+    target: libp2p::PeerId,
+    envelope: Vec<u8>,
+    recipient_identity_id: Option<String>,
+    message_id: String,
+) -> Result<()> {
+    dispatch_then_release(
+        &target,
+        || connected_peers(swarm),
+        || swarm.send_message(target, envelope, recipient_identity_id, None),
+        || {
+            core.mark_message_sent(message_id);
+        },
+    )
+    .await
+}
+
 // Axum handler functions
 
 async fn handle_send_message(
@@ -915,15 +1084,15 @@ async fn handle_send_message(
     // the peer is nearby + swarm), so it goes first; the raw BLE write below is
     // only a last-resort fallback when the swarm dispatch itself fails.
     let ble_fallback_data = prepared.envelope_data.clone();
-    let (http_status, status, warning) = match ctx
-        .swarm_handle
-        .send_message(
-            recipient.peer_id,
-            prepared.envelope_data,
-            Some(recipient.identity_id.clone()),
-            None,
-        )
-        .await
+    let (http_status, status, warning) = match swarm_send_releasing_on_direct_ack(
+        &ctx.swarm_handle,
+        core,
+        recipient.peer_id,
+        prepared.envelope_data,
+        Some(recipient.identity_id.clone()),
+        prepared.message_id.clone(),
+    )
+    .await
     {
         Ok(()) => {
             // send_message().await == Ok is the transport's true-delivery ACK
@@ -932,7 +1101,12 @@ async fn handle_send_message(
             // delivered text whose Delivered receipt never arrives must still
             // release the sender's outbox entry. Never cleared on a buffer
             // enqueue -- send_message is the delivery layer, not the queue.
-            core.mark_message_sent(prepared.message_id.clone());
+            //
+            // The outbox entry was released inside the helper, and only if
+            // the recipient stayed directly connected across the dispatch.
+            // Otherwise Ok may be relay custody, not recipient receipt; the
+            // entry stays so the reconnect flush and retry sweep can still
+            // deliver it (msg d10c45f8).
             (StatusCode::OK, "accepted".to_string(), None)
         }
         Err(_swarm_err) => {
@@ -1306,6 +1480,12 @@ fn export_diagnostics(
     payload.insert(
         "custody_audit_count".to_string(),
         core.custody_audit_count().into(),
+    );
+    // Issue #469: unproven seed entries imported from invites and not yet
+    // promoted by a live dial.
+    payload.insert(
+        "invite_unproven_seed_entries".to_string(),
+        (core.ledger_manager.seed_addresses(u32::MAX).len() as u64).into(),
     );
 
     let mut drift = Map::new();
@@ -1687,6 +1867,82 @@ async fn handle_fetch_artifact(
     }))
 }
 
+/// `POST /api/invite/create`: mint a signed `SCI1:` invite from this node's
+/// live listeners and external addresses (external first: more likely public).
+async fn handle_invite_create(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<InviteCreateRequest>,
+) -> Result<AxumJson<InviteCreateResponse>, (StatusCode, String)> {
+    let mut candidates: Vec<String> = ctx
+        .swarm_handle
+        .get_external_addresses()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| match a.ip() {
+            std::net::IpAddr::V4(ip) => format!("/ip4/{}/tcp/{}", ip, a.port()),
+            std::net::IpAddr::V6(ip) => format!("/ip6/{}/tcp/{}", ip, a.port()),
+        })
+        .collect();
+    candidates.extend(
+        ctx.swarm_handle
+            .get_listeners()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| a.to_string()),
+    );
+    let mut addrs: Vec<String> = Vec::new();
+    for addr in candidates {
+        if !addrs.contains(&addr) {
+            addrs.push(addr);
+        }
+    }
+
+    let ttl = request.ttl_secs.unwrap_or(DEFAULT_INVITE_TTL_SECS);
+    let payload = ctx.core.create_invite_qr(addrs, ttl).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to create invite: {}", e),
+        )
+    })?;
+    Ok(AxumJson(InviteCreateResponse { payload }))
+}
+
+/// `POST /api/invite/redeem`: verify + import via `IronCore`, then dial the
+/// returned addresses immediately through the swarm.
+async fn handle_invite_redeem(
+    State(ctx): State<Arc<ApiContext>>,
+    AxumJson(request): AxumJson<InviteRedeemRequest>,
+) -> Result<AxumJson<InviteRedeemResponse>, (StatusCode, String)> {
+    let report = ctx
+        .core
+        .redeem_invite_qr(request.payload)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invite rejected: {}", e)))?;
+
+    let mut attempted = 0u32;
+    let mut succeeded = 0u32;
+    for addr in &report.dial_addrs {
+        let Ok(multiaddr) = addr.parse::<libp2p::Multiaddr>() else {
+            continue;
+        };
+        attempted += 1;
+        match ctx.swarm_handle.dial(multiaddr).await {
+            Ok(()) => succeeded += 1,
+            Err(e) => tracing::warn!("[INVITE] dial {} failed: {}", addr, e),
+        }
+    }
+
+    Ok(AxumJson(InviteRedeemResponse {
+        inviter_id: report.inviter_id,
+        inviter_peer_id: report.inviter_peer_id,
+        addresses_offered: report.addresses_offered,
+        addresses_imported: report.addresses_imported,
+        dial_attempted: attempted,
+        dial_succeeded: succeeded,
+    }))
+}
+
 #[allow(clippy::disallowed_methods)] // serde_json::json! expands to unwrap() calls internally
 pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Result<()> {
     let ctx = Arc::new(ctx);
@@ -1755,6 +2011,8 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         .route("/api/discovery/status", get(handle_get_discovery_status))
         .route("/api/discovery/scan", post(handle_trigger_discovery_scan))
         .route("/api/discovery/peers", get(handle_get_discovery_peers))
+        .route("/api/invite/create", post(handle_invite_create))
+        .route("/api/invite/redeem", post(handle_invite_redeem))
         .route("/api/shutdown", post(handle_shutdown))
         // Farm test harness routes
         .route("/submit-run", post(handle_submit_run))
@@ -1780,7 +2038,10 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_api_recipient, ApiRecipient, SendMessageResponse};
+    use super::{
+        dispatch_then_release, recipient_in_connected_set, resolve_api_recipient,
+        should_release_outbox, ApiRecipient, SendMessageResponse,
+    };
     use scmessenger_core::identity::keys::KeyPair;
     use scmessenger_core::store::Contact;
 
@@ -1789,6 +2050,95 @@ mod tests {
         let public_key = hex::encode(key_pair.verifying_key().to_bytes());
         super::api_recipient_from_public_key(public_key)
             .expect("generated test key must resolve to an API recipient")
+    }
+
+    #[test]
+    fn relayed_ack_does_not_release_outbox_entry() {
+        let recipient = libp2p::PeerId::random();
+        let relay = libp2p::PeerId::random();
+        assert!(!recipient_in_connected_set(&[relay], &recipient));
+        assert!(!recipient_in_connected_set(&[], &recipient));
+        assert!(recipient_in_connected_set(&[relay, recipient], &recipient));
+    }
+
+    #[test]
+    fn release_decision_requires_ok_and_stable_direct_link() {
+        assert!(should_release_outbox(true, true, true));
+        assert!(!should_release_outbox(false, true, true));
+        assert!(!should_release_outbox(true, false, false));
+        assert!(!should_release_outbox(true, true, false));
+        assert!(!should_release_outbox(true, false, true));
+    }
+
+    /// Drives the shared helper that all five send sites use. `snapshots` is
+    /// the connected set returned by successive peer queries.
+    async fn run_dispatch(
+        snapshots: Vec<Vec<libp2p::PeerId>>,
+        send_ok: bool,
+        target: libp2p::PeerId,
+    ) -> (bool, bool) {
+        let queries = std::cell::Cell::new(0usize);
+        let released = std::cell::Cell::new(false);
+        let result = dispatch_then_release(
+            &target,
+            || {
+                let i = queries.get().min(snapshots.len() - 1);
+                queries.set(queries.get() + 1);
+                let snap = snapshots[i].clone();
+                async move { snap }
+            },
+            || async move {
+                if send_ok {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("dispatch failed"))
+                }
+            },
+            || released.set(true),
+        )
+        .await;
+        (result.is_ok(), released.get())
+    }
+
+    #[tokio::test]
+    async fn direct_ack_releases_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![target], vec![target]], true, target).await;
+        assert!(ok);
+        assert!(released);
+    }
+
+    #[tokio::test]
+    async fn relay_only_ack_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let relay = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![relay], vec![relay]], true, target).await;
+        assert!(ok);
+        assert!(!released);
+    }
+
+    #[tokio::test]
+    async fn peer_dropping_mid_dispatch_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![target], vec![]], true, target).await;
+        assert!(ok);
+        assert!(!released);
+    }
+
+    #[tokio::test]
+    async fn peer_appearing_mid_dispatch_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![], vec![target]], true, target).await;
+        assert!(ok);
+        assert!(!released);
+    }
+
+    #[tokio::test]
+    async fn failed_dispatch_keeps_outbox_entry() {
+        let target = libp2p::PeerId::random();
+        let (ok, released) = run_dispatch(vec![vec![target], vec![target]], false, target).await;
+        assert!(!ok);
+        assert!(!released);
     }
 
     #[test]

@@ -65,6 +65,77 @@ use web_time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 use web_time::{Duration, Instant, UNIX_EPOCH};
 
+/// Static variant name of a relay control message for `[RX] forwarded` markers.
+/// Never formats message contents.
+fn relay_message_kind(msg: &crate::relay::protocol::RelayMessage) -> &'static str {
+    use crate::relay::protocol::RelayMessage as R;
+    match msg {
+        R::Handshake { .. } => "handshake",
+        R::HandshakeAck { .. } => "handshake_ack",
+        R::StoreRequest { .. } => "store_request",
+        R::StoreAck { .. } => "store_ack",
+        R::PullRequest { .. } => "pull_request",
+        R::PullResponse { .. } => "pull_response",
+        R::PeerExchange { .. } => "peer_exchange",
+        R::PeerJoined { .. } => "peer_joined",
+        R::PeerLeft { .. } => "peer_left",
+        R::PeerListRequest => "peer_list_request",
+        R::PeerListResponse { .. } => "peer_list_response",
+        R::Ping => "ping",
+        R::Pong => "pong",
+        R::Disconnect { .. } => "disconnect",
+    }
+}
+
+/// Reject reason sent to a remote peer when an inbound message could not be
+/// handed to the internal event channel. The sender treats any
+/// `accepted: false` as a failed attempt and keeps the message in its outbox
+/// for retry (same reason string the sender already falls back to).
+const MESSAGE_FORWARD_FAILED_REASON: &str = "recipient_rejected";
+
+/// Hand an inbound `/sc/message` payload to the internal event channel and
+/// build the wire response. `accepted: true` is returned ONLY when the event
+/// was enqueued; if the receiver is gone the frame is lost locally, so the
+/// remote peer must be told `accepted: false` (it then retries) instead of
+/// believing the message was delivered.
+async fn forward_message_received(
+    event_tx: &mpsc::Sender<SwarmEvent2>,
+    peer: PeerId,
+    envelope_data: Vec<u8>,
+) -> Libp2pMessageResponse {
+    match event_tx
+        .send(SwarmEvent2::MessageReceived {
+            peer_id: peer,
+            envelope_data,
+        })
+        .await
+    {
+        Ok(()) => Libp2pMessageResponse {
+            accepted: true,
+            error: None,
+        },
+        Err(_) => {
+            // An awaited bounded send never reports "full" (it back-pressures);
+            // the only failure is a closed channel.
+            crate::message_events::log_rx_drop(None, "swarm_event_tx", "channel_closed");
+            Libp2pMessageResponse {
+                accepted: false,
+                error: Some(MESSAGE_FORWARD_FAILED_REASON.to_string()),
+            }
+        }
+    }
+}
+
+/// Log a failed `send_response` (the response channel closed, e.g. the
+/// connection dropped before we could answer). Never panics.
+fn log_message_response_failed(peer: &PeerId, context: &str) {
+    tracing::warn!(
+        "[WARNING] Failed to send /sc/message response to {} ({}): response channel closed",
+        peer,
+        context
+    );
+}
+
 /// Blocked peers must not reach any protocol that can disclose topology or
 /// consume relay/custody resources. Missing core state fails closed.
 fn peer_is_blocked(core_handle: &Option<Weak<crate::IronCore>>, peer_id: PeerId) -> bool {
@@ -811,6 +882,279 @@ fn dial_skip_reason(
         return Some("address is our own listener/external/interface addr -- self-dial");
     }
     None
+}
+
+/// Socket to reflect back to an address-reflection requester: the requester's
+/// DIRECT remote socket only. A connection whose remote address carries
+/// `/p2p-circuit` names the forwarding node's ip:port, not the requester's, so
+/// it yields `None` (the caller refuses the request rather than reply with a
+/// bogus address).
+fn reflection_requester_socket(
+    tracker: &ConnectionTracker,
+    peer: &PeerId,
+    connection_id: &str,
+) -> Option<SocketAddr> {
+    tracker
+        .get_connection_by_id(peer, connection_id)
+        .and_then(|conn| ConnectionTracker::extract_direct_observed_socket_addr(&conn.remote_addr))
+}
+
+/// Requester-side guard for an address-reflection reply: an unspecified IP or
+/// port 0 is a placeholder from a responder that could not resolve a direct
+/// socket and must never reach the AddressObserver.
+fn reflection_reply_is_usable(addr: &SocketAddr) -> bool {
+    super::observation::is_plausible_external_socket(addr)
+}
+
+/// Longest textual `SocketAddr` we will even try to parse (a scoped IPv6
+/// socket is under 64 bytes). The reply text is peer-supplied.
+const MAX_REFLECTION_REPLY_TEXT_LEN: usize = 64;
+
+/// Text form of [`reflection_reply_is_usable`]; oversized or unparseable
+/// replies are unusable.
+fn reflection_reply_text_is_usable(text: &str) -> bool {
+    text.len() <= MAX_REFLECTION_REPLY_TEXT_LEN
+        && text
+            .parse::<SocketAddr>()
+            .map(|a| reflection_reply_is_usable(&a))
+            .unwrap_or(false)
+}
+
+/// True when an identify-observed socket is the observer's own connection
+/// endpoint. A peer that reports its own address as "ours" (relay confusion
+/// or a hostile peer) would make us treat that peer as a self-dial target.
+fn observed_names_observer_endpoint(
+    tracker: &ConnectionTracker,
+    observer: &PeerId,
+    observed: &SocketAddr,
+) -> bool {
+    tracker.all_connections().iter().any(|conn| {
+        conn.peer_id == *observer
+            && ConnectionTracker::extract_direct_observed_socket_addr(&conn.remote_addr)
+                == Some(*observed)
+    })
+}
+
+/// Maximum age of an address observation before the periodic sweep drops it.
+/// Identify refreshes a live observer far more often than this.
+#[cfg(not(target_arch = "wasm32"))]
+const ADDRESS_OBSERVATION_MAX_AGE_SECS: u64 = 900;
+
+/// Drop pending reflection entries whose waiter has gone away (timed out or
+/// cancelled: the receiver is dropped, so the sender is closed). Returns the
+/// number removed. Entries with a live waiter are left to the protocol's own
+/// request timeout, which always yields an `OutboundFailure`.
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_abandoned_reflections<K: Eq + Hash>(
+    pending: &mut HashMap<K, mpsc::Sender<Result<String, String>>>,
+) -> usize {
+    let before = pending.len();
+    pending.retain(|_, tx| !tx.is_closed());
+    before - pending.len()
+}
+
+/// Requester-side bound on one address-reflection round trip: the protocol's
+/// own request timeout plus a margin for command queueing. Event-driven
+/// failure handling normally resolves first; this is the backstop so a caller
+/// can always proceed to the next reflector.
+const ADDRESS_REFLECTION_REPLY_BOUND: Duration =
+    Duration::from_secs(super::behaviour::ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS + 5);
+
+/// Remove a pending reflection entry and release its waiter with `Err`.
+/// No-op when the entry is already gone.
+///
+/// Deliberately synchronous (`try_send`): this runs inside the swarm event
+/// loop and must never park it on a waiter's channel. The channel is created
+/// with capacity 1 and carries exactly one message, so the send cannot be
+/// full; a closed channel means the waiter already left.
+fn fail_pending_reflection<K: Eq + Hash>(
+    pending: &mut HashMap<K, mpsc::Sender<Result<String, String>>>,
+    key: &K,
+    reason: String,
+) {
+    if let Some(reply_tx) = pending.remove(key) {
+        let _ = reply_tx.try_send(Err(reason));
+    }
+}
+
+/// Await one reflection reply, bounded. Closed channel and timeout are both
+/// errors so callers move on to the next reflector.
+async fn await_reflection_reply(
+    reply_rx: &mut mpsc::Receiver<Result<String, String>>,
+    bound: Duration,
+) -> Result<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let received = tokio::time::timeout(bound, reply_rx.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("Address reflection timed out"))?;
+    // WASM has no tokio timer; the protocol-level OutboundFailure releases us.
+    #[cfg(target_arch = "wasm32")]
+    let received = {
+        let _ = bound;
+        reply_rx.recv().await
+    };
+    received
+        .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))?
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Marker carried by every `skipped:` reason that is genuine evidence the
+/// target is already reachable (exact socket or peer id connected). The
+/// mobile bridge maps these to `Ok(())` and every other skip to the typed
+/// `IronCoreError::DialSkipped`.
+pub const DIAL_SKIP_CONNECTED_MARKER: &str = "respond over existing link";
+
+/// Skip reason: exact ip:port of a live direct connection.
+#[cfg(not(target_arch = "wasm32"))]
+const SKIP_REASON_EXACT_SOCKET: &str =
+    "exact socket already connected -- respond over existing link";
+
+/// Skip reason: different-port probe of a host we already hold a live direct
+/// link to in the same path class. Carries NO connectivity evidence for the
+/// probed port.
+#[cfg(not(target_arch = "wasm32"))]
+const SKIP_REASON_PATH_CLASS_CONNECTED: &str =
+    "host already has a live direct link in this path class; different-port probe skipped";
+
+/// Why an address-only dial was suppressed.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostSkip {
+    /// Exact socket already connected (genuine connectivity evidence).
+    ExactSocket,
+    /// Different port on a host we already hold a live direct link to in the
+    /// same path class (no evidence for the probed port).
+    PathClassConnected,
+}
+
+/// Private (RFC1918), link-local, or unique-local addresses: the ranges where
+/// the LAN subnet probe operates. Public IPs can be shared by several hosts
+/// behind one NAT, so an IP match proves nothing there.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_lan_scope_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// (ip, port) remote endpoints of our live DIRECT (non-circuit) connections.
+/// Loopback and unspecified hosts are excluded: several distinct local nodes
+/// can share them, so an IP match proves nothing there.
+#[cfg(not(target_arch = "wasm32"))]
+fn connected_direct_endpoints(tracker: &ConnectionTracker) -> Vec<(std::net::IpAddr, u16)> {
+    let mut endpoints = Vec::new();
+    for conn in tracker.all_connections() {
+        if conn
+            .remote_addr
+            .iter()
+            .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+        {
+            continue;
+        }
+        if let Some((ip, _, port)) = addr_ip_socket(&conn.remote_addr) {
+            if !ip.is_loopback() && !ip.is_unspecified() && !endpoints.contains(&(ip, port)) {
+                endpoints.push((ip, port));
+            }
+        }
+    }
+    endpoints
+}
+
+/// Should an address-only dial to `addr` be suppressed because we already
+/// hold a live direct connection to that host in the same path class?
+///
+/// Path class = host + {LAN direct, WAN direct v4, WAN direct v6}; the class
+/// of an address is fully determined by its IP, and ports on one host
+/// collapse into one class. Circuit paths (via node X) are a different class
+/// and are never matched here (callers return early for `/p2p-circuit`).
+///
+/// * Exact (ip, port) of a live direct connection: suppressed, and this is
+///   genuine connectivity evidence (the Windows-flood fix: the Pixel's
+///   subnet probe kept re-dialing the very socket it was connected to).
+/// * Same ip, different port, LAN-scope ip only (`is_lan_scope_ip`):
+///   suppressed (neutral, no evidence). A 100-port probe of one connected LAN
+///   host therefore yields no dials while the live link exists, and dials
+///   resume as soon as it closes. Public IPs are NOT matched by IP alone:
+///   several nodes can share one public IP (NAT, one host), so only the exact
+///   socket is suppressed there.
+/// * Loopback and unspecified hosts are never matched.
+///
+/// Known limitation, accepted for LAN-scope hosts only: an address-only probe
+/// cannot distinguish two different nodes on one LAN host (e.g. CLI nodes on
+/// 9001 and 9002). That is acceptable because identify and mDNS carry peer
+/// ids, and peer-id-bearing dials bypass this check entirely.
+///
+/// There is no state here: the "table" is the live connection set itself, so
+/// it is bounded by live connections and entries vanish on ConnectionClosed.
+#[cfg(not(target_arch = "wasm32"))]
+fn addr_host_already_connected(
+    addr: &Multiaddr,
+    endpoints: &[(std::net::IpAddr, u16)],
+) -> Option<HostSkip> {
+    if addr
+        .iter()
+        .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return None;
+    }
+    let (ip, _, port) = addr_ip_socket(addr)?;
+    if ip.is_loopback() || ip.is_unspecified() {
+        return None;
+    }
+    if endpoints.contains(&(ip, port)) {
+        return Some(HostSkip::ExactSocket);
+    }
+    if is_lan_scope_ip(ip) && endpoints.iter().any(|(e_ip, _)| *e_ip == ip) {
+        return Some(HostSkip::PathClassConnected);
+    }
+    None
+}
+
+/// Skip reason for an ADDRESS-ONLY dial (no peer id requested or embedded)
+/// to a socket/host we are already connected to. Address-only dials (LAN
+/// subnet probe, mDNS without a peer id) cannot use the peer-id connected
+/// check in `dial_skip_reason`, so every probe sweep re-opened parallel
+/// connections to an already-connected host (3-node run 2026-10-08: >100
+/// Pixel->Windows connects, Windows denying inbound at "limit 16 reached").
+/// Kept separate from `dial_skip_reason` so the peer-id rules stay in one
+/// place. The connection scan runs only after the cheap guards, so dials with
+/// a peer id, trusted dials, and circuit/loopback targets never pay for it.
+#[cfg(not(target_arch = "wasm32"))]
+fn address_only_dial_skip_reason(
+    addr: &Multiaddr,
+    requested_peer_id: Option<PeerId>,
+    trusted: bool,
+    tracker: &ConnectionTracker,
+) -> Option<&'static str> {
+    if trusted || requested_peer_id.is_some() {
+        return None;
+    }
+    let mut circuit_or_peer = false;
+    for p in addr.iter() {
+        if matches!(
+            p,
+            libp2p::multiaddr::Protocol::P2p(_) | libp2p::multiaddr::Protocol::P2pCircuit
+        ) {
+            circuit_or_peer = true;
+            break;
+        }
+    }
+    if circuit_or_peer {
+        return None;
+    }
+    let endpoints = connected_direct_endpoints(tracker);
+    if endpoints.is_empty() {
+        return None;
+    }
+    match addr_host_already_connected(addr, &endpoints) {
+        Some(HostSkip::ExactSocket) => Some(SKIP_REASON_EXACT_SOCKET),
+        Some(HostSkip::PathClassConnected) => Some(SKIP_REASON_PATH_CLASS_CONNECTED),
+        None => None,
+    }
 }
 
 /// Direct port-ladder synthesis is only valid before a relay circuit marker.
@@ -2323,6 +2667,64 @@ fn register_and_flush_swarm_peer(
     core.handle_peer_connection_event_with_egress(pk_hex, true, skip_flush, &mut egress);
 }
 
+/// OUTBOX-SWEEP-001 bounded periodic re-flush, shared by the native and wasm32
+/// loops (#413 review F2/F3). At most `IronCore::OUTBOX_SWEEP_MAX_PER_PEER`
+/// entries per peer and `IronCore::OUTBOX_SWEEP_MAX_PER_TICK` in total are
+/// re-dispatched per call, so a large backlog never turns one tick into an
+/// unbounded run of synchronous store writes on the single-owner event loop
+/// (the egress needs `&mut swarm`, so the work cannot be moved off-loop; it
+/// is bounded instead). Peers are visited in a rotating order so a full
+/// budget cannot starve the same peers every tick. Per-entry retry spacing
+/// (bounded exponential with jitter) is applied by the flush itself, so an
+/// entry whose receipt never arrives is re-sent less and less often.
+/// Returns the number of entries drained.
+fn sweep_outbox_over_swarm(
+    core: &std::sync::Arc<crate::IronCore>,
+    swarm: &mut libp2p::Swarm<IronCoreBehaviour>,
+    registered_swarm_peers: &HashMap<PeerId, String>,
+    reconnect_request_to_message: &mut HashMap<libp2p::request_response::OutboundRequestId, String>,
+    rotation: &mut usize,
+) -> usize {
+    let mut connected: Vec<(PeerId, String)> = registered_swarm_peers
+        .iter()
+        .filter(|(pid, _)| swarm.is_connected(pid))
+        .map(|(pid, pk)| (*pid, pk.clone()))
+        .collect();
+    if connected.is_empty() {
+        return 0;
+    }
+    // Stable order, then rotate by a per-tick offset for fairness.
+    connected.sort_by(|a, b| a.1.cmp(&b.1));
+    let start = *rotation % connected.len();
+    *rotation = rotation.wrapping_add(1);
+    connected.rotate_left(start);
+
+    let mut budget = crate::IronCore::OUTBOX_SWEEP_MAX_PER_TICK;
+    let mut total = 0usize;
+    for (peer_id, pk_hex) in connected {
+        if budget == 0 {
+            break;
+        }
+        let mut egress = |message_id: &str, envelope: &[u8]| -> bool {
+            flush_outbox_over_swarm(
+                swarm,
+                &peer_id,
+                message_id,
+                envelope,
+                reconnect_request_to_message,
+            )
+        };
+        let drained = core.sweep_peer_outbox_with_egress(
+            &pk_hex,
+            budget.min(crate::IronCore::OUTBOX_SWEEP_MAX_PER_PEER),
+            &mut egress,
+        );
+        budget = budget.saturating_sub(drained);
+        total += drained;
+    }
+    total
+}
+
 /// R2-B1 / R3-C3 single-owner outbox egress: frame the envelope and dispatch
 /// it over the messaging request-response protocol to `peer_id`. Returns
 /// false when the peer is not connected at send time so the flush applies
@@ -2390,6 +2792,30 @@ fn dispatch_ranked_route(
     }
 }
 
+/// Identify completion is a liveness proof for the peer: wake every
+/// backed-off entry attributed to it, and each address it advertises (which
+/// may be tracked without a peer attribution). Each wake spends one credit
+/// from the entry's per-trigger bucket, so repeated identifies coalesce.
+/// Returns how many entries were woken.
+#[cfg(not(target_arch = "wasm32"))]
+fn wake_on_identify(
+    dial_policy_manager: &DialPolicyManager,
+    peer_id: PeerId,
+    advertised: &[&Multiaddr],
+) -> usize {
+    let mut woken =
+        dial_policy_manager.wake_peer(peer_id, super::dial_policy::WakeTrigger::Identify);
+    for addr in advertised {
+        if dial_policy_manager.wake_addr(
+            &multiaddr_to_key(addr),
+            super::dial_policy::WakeTrigger::Identify,
+        ) {
+            woken += 1;
+        }
+    }
+    woken
+}
+
 /// Fire a hint-driven dial toward `peer_id` using envelope-sourced addresses.
 ///
 /// Candidates come from the hint store (fresh `connection_hints` /
@@ -2417,11 +2843,11 @@ fn try_envelope_hint_dial(
         if let Some(state) = dial_policy_manager.get_backoff_state(&addr_key) {
             if !state.is_eligible() {
                 tracing::debug!(
-                    "[HINT-DIAL] Skipping backed-off hint candidate {} for {} (attempt_count={}, dead={})",
+                    "[HINT-DIAL] Skipping backed-off hint candidate {} for {} (attempt_count={}, dormant={})",
                     addr_key,
                     peer_id,
                     state.attempt_count,
-                    state.is_dead
+                    state.dormant
                 );
                 continue;
             }
@@ -3080,6 +3506,11 @@ pub enum SwarmCommand {
     ConnectToSeedPeers {
         reply: mpsc::Sender<Result<(), String>>,
     },
+    /// Network-change event from the discovery scheduler; wakes dormant peers
+    /// so their next dial is not left waiting on backoff.
+    NetworkChange {
+        event: super::discovery_scheduler::NetworkEvent,
+    },
     /// Shutdown the swarm
     Shutdown,
 }
@@ -3251,11 +3682,7 @@ impl SwarmHandle {
             .await
             .map_err(|_| anyhow::anyhow!("Swarm task not running"))?;
 
-        reply_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))?
-            .map_err(|e| anyhow::anyhow!(e))
+        await_reflection_reply(&mut reply_rx, ADDRESS_REFLECTION_REPLY_BOUND).await
     }
 
     /// Dial a peer at a multiaddress
@@ -3622,6 +4049,19 @@ impl SwarmHandle {
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("No reply from swarm"))
+    }
+
+    /// Forward a discovery-scheduler network event to the swarm so dormant
+    /// peers are woken (non-blocking; dropped if the command queue is full,
+    /// since the next event or the jittered backoff wakes them anyway).
+    pub fn notify_network_event(&self, event: super::discovery_scheduler::NetworkEvent) {
+        if self
+            .command_tx
+            .try_send(SwarmCommand::NetworkChange { event })
+            .is_err()
+        {
+            tracing::debug!("[DIAL] network event not forwarded (swarm queue full or stopped)");
+        }
     }
 
     /// Shut down the swarm
@@ -4401,6 +4841,21 @@ pub async fn start_swarm_with_config(
             // Mycorrhizal routing: periodic optimization tick (every 30s)
             let mut routing_optimization_interval = tokio::time::interval(Duration::from_secs(30));
 
+            // OUTBOX-SWEEP-001 (2026-09-23): re-flush outbox entries whose
+            // grace timer expired on peers that are STILL connected. The
+            // reconnect gate (register_and_flush_swarm_peer) fires once per
+            // connection; on an always-on mesh connections rarely drop, so a
+            // lost receipt left entries stranded (Windows node: outbox_count
+            // 118 / undelivered 259 with all links healthy). This sweep is the
+            // missing periodic retry; it reuses the single-owner flush path
+            // with the egress closure, so entries are only drained when they
+            // are due (flush_peer_messages checks next_retry_at) and only when
+            // the connection is live at send time.
+            let mut outbox_sweep_interval = tokio::time::interval(Duration::from_secs(120));
+            // Rotating start offset so a full per-tick budget does not always
+            // serve the same peers first (see `sweep_outbox_over_swarm`).
+            let mut outbox_sweep_rotation: usize = 0;
+
             // Check for pending relay reconnects frequently
             let mut relay_reconnect_interval = tokio::time::interval(Duration::from_secs(5));
             let mut custody_pull_interval = tokio::time::interval(Duration::from_secs(5));
@@ -4586,6 +5041,15 @@ pub async fn start_swarm_with_config(
                         // ConnectionEstablished via reset_peer_backoff above.
                         dial_policy_manager.prune_old_entries(Duration::from_secs(3600)); // Prune entries older than 1 hour
                         tracing::debug!("[DIAL-POLICY] Pruned stale backoff entries");
+                        // Observer-fed state is bounded by expiry, not a count:
+                        // observations from peers that stopped refreshing them,
+                        // and reflection entries whose waiter timed out.
+                        address_observer.expire_old_observations(ADDRESS_OBSERVATION_MAX_AGE_SECS);
+                        sync_external_address(&mut swarm, &address_observer, &bound_addresses);
+                        let abandoned = prune_abandoned_reflections(&mut pending_reflections);
+                        if abandoned > 0 {
+                            tracing::debug!("Pruned {} abandoned address-reflection waiter(s)", abandoned);
+                        }
                     }
 
                     // TRN-04: custody must not outlive its retention window. Its own
@@ -4658,6 +5122,28 @@ pub async fn start_swarm_with_config(
                                 maintenance.timeout_budget_summary.elapsed,
                                 maintenance.timeout_budget_summary.current_phase,
                             );
+                        }
+                    }
+
+                    // OUTBOX-SWEEP-001: periodic re-flush for still-connected
+                    // peers whose grace window expired without a receipt.
+                    _ = outbox_sweep_interval.tick() => {
+                        if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                            let swept = sweep_outbox_over_swarm(
+                                &core,
+                                &mut swarm,
+                                &registered_swarm_peers,
+                                &mut reconnect_request_to_message,
+                                &mut outbox_sweep_rotation,
+                            );
+                            if swept > 0 {
+                                tracing::debug!(
+                                    event = "outbox_sweep_tick",
+                                    swept = swept,
+                                    "Outbox sweep re-dispatched {} due entries",
+                                    swept
+                                );
+                            }
                         }
                     }
 
@@ -4863,10 +5349,22 @@ pub async fn start_swarm_with_config(
                                         };
                                         if sender_blocked {
                                             tracing::warn!("Blocked peer {} attempted to send message", peer);
-                                            let _ = swarm.behaviour_mut().messaging.send_response(
-                                                channel,
-                                                Libp2pMessageResponse { accepted: false, error: Some("blocked".to_string()) },
+                                            crate::message_events::log_rx_drop(
+                                                None,
+                                                "swarm_ingress",
+                                                "sender_blocked_or_core_unavailable",
                                             );
+                                            if swarm
+                                                .behaviour_mut()
+                                                .messaging
+                                                .send_response(
+                                                    channel,
+                                                    Libp2pMessageResponse { accepted: false, error: Some("blocked".to_string()) },
+                                                )
+                                                .is_err()
+                                            {
+                                                log_message_response_failed(&peer, "sender_blocked");
+                                            }
                                             continue;
                                         }
 
@@ -4878,10 +5376,14 @@ pub async fn start_swarm_with_config(
                                         // root cause, HERMES_FARM_AUDIT 2026-07-16).
                                         let envelope_payload = match DriftFrame::from_bytes(&request.envelope_data) {
                                             Ok(frame) => {
-                                                tracing::debug!(
-                                                    "Received DriftFrame type: {:?} from {}",
-                                                    frame.frame_type,
-                                                    peer
+                                                // INFO (rate-limited: peers control frame volume) so an
+                                                // inbound frame is visible even when it dies later (RCA of a lost inbound frame). The
+                                                // envelope is still encrypted here, so there is no
+                                                // message id to report; length is a safe proxy.
+                                                crate::message_events::log_rx_drift_frame(
+                                                    &format!("{:?}", frame.frame_type),
+                                                    frame.payload.len(),
+                                                    &peer.to_string(),
                                                 );
                                                 frame.payload
                                             }
@@ -4910,11 +5412,18 @@ pub async fn start_swarm_with_config(
                                             match relay_msg {
                                                 crate::relay::protocol::RelayMessage::PeerJoined { peer_info } => {
                                                     if !known_relays.contains(&peer) {
-                                                        tracing::debug!("Discarding PeerJoined from non-relay peer {}", peer);
-                                                        let _ = swarm.behaviour_mut().messaging.send_response(
-                                                            channel,
-                                                            Libp2pMessageResponse { accepted: true, error: None },
-                                                        );
+                                                        crate::message_events::log_rx_drop(None, "control", "peer_joined_from_non_relay");
+                                                        if swarm
+                                                            .behaviour_mut()
+                                                            .messaging
+                                                            .send_response(
+                                                                channel,
+                                                                Libp2pMessageResponse { accepted: true, error: None },
+                                                            )
+                                                            .is_err()
+                                                        {
+                                                            log_message_response_failed(&peer, "peer_joined_non_relay");
+                                                        }
                                                         continue;
                                                     }
                                                     tracing::info!("Received PeerJoined: {} with {} addresses", peer_info.peer_id, peer_info.addresses.len());
@@ -4948,19 +5457,33 @@ pub async fn start_swarm_with_config(
                                                     if peer_info.addresses.len() > MAX_DISCOVERY_DIALS {
                                                         tracing::debug!("  Capped PeerJoined dials at {} (had {})", dialed, peer_info.addresses.len());
                                                     }
-                                                    let _ = swarm.behaviour_mut().messaging.send_response(
-                                                        channel,
-                                                        Libp2pMessageResponse { accepted: true, error: None },
-                                                    );
+                                                    if swarm
+                                                        .behaviour_mut()
+                                                        .messaging
+                                                        .send_response(
+                                                            channel,
+                                                            Libp2pMessageResponse { accepted: true, error: None },
+                                                        )
+                                                        .is_err()
+                                                    {
+                                                        log_message_response_failed(&peer, "peer_joined");
+                                                    }
                                                     continue;
                                                 }
                                                 crate::relay::protocol::RelayMessage::PeerListResponse { peers } => {
                                                     if !known_relays.contains(&peer) {
-                                                        tracing::debug!("Discarding PeerListResponse from non-relay peer {}", peer);
-                                                        let _ = swarm.behaviour_mut().messaging.send_response(
-                                                            channel,
-                                                            Libp2pMessageResponse { accepted: true, error: None },
-                                                        );
+                                                        crate::message_events::log_rx_drop(None, "control", "peer_list_response_from_non_relay");
+                                                        if swarm
+                                                            .behaviour_mut()
+                                                            .messaging
+                                                            .send_response(
+                                                                channel,
+                                                                Libp2pMessageResponse { accepted: true, error: None },
+                                                            )
+                                                            .is_err()
+                                                        {
+                                                            log_message_response_failed(&peer, "peer_list_non_relay");
+                                                        }
                                                         continue;
                                                     }
                                                     tracing::info!("Received peer list: {} peers", peers.len());
@@ -4999,38 +5522,63 @@ pub async fn start_swarm_with_config(
                                                             }
                                                         }
                                                     }
-                                                    let _ = swarm.behaviour_mut().messaging.send_response(
-                                                        channel,
-                                                        Libp2pMessageResponse { accepted: true, error: None },
-                                                    );
+                                                    if swarm
+                                                        .behaviour_mut()
+                                                        .messaging
+                                                        .send_response(
+                                                            channel,
+                                                            Libp2pMessageResponse { accepted: true, error: None },
+                                                        )
+                                                        .is_err()
+                                                    {
+                                                        log_message_response_failed(&peer, "peer_list");
+                                                    }
                                                     continue;
                                                 }
                                                 crate::relay::protocol::RelayMessage::PeerLeft { peer_id } => {
                                                     tracing::info!("Peer left: {}", peer_id);
-                                                    let _ = swarm.behaviour_mut().messaging.send_response(
-                                                        channel,
-                                                        Libp2pMessageResponse { accepted: true, error: None },
-                                                    );
+                                                    if swarm
+                                                        .behaviour_mut()
+                                                        .messaging
+                                                        .send_response(
+                                                            channel,
+                                                            Libp2pMessageResponse { accepted: true, error: None },
+                                                        )
+                                                        .is_err()
+                                                    {
+                                                        log_message_response_failed(&peer, "peer_left");
+                                                    }
                                                     continue;
                                                 }
-                                                _ => {
-                                                    // Other relay messages, fall through to normal handling
+                                                other => {
+                                                    // Other relay messages are NOT dropped: they fall
+                                                    // through to normal handling (MessageReceived).
+                                                    crate::message_events::log_rx_forwarded(
+                                                        relay_message_kind(&other),
+                                                    );
                                                 }
                                             }
                                         }
                                         }
 
-                                        // Received a message from a peer
-                                        let _ = event_tx.send(SwarmEvent2::MessageReceived {
-                                            peer_id: peer,
-                                            envelope_data: envelope_payload,
-                                        }).await;
-
-                                        // Send acceptance response
-                                        let _ = swarm.behaviour_mut().messaging.send_response(
-                                            channel,
-                                            Libp2pMessageResponse { accepted: true, error: None },
-                                        );
+                                        // Received a message from a peer. If the bridge receiver is
+                                        // gone the frame is lost, so the peer is told
+                                        // `accepted: false` (it keeps the message and retries)
+                                        // rather than a false acceptance.
+                                        let response = forward_message_received(
+                                            &event_tx,
+                                            peer,
+                                            envelope_payload,
+                                        )
+                                        .await;
+                                        if swarm
+                                            .behaviour_mut()
+                                            .messaging
+                                            .send_response(channel, response)
+                                            .is_err()
+                                        {
+                                            log_message_response_failed(&peer, "message_received");
+                                        }
                                     }
                                     request_response::Message::Response { request_id, response } => {
                                         if let Some(dispatch) =
@@ -5279,10 +5827,21 @@ pub async fn start_swarm_with_config(
                                             continue;
                                         }
                                         // Peer is requesting address reflection
-                                        let observed_addr = connection_tracker
-                                            .get_connection_by_id(&peer, &connection_id.to_string())
-                                            .and_then(|conn| ConnectionTracker::extract_socket_addr(&conn.remote_addr))
-                                            .unwrap_or_else(|| "0.0.0.0:0".parse().expect("static socket addr parse cannot fail"));
+                                        // D2: circuit-reached requesters have no direct
+                                        // socket we can reflect; refuse instead of
+                                        // handing back the forwarding node's ip:port.
+                                        let Some(observed_addr) = reflection_requester_socket(
+                                            &connection_tracker,
+                                            &peer,
+                                            &connection_id.to_string(),
+                                        ) else {
+                                            tracing::debug!(
+                                                "Address reflection from {} refused: no direct observed socket (circuit or unknown connection)",
+                                                peer
+                                            );
+                                            drop(channel);
+                                            continue;
+                                        };
 
                                         tracing::debug!("Observed address for {}: {}", peer, observed_addr);
 
@@ -5302,13 +5861,30 @@ pub async fn start_swarm_with_config(
                                         }
                                         tracing::info!("Address reflection from {}: {}", peer, response.observed_address);
 
-                                        if let Ok(observed_addr) = response.observed_address.parse::<SocketAddr>() {
+                                        if let Some(observed_addr) = response
+                                            .observed_address
+                                            .parse::<SocketAddr>()
+                                            .ok()
+                                            .filter(reflection_reply_is_usable)
+                                        {
                                             address_observer.record_observation(peer, observed_addr);
 
                                             if let Some(primary) = address_observer.primary_external_address() {
                                                 tracing::info!("Consensus external address: {}", primary);
                                             }
                                             sync_external_address(&mut swarm, &address_observer, &bound_addresses);
+                                        }
+
+                                        if !reflection_reply_text_is_usable(&response.observed_address) {
+                                            // Old-node placeholder (0.0.0.0:0): fail the
+                                            // requester so it moves to the next reflector
+                                            // and never records it as a detected address.
+                                            fail_pending_reflection(
+                                                &mut pending_reflections,
+                                                &request_id,
+                                                "unusable reflection reply".to_string(),
+                                            );
+                                            continue;
                                         }
 
                                         if let Some(reply_tx) = pending_reflections.remove(&request_id) {
@@ -5321,6 +5897,20 @@ pub async fn start_swarm_with_config(
                                         }).await;
                                     }
                                 }
+                            }
+                            SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::AddressReflection(
+                                request_response::Event::OutboundFailure { peer, request_id, error, .. }
+                            )) => {
+                                // The responder refused (dropped channel for a circuit
+                                // or unknown connection), timed out, or the connection
+                                // closed. Release the requester immediately.
+                                tracing::debug!("Address reflection to {} failed: {}", peer, error);
+                                fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string());
+                            }
+                            SwarmEvent::Behaviour(super::behaviour::IronCoreBehaviourEvent::AddressReflection(
+                                request_response::Event::InboundFailure { peer, error, .. }
+                            )) => {
+                                tracing::debug!("Address reflection inbound from {} failed: {}", peer, error);
                             }
 
                             SwarmEvent::Behaviour(
@@ -6403,6 +6993,14 @@ pub async fn start_swarm_with_config(
                             )) => {
                                 for (peer_id, addr) in peers {
                                     tracing::info!("mDNS discovered peer: {} at {}", peer_id, addr);
+                                    // Wake event: a (re)sighting of the peer on the LAN.
+                                    // mDNS is an unauthenticated claim, so this wakes only
+                                    // peers with prior authenticated history, and is
+                                    // rate limited like every other wake source.
+                                    dial_policy_manager.wake_peer(
+                                        peer_id,
+                                        super::dial_policy::WakeTrigger::MdnsDiscovered,
+                                    );
                                     // V040-T14: mDNS is an unauthenticated LAN broadcast — the
                                     // (peer_id, addr) pair is asserted by the broadcaster, not
                                     // proven by our store. Per the corrected-pair doctrine (T13
@@ -6495,6 +7093,17 @@ pub async fn start_swarm_with_config(
                                 // (60s cadence per connection) -- keeps a healthy peer's
                                 // stamps fresh even where ping has nothing to say.
                                 zombie_tracker.note_liveness(&peer_id, marker_now_ms());
+                                // Event-driven revival: identify completion wakes the
+                                // peer's backed-off addresses (before the log dedup
+                                // below; wakes are coalesced per entry).
+                                {
+                                    let advertised: Vec<&Multiaddr> = info
+                                        .listen_addrs
+                                        .iter()
+                                        .filter(|a| is_discoverable_multiaddr(a))
+                                        .collect();
+                                    wake_on_identify(&dial_policy_manager, peer_id, &advertised);
+                                }
                                 // Dedup: suppress "Identified peer" logs for same peer within TTL window
                                 {
                                     let now = Instant::now();
@@ -6561,7 +7170,8 @@ pub async fn start_swarm_with_config(
                                 // as seen by this peer. This gives mobile layers a stable
                                 // "what the network sees" signal for publishing connection hints.
                                 if let Some(observed_addr) =
-                                    ConnectionTracker::extract_socket_addr(&info.observed_addr)
+                                    ConnectionTracker::extract_direct_observed_socket_addr(&info.observed_addr)
+                                        .filter(|observed| !observed_names_observer_endpoint(&connection_tracker, &peer_id, observed))
                                 {
                                     address_observer.record_observation(peer_id, observed_addr);
                                     tracing::info!(
@@ -7557,6 +8167,14 @@ pub async fn start_swarm_with_config(
                             }
 
                             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, peer_id, .. } => {
+                                // Wake event: the peer tried to dial us (even a denied or
+                                // failed inbound attempt proves it is up and trying).
+                                if let Some(inbound_peer) = peer_id {
+                                    dial_policy_manager.wake_peer(
+                                        inbound_peer,
+                                        super::dial_policy::WakeTrigger::InboundDial,
+                                    );
+                                }
                                 // Inbound connection errors on the LAN listeners are
                                 // dominated by benign TCP port-probes -- notably our own
                                 // Android SubnetProbe LAN-discovery fallback, which opens a
@@ -7680,6 +8298,13 @@ pub async fn start_swarm_with_config(
                         match command {
                             #[cfg(not(target_arch = "wasm32"))]
                             SwarmCommand::SendMessage { peer_id, envelope_data, recipient_identity_id, intended_device_id, reply } => {
+                                // Wake event: an outbound message is queued for this peer,
+                                // so any dormant/backed-off address for it is due again.
+                                dial_policy_manager.wake_peer(
+                                    peer_id,
+                                    super::dial_policy::WakeTrigger::OutboundQueued,
+                                );
+
                                 // ENVELOPE-HINT DIALING: when the routing table only knows
                                 // stale candidates (live-cell failure 2026-08-25:
                                 // `route=direct relay=- candidate=1/1` against a peer that
@@ -7956,6 +8581,17 @@ pub async fn start_swarm_with_config(
                                 tracing::debug!("Dialing {} (synthesizing port ladder if applicable)", addr);
                                 let is_direct = is_direct_dial_addr(&addr);
 
+                                if let Some(reason) = address_only_dial_skip_reason(
+                                    &addr,
+                                    requested_peer_id,
+                                    trusted,
+                                    &connection_tracker,
+                                ) {
+                                    tracing::info!("[DIAL-SKIP] {}: {}", addr, reason);
+                                    let _ = reply.send(Err(format!("skipped: {}", reason))).await;
+                                    continue;
+                                }
+
                                 let target_peer_id = match resolve_dial_target(&addr, requested_peer_id) {
                                     Ok(peer_id) => peer_id,
                                     Err(error) => {
@@ -8007,12 +8643,14 @@ pub async fn start_swarm_with_config(
                                 let addr_key = multiaddr_to_key(&addr);
                                 if !dial_policy_manager.register_dial_attempt(&addr_key, target_peer_id) {
                                     let policy_error = if let Some(state) = dial_policy_manager.get_backoff_state(&addr_key) {
-                                        if state.is_dead {
-                                            "Peer marked as dead after 3 failed dial attempts (session)".to_string()
-                                        } else {
-                                            format!("Peer is backed off (attempt_count={}/3, backoff={}s)",
+                                        if state.dormant {
+                                            format!("Peer is dormant (attempt_count={}, waiting for wake event or backoff={}ms)",
                                                     state.attempt_count,
-                                                    state.backoff_duration.as_secs())
+                                                    state.backoff_duration.as_millis())
+                                        } else {
+                                            format!("Peer is backed off (attempt_count={}, backoff={}ms)",
+                                                    state.attempt_count,
+                                                    state.backoff_duration.as_millis())
                                         }
                                     } else {
                                         "Peer is at concurrent dial limit (3/3)".to_string()
@@ -8216,6 +8854,36 @@ pub async fn start_swarm_with_config(
                                     }
                                     Err(e) => {
                                         let err_msg: String = format!("{}", e);
+                                        // A synchronous dial error must be rescheduled, not
+                                        // just released: without a recorded failure the
+                                        // address stays eligible and a revival loop would
+                                        // re-dial it immediately. PeerCondition-false means
+                                        // a connection/dial already exists (not a failure);
+                                        // NoAddresses cannot succeed until an address is
+                                        // learned, so it goes Dormant (an AddressLearned
+                                        // wake or the jittered backoff retries it, never
+                                        // dead-marked).
+                                        match &e {
+                                            libp2p::swarm::DialError::DialPeerConditionFalse(_) => {
+                                                tracing::debug!(
+                                                    addr=%addr_key,
+                                                    "[DIAL] dial not issued: peer already connected or dialing"
+                                                );
+                                            }
+                                            libp2p::swarm::DialError::NoAddresses => {
+                                                dial_policy_manager
+                                                    .record_permanent_failure(&addr_key, target_peer_id);
+                                            }
+                                            _ => {
+                                                dial_policy_manager
+                                                    .record_dial_failure(&addr_key, target_peer_id);
+                                            }
+                                        }
+                                        tracing::warn!(
+                                            addr=%addr_key,
+                                            error=%err_msg,
+                                            "[DIAL] synchronous dial error; rescheduled with backoff"
+                                        );
                                         // P1 Item 3: Complete the dial attempt since it failed to queue
                                         dial_policy_manager.complete_dial_attempt(&addr_key);
                                         let _ = reply.send(Err(err_msg)).await;
@@ -8533,6 +9201,16 @@ pub async fn start_swarm_with_config(
                                             break;
                                         }
                                         Err(e) => {
+                                            // Reschedule (event-driven backoff) before
+                                            // releasing the slot; a bare release would leave
+                                            // this seed address immediately eligible again.
+                                            if !matches!(
+                                                e,
+                                                libp2p::swarm::DialError::DialPeerConditionFalse(_)
+                                            ) {
+                                                dial_policy_manager
+                                                    .record_dial_failure(&candidate_key, None);
+                                            }
                                             dial_policy_manager.complete_dial_attempt(&candidate_key);
                                             tracing::warn!("Seed peer dial failed: {}: {}", candidate, e);
                                             last_error = format!("{}: {}", candidate, e);
@@ -8582,6 +9260,9 @@ pub async fn start_swarm_with_config(
                             SwarmCommand::GetBestPaths { target, count, reply } => {
                                 let paths = multi_path_delivery.get_best_paths(&target, count);
                                 let _ = reply.send(paths).await;
+                            }
+                            SwarmCommand::NetworkChange { event } => {
+                                dial_policy_manager.on_network_event(&event);
                             }
                             SwarmCommand::Shutdown => {
                                 tracing::info!("Swarm shutting down");
@@ -8820,6 +9501,12 @@ pub async fn start_swarm_with_config(
         // ZOMBIE-CONNECTION REAP (wasm parity, RCA WIFI_TRANSPORT_REGRESSION_2026-09-18):
         // inline-check idiom per this loop's timing convention (f64 Date::now()).
         let mut last_zombie_reap: f64 = js_sys::Date::now();
+        // OUTBOX-SWEEP-001 wasm parity (#413 review F3): same bounded sweep as
+        // the native loop, on this loop's inline Date::now() idiom. Like the
+        // other inline-check timers it is evaluated whenever the select! wakes
+        // (any command or swarm event), not on a free-running timer.
+        let mut last_outbox_sweep: f64 = js_sys::Date::now();
+        let mut outbox_sweep_rotation: usize = 0;
         let mut zombie_tracker = ZombieTracker::new();
         let mut seen_delivery_convergence_markers: HashSet<String> = HashSet::new();
         let bootstrap_addrs_clone = bootstrap_addrs;
@@ -9127,6 +9814,7 @@ pub async fn start_swarm_with_config(
                                     ))
                                     .await;
                             }
+                            SwarmCommand::NetworkChange { .. } => {}
                             SwarmCommand::Shutdown => {
                                 tracing::info!("WASM swarm shutting down");
                                 break;
@@ -9366,10 +10054,18 @@ pub async fn start_swarm_with_config(
                                                 drop(channel);
                                                 continue;
                                             }
-                                            let observed_addr = connection_tracker
-                                                .get_connection_by_id(&peer, &connection_id.to_string())
-                                                .and_then(|conn| ConnectionTracker::extract_socket_addr(&conn.remote_addr))
-                                                .unwrap_or_else(|| "0.0.0.0:0".parse().expect("static socket addr parse cannot fail"));
+                                            let Some(observed_addr) = reflection_requester_socket(
+                                                &connection_tracker,
+                                                &peer,
+                                                &connection_id.to_string(),
+                                            ) else {
+                                                tracing::debug!(
+                                                    "Address reflection from {} refused (WASM): no direct observed socket",
+                                                    peer
+                                                );
+                                                drop(channel);
+                                                continue;
+                                            };
 
                                             let response = reflection_service.handle_request(request, observed_addr);
                                             let _ = swarm.behaviour_mut().address_reflection.send_response(channel, response);
@@ -9385,8 +10081,21 @@ pub async fn start_swarm_with_config(
                                                 }
                                                 continue;
                                             }
-                                            if let Ok(observed_addr) = response.observed_address.parse::<SocketAddr>() {
+                                            if let Some(observed_addr) = response
+                                                .observed_address
+                                                .parse::<SocketAddr>()
+                                                .ok()
+                                                .filter(reflection_reply_is_usable)
+                                            {
                                                 address_observer.record_observation(peer, observed_addr);
+                                            }
+                                            if !reflection_reply_text_is_usable(&response.observed_address) {
+                                                fail_pending_reflection(
+                                                    &mut pending_reflections,
+                                                    &request_id,
+                                                    "unusable reflection reply".to_string(),
+                                                );
+                                                continue;
                                             }
                                             if let Some(reply_tx) = pending_reflections.remove(&request_id) {
                                                 let _ = reply_tx.send(Ok(response.observed_address.clone())).await;
@@ -9398,9 +10107,7 @@ pub async fn start_swarm_with_config(
                                         }
                                     },
                                     request_response::Event::OutboundFailure { request_id, error, .. } => {
-                                        if let Some(reply_tx) = pending_reflections.remove(&request_id) {
-                                            let _ = reply_tx.send(Err(error.to_string())).await;
-                                        }
+                                        fail_pending_reflection(&mut pending_reflections, &request_id, error.to_string());
                                     }
                                     _ => {}
                                 }
@@ -9844,7 +10551,8 @@ pub async fn start_swarm_with_config(
                                 // (The earlier dialed_peers set was removed
                                 // entirely -- see the wasm loop declarations.)
                                 if let Some(observed_addr) =
-                                    ConnectionTracker::extract_socket_addr(&info.observed_addr)
+                                    ConnectionTracker::extract_direct_observed_socket_addr(&info.observed_addr)
+                                        .filter(|observed| !observed_names_observer_endpoint(&connection_tracker, &peer_id, observed))
                                 {
                                     // WASM: diagnostics-only observation recording.
                                     // No external-address promotion exists in the
@@ -10316,6 +11024,21 @@ pub async fn start_swarm_with_config(
                     last_custody_pull = js_sys::Date::now();
                 }
 
+                // OUTBOX-SWEEP-001 (wasm parity): bounded periodic re-flush of due
+                // outbox entries on still-connected peers (120 s, as native).
+                if js_sys::Date::now() - last_outbox_sweep >= 120_000.0 {
+                    if let Some(core) = core_handle.as_ref().and_then(|w| w.upgrade()) {
+                        let _ = sweep_outbox_over_swarm(
+                            &core,
+                            &mut swarm,
+                            &registered_swarm_peers,
+                            &mut reconnect_request_to_message,
+                            &mut outbox_sweep_rotation,
+                        );
+                    }
+                    last_outbox_sweep = js_sys::Date::now();
+                }
+
                 // ZOMBIE-CONNECTION REAP (wasm parity): same contract as the native
                 // loop's zombie_reap_interval arm -- force-close peers whose tracked
                 // connections are liveness-silent while their deny-classified dials
@@ -10660,6 +11383,366 @@ mod tests {
         );
         assert_eq!(extract_ip_component("/dns4/host.example/tcp/1"), None);
         assert_eq!(extract_ip_component("garbage"), None);
+    }
+
+    fn tracker_with(conns: &[(&str, &str)]) -> crate::transport::observation::ConnectionTracker {
+        let mut tracker = crate::transport::observation::ConnectionTracker::new();
+        for (i, (_, remote)) in conns.iter().enumerate() {
+            tracker.add_connection(
+                PeerId::random(),
+                remote.parse().unwrap(),
+                "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+                format!("c{i}"),
+            );
+        }
+        tracker
+    }
+
+    fn skip(tracker: &crate::transport::observation::ConnectionTracker, addr: &str) -> bool {
+        super::address_only_dial_skip_reason(&addr.parse().unwrap(), None, false, tracker).is_some()
+    }
+
+    #[tokio::test]
+    async fn refused_reflection_failure_releases_waiter_and_cleans_pending() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut pending: HashMap<u64, tokio::sync::mpsc::Sender<Result<String, String>>> =
+            HashMap::new();
+        pending.insert(7, tx);
+        super::fail_pending_reflection(&mut pending, &7, "refused".to_string());
+        assert!(pending.is_empty());
+        let res = super::await_reflection_reply(&mut rx, std::time::Duration::from_secs(2)).await;
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("refused"));
+        // Idempotent for an already-removed entry.
+        super::fail_pending_reflection(&mut pending, &7, "again".to_string());
+    }
+
+    #[tokio::test]
+    async fn abandoned_reflection_waiters_are_pruned_live_ones_kept() {
+        let mut pending: HashMap<u64, tokio::sync::mpsc::Sender<Result<String, String>>> =
+            HashMap::new();
+        let mut live_rx = Vec::new();
+        for key in 0..1000u64 {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            pending.insert(key, tx);
+            if key % 10 == 0 {
+                live_rx.push(rx);
+            } // else: receiver dropped = waiter timed out / cancelled
+        }
+        assert_eq!(super::prune_abandoned_reflections(&mut pending), 900);
+        assert_eq!(pending.len(), 100);
+        assert_eq!(super::prune_abandoned_reflections(&mut pending), 0);
+        drop(live_rx);
+        assert_eq!(super::prune_abandoned_reflections(&mut pending), 100);
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fail_pending_reflection_never_blocks_on_a_full_or_closed_channel() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.try_send(Ok("preloaded".to_string())).unwrap(); // channel now full
+        let mut pending: HashMap<u8, tokio::sync::mpsc::Sender<Result<String, String>>> =
+            HashMap::new();
+        pending.insert(1, tx);
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            super::fail_pending_reflection(&mut pending, &1, "x".to_string());
+        })
+        .await;
+        assert!(
+            outcome.is_ok(),
+            "fail_pending_reflection parked on a full channel"
+        );
+        assert!(pending.is_empty());
+        drop(rx);
+        let (tx2, rx2) = tokio::sync::mpsc::channel(1);
+        drop(rx2);
+        pending.insert(2, tx2);
+        super::fail_pending_reflection(&mut pending, &2, "closed".to_string());
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reflection_waiters_stress_no_deadlock_no_leak() {
+        // Many concurrent waiters resolved by a mix of reply, failure and
+        // silence; the run must finish under a deadlock timeout and leave the
+        // pending map empty after the sweep.
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let mut pending: HashMap<u32, tokio::sync::mpsc::Sender<Result<String, String>>> =
+                HashMap::new();
+            let mut waiters = Vec::new();
+            for key in 0..400u32 {
+                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                pending.insert(key, tx);
+                waiters.push(tokio::spawn(async move {
+                    super::await_reflection_reply(&mut rx, std::time::Duration::from_millis(300))
+                        .await
+                        .is_ok()
+                }));
+            }
+            for key in 0..400u32 {
+                match key % 4 {
+                    0 => {
+                        if let Some(tx) = pending.remove(&key) {
+                            let _ = tx.try_send(Ok("203.0.113.7:9001".to_string()));
+                        }
+                    }
+                    1 => super::fail_pending_reflection(&mut pending, &key, "boom".to_string()),
+                    _ => {} // silence: only the bounded wait can release these
+                }
+            }
+            let mut ok = 0usize;
+            for waiter in waiters {
+                if waiter.await.expect("waiter task panicked") {
+                    ok += 1;
+                }
+            }
+            assert_eq!(ok, 100);
+            // Every silent waiter timed out and dropped its receiver.
+            assert_eq!(super::prune_abandoned_reflections(&mut pending), 200);
+            assert!(pending.is_empty());
+        })
+        .await;
+        assert!(outcome.is_ok(), "reflection waiter stress test deadlocked");
+    }
+
+    #[test]
+    fn hostile_reflection_replies_are_unusable() {
+        for text in [
+            "",
+            "0.0.0.0:0",
+            "0.0.0.0:9001",
+            "[::]:9001",
+            "203.0.113.7:0",
+            "224.0.0.1:9001",
+            "[ff02::1]:9001",
+            "255.255.255.255:9001",
+            "203.0.113.7",
+            "203.0.113.7:99999",
+            "203.0.113.7:9001\u{0}",
+            "not an address",
+        ] {
+            assert!(!super::reflection_reply_text_is_usable(text), "{text:?}");
+        }
+        let oversized = format!("203.0.113.7:9001{}", " ".repeat(10_000));
+        assert!(!super::reflection_reply_text_is_usable(&oversized));
+        assert!(super::reflection_reply_text_is_usable("203.0.113.7:9001"));
+        assert!(super::reflection_reply_text_is_usable("[2001:db8::1]:9001"));
+    }
+
+    #[test]
+    fn observer_cannot_name_its_own_endpoint_as_ours() {
+        use crate::transport::observation::ConnectionTracker;
+        let mut tracker = ConnectionTracker::new();
+        let observer = PeerId::random();
+        let other = PeerId::random();
+        tracker.add_connection(
+            observer,
+            "/ip4/18.234.62.247/tcp/9001".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "o".to_string(),
+        );
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let own_endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(18, 234, 62, 247)), 9001);
+        let ours = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(147, 81, 41, 188)), 9001);
+        assert!(super::observed_names_observer_endpoint(
+            &tracker,
+            &observer,
+            &own_endpoint
+        ));
+        assert!(!super::observed_names_observer_endpoint(
+            &tracker, &observer, &ours
+        ));
+        assert!(!super::observed_names_observer_endpoint(
+            &tracker,
+            &other,
+            &own_endpoint
+        ));
+    }
+
+    #[test]
+    fn dial_skip_guard_handles_hostile_addresses_without_panic() {
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        for text in [
+            "/ip4/0.0.0.0/tcp/0",
+            "/ip4/192.168.0.121/tcp/0",
+            "/ip4/255.255.255.255/tcp/9001",
+            "/ip4/224.0.0.1/tcp/9001",
+            "/ip6/::/tcp/9001",
+            "/ip6/fe80::1/tcp/9001",
+            "/ip4/192.168.0.121/udp/9001",
+            "/dns4/example.com/tcp/9001",
+            "/tcp/9001",
+        ] {
+            let addr: Multiaddr = text.parse().unwrap();
+            let _ = super::address_only_dial_skip_reason(&addr, None, false, &tracker);
+        }
+        // The endpoint set is deduplicated: bounded by distinct live sockets.
+        let many: Vec<(&str, &str)> = (0..64).map(|_| ("p", "/ip4/10.0.0.9/tcp/9001")).collect();
+        let big = tracker_with(&many);
+        assert_eq!(super::connected_direct_endpoints(&big).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reflection_wait_is_bounded_when_no_event_ever_arrives() {
+        // Sender kept alive and never used: only the timeout can release us.
+        let (_tx, mut rx) = tokio::sync::mpsc::channel::<Result<String, String>>(1);
+        let started = web_time::Instant::now();
+        let res =
+            super::await_reflection_reply(&mut rx, std::time::Duration::from_millis(50)).await;
+        assert!(res.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(
+            super::ADDRESS_REFLECTION_REPLY_BOUND
+                > std::time::Duration::from_secs(
+                    super::super::behaviour::ADDRESS_REFLECTION_REQUEST_TIMEOUT_SECS
+                )
+        );
+    }
+
+    #[test]
+    fn exact_socket_is_skipped_with_evidence_and_other_classes_stay_dialable() {
+        let tracker = tracker_with(&[
+            ("a", "/ip4/192.168.0.121/tcp/9001"),
+            ("b", "/ip4/18.234.62.247/tcp/9001/p2p-circuit"),
+            ("c", "/ip4/127.0.0.1/tcp/9001"),
+        ]);
+        // Relayed and loopback connections never register an endpoint.
+        assert_eq!(super::connected_direct_endpoints(&tracker).len(), 1);
+        let reason = super::address_only_dial_skip_reason(
+            &"/ip4/192.168.0.121/tcp/9001".parse().unwrap(),
+            None,
+            false,
+            &tracker,
+        )
+        .unwrap();
+        assert!(reason.contains(super::DIAL_SKIP_CONNECTED_MARKER));
+        for a in [
+            "/ip4/192.168.0.122/tcp/9001",
+            "/ip4/127.0.0.1/tcp/9001",
+            "/ip4/192.168.0.121/tcp/9001/p2p-circuit",
+        ] {
+            assert!(!skip(&tracker, a), "{a}");
+        }
+    }
+
+    #[test]
+    fn hundred_port_probe_of_connected_host_yields_no_dials() {
+        for host in ["192.168.0.121", "10.0.0.5"] {
+            let connected = format!("/ip4/{host}/tcp/9001");
+            let tracker = tracker_with(&[("a", connected.as_str())]);
+            let mut dials = 0usize;
+            for port in 9100..9200u16 {
+                if !skip(&tracker, &format!("/ip4/{host}/tcp/{port}")) {
+                    dials += 1;
+                }
+            }
+            assert_eq!(dials, 0, "{host}");
+            // Neutral (no connectivity evidence) for the probed port.
+            let r = super::address_only_dial_skip_reason(
+                &format!("/ip4/{host}/tcp/9100").parse().unwrap(),
+                None,
+                false,
+                &tracker,
+            )
+            .unwrap();
+            assert!(!r.contains(super::DIAL_SKIP_CONNECTED_MARKER));
+        }
+    }
+
+    #[test]
+    fn probes_resume_when_the_live_link_closes() {
+        // No state is kept: with no live direct link to the host, every
+        // address-only probe is dialable again.
+        let empty = tracker_with(&[]);
+        assert!(!skip(&empty, "/ip4/192.168.0.121/tcp/9002"));
+        // Only a circuit path to the host: different class, still dialable.
+        let circuit_only = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001/p2p-circuit")]);
+        assert!(!skip(&circuit_only, "/ip4/192.168.0.121/tcp/9002"));
+    }
+
+    #[test]
+    fn public_ip_different_port_is_not_skipped_only_exact_socket_is() {
+        // Two nodes behind one NAT'd public IP (or on one host) must stay
+        // discoverable by address-only dial while another is connected.
+        let tracker = tracker_with(&[("a", "/ip4/203.0.113.7/tcp/9001")]);
+        for port in 9002..9010u16 {
+            assert!(!skip(&tracker, &format!("/ip4/203.0.113.7/tcp/{port}")));
+        }
+        assert!(skip(&tracker, "/ip4/203.0.113.7/tcp/9001"));
+    }
+
+    #[test]
+    fn different_host_on_same_public_ip_class_is_not_matched() {
+        let tracker = tracker_with(&[("a", "/ip4/203.0.113.7/tcp/9001")]);
+        assert!(!skip(&tracker, "/ip4/203.0.113.8/tcp/9001"));
+        assert!(skip(&tracker, "/ip4/203.0.113.7/tcp/9001"));
+    }
+
+    #[test]
+    fn placeholder_reflection_text_is_unusable() {
+        assert!(!super::reflection_reply_text_is_usable("0.0.0.0:0"));
+        assert!(!super::reflection_reply_text_is_usable("garbage"));
+        assert!(super::reflection_reply_text_is_usable("203.0.113.7:9001"));
+    }
+
+    #[test]
+    fn address_only_skip_ignores_peer_id_trusted_and_embedded_peer_dials() {
+        let tracker = tracker_with(&[("a", "/ip4/192.168.0.121/tcp/9001")]);
+        let addr: Multiaddr = "/ip4/192.168.0.121/tcp/9001".parse().unwrap();
+        assert!(super::address_only_dial_skip_reason(
+            &addr,
+            Some(PeerId::random()),
+            false,
+            &tracker
+        )
+        .is_none());
+        assert!(super::address_only_dial_skip_reason(&addr, None, true, &tracker).is_none());
+        let with_peer: Multiaddr = format!("/ip4/192.168.0.121/tcp/9001/p2p/{}", PeerId::random())
+            .parse()
+            .unwrap();
+        assert!(super::address_only_dial_skip_reason(&with_peer, None, false, &tracker).is_none());
+    }
+
+    #[test]
+    fn reflection_refuses_circuit_requester_and_replies_with_direct_socket() {
+        use crate::transport::observation::ConnectionTracker;
+        let mut tracker = ConnectionTracker::new();
+        let direct = PeerId::random();
+        let relayed = PeerId::random();
+        tracker.add_connection(
+            direct,
+            "/ip4/198.51.100.4/tcp/4001".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "d".to_string(),
+        );
+        tracker.add_connection(
+            relayed,
+            "/ip4/18.234.62.247/tcp/9001/p2p-circuit".parse().unwrap(),
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "r".to_string(),
+        );
+        assert_eq!(
+            super::reflection_requester_socket(&tracker, &direct, "d"),
+            Some("198.51.100.4:4001".parse().unwrap())
+        );
+        assert_eq!(
+            super::reflection_requester_socket(&tracker, &relayed, "r"),
+            None
+        );
+        assert_eq!(
+            super::reflection_requester_socket(&tracker, &direct, "nope"),
+            None
+        );
+        // Requester side drops placeholder replies.
+        assert!(!super::reflection_reply_is_usable(
+            &"0.0.0.0:0".parse().unwrap()
+        ));
+        assert!(!super::reflection_reply_is_usable(
+            &"1.2.3.4:0".parse().unwrap()
+        ));
+        assert!(super::reflection_reply_is_usable(
+            &"1.2.3.4:9001".parse().unwrap()
+        ));
     }
 
     #[test]
@@ -12347,5 +13430,173 @@ mod relay_per_peer_budget_tests {
             super::topic_subscribe_decision(&topic, &None, Some(own.as_str()), true),
             super::TopicSubscribeDecision::SkipAlreadySubscribed
         );
+    }
+}
+
+/// Inbound `/sc/message` handling must never report `accepted: true` for a
+/// frame that could not be handed to the internal event channel.
+#[cfg(test)]
+mod message_ingress_response_tests {
+    use super::{forward_message_received, SwarmEvent2, MESSAGE_FORWARD_FAILED_REASON};
+    use libp2p::PeerId;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    #[derive(Clone, Default)]
+    struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for LogBuf {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Ok(mut inner) = self.0.lock() {
+                inner.extend_from_slice(buf);
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn open_channel_accepts_and_enqueues_event() {
+        let (tx, mut rx) = mpsc::channel::<SwarmEvent2>(4);
+        let peer = PeerId::random();
+        let resp = forward_message_received(&tx, peer, vec![1, 2, 3]).await;
+        assert!(resp.accepted);
+        assert!(resp.error.is_none());
+        match rx.try_recv() {
+            Ok(SwarmEvent2::MessageReceived {
+                peer_id,
+                envelope_data,
+            }) => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(envelope_data, vec![1, 2, 3]);
+            }
+            other => panic!("expected MessageReceived, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_channel_rejects_and_logs_rx_drop() {
+        let (tx, rx) = mpsc::channel::<SwarmEvent2>(4);
+        drop(rx);
+
+        let buf = LogBuf::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let resp = forward_message_received(&tx, PeerId::random(), vec![9]).await;
+
+        assert!(!resp.accepted, "closed channel must not be accepted");
+        assert_eq!(resp.error.as_deref(), Some(MESSAGE_FORWARD_FAILED_REASON));
+        let logged = String::from_utf8_lossy(&buf.0.lock().map(|g| g.clone()).unwrap_or_default())
+            .to_string();
+        assert!(
+            logged.contains("[RX-DROP]") && logged.contains("swarm_event_tx"),
+            "expected [RX-DROP] line, got: {logged}"
+        );
+    }
+
+    #[tokio::test]
+    async fn full_channel_is_never_accepted_before_event_is_enqueued() {
+        let (tx, mut rx) = mpsc::channel::<SwarmEvent2>(1);
+        tx.send(SwarmEvent2::PeerDiscovered(PeerId::random()))
+            .await
+            .ok();
+        // Channel is full: the awaited send back-pressures, so no response
+        // (and in particular no `accepted: true`) exists while the event is
+        // still unqueued.
+        let peer = PeerId::random();
+        let pending = tokio::time::timeout(
+            Duration::from_millis(50),
+            forward_message_received(&tx, peer, vec![7]),
+        )
+        .await;
+        assert!(pending.is_err(), "full channel must not yield a response");
+
+        // Once capacity frees up the message is enqueued and only then accepted.
+        let drain = tokio::spawn(async move {
+            let _ = rx.recv().await;
+            rx
+        });
+        let resp = forward_message_received(&tx, peer, vec![7]).await;
+        assert!(resp.accepted);
+        let mut rx = match drain.await {
+            Ok(rx) => rx,
+            Err(e) => panic!("drain task failed: {e}"),
+        };
+        assert!(matches!(
+            rx.recv().await,
+            Some(SwarmEvent2::MessageReceived { .. })
+        ));
+    }
+}
+
+/// Event-driven revival wiring in the swarm: identify completion and an
+/// inbound connection wake the peer's backed-off dial entries.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod event_driven_wake_tests {
+    use super::wake_on_identify;
+    use crate::transport::dial_policy::{multiaddr_to_key, DialPolicyManager, BACKOFF_FLOOR};
+    use libp2p::{Multiaddr, PeerId};
+
+    fn dormant_entry(manager: &DialPolicyManager, key: &str, peer: Option<PeerId>) {
+        for _ in 0..3 {
+            manager.record_dial_failure(key, peer);
+        }
+        assert!(manager.get_backoff_state(key).is_some_and(|s| s.dormant));
+        assert!(!manager.register_dial_attempt(key, peer));
+    }
+
+    #[test]
+    fn identify_wakes_peer_entries_and_advertised_addresses_only() {
+        let manager = DialPolicyManager::new();
+        let peer = PeerId::random();
+        let advertised: Multiaddr = "/ip4/203.0.113.7/tcp/9000".parse().expect("addr");
+        let other: Multiaddr = "/ip4/203.0.113.8/tcp/9000".parse().expect("addr");
+        let attributed = "attributed-entry";
+        let advertised_key = multiaddr_to_key(&advertised);
+        let other_key = multiaddr_to_key(&other);
+
+        dormant_entry(&manager, attributed, Some(peer));
+        dormant_entry(&manager, &advertised_key, None);
+        dormant_entry(&manager, &other_key, None);
+
+        let woken = wake_on_identify(&manager, peer, &[&advertised]);
+        assert_eq!(woken, 2, "attributed entry plus the advertised address");
+
+        manager.advance_clock(BACKOFF_FLOOR);
+        assert!(manager.register_dial_attempt(attributed, Some(peer)));
+        assert!(manager.register_dial_attempt(&advertised_key, None));
+        assert!(
+            !manager.register_dial_attempt(&other_key, None),
+            "an address the peer did not advertise stays backed off"
+        );
+    }
+
+    #[test]
+    fn identify_wakes_coalesce_per_entry() {
+        let manager = DialPolicyManager::new();
+        let peer = PeerId::random();
+        dormant_entry(&manager, "entry", Some(peer));
+
+        assert_eq!(wake_on_identify(&manager, peer, &[]), 1);
+        // A burst of identifies spends no further credit.
+        for _ in 0..50 {
+            assert_eq!(wake_on_identify(&manager, peer, &[]), 0);
+        }
     }
 }

@@ -56,6 +56,7 @@ fun MeshApp(mainViewModel: MainViewModel = hiltViewModel()) {
     val pendingDeepLink by mainViewModel.pendingDeepLink.collectAsState()
     val pendingRequestsInbox by mainViewModel.pendingRequestsInbox.collectAsState()
     val pendingChatPeer by mainViewModel.pendingChatPeer.collectAsState()
+    val pendingInvite by mainViewModel.pendingInvite.collectAsState()
 
     LaunchedEffect(Unit) {
         mainViewModel.refreshIdentityState()
@@ -98,6 +99,16 @@ fun MeshApp(mainViewModel: MainViewModel = hiltViewModel()) {
                 popUpTo(navController.graph.startDestinationId) {
                     saveState = true
                 }
+            }
+        }
+    }
+
+    // #469 T3: a shared/opened SCI1 invite goes to the join screen, which
+    // consumes it from the view model and redeems it through core.
+    LaunchedEffect(pendingInvite, hasStableIdentity) {
+        if (pendingInvite != null && hasStableIdentity) {
+            navController.navigate(Screen.JoinMesh.route) {
+                launchSingleTop = true
             }
         }
     }
@@ -423,6 +434,7 @@ fun MeshNavHost(
             val mainVm: MainViewModel = hiltViewModel()
             JoinMeshScreen(
                 repository = mainVm.repository,
+                initialInvite = remember { mainVm.consumeInvite() },
                 onJoinSuccess = { navController.popBackStack() },
                 onCancel = { navController.popBackStack() }
             )

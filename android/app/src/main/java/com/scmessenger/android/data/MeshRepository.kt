@@ -14,6 +14,7 @@ import com.scmessenger.android.utils.PeerKeyUtils
 import com.scmessenger.android.utils.SecurityUtils
 import com.scmessenger.android.utils.BackoffStrategy
 import com.scmessenger.android.utils.inCausalOrder
+import com.scmessenger.android.utils.releaseCoreReferencesFromLoggingTrees
 import com.scmessenger.android.transport.TransportManager
 import com.scmessenger.android.transport.SmartTransportRouter
 import com.scmessenger.android.service.TransportType
@@ -83,7 +84,10 @@ open class MeshRepository(
         private const val IDENTITY_CACHE_INITIALIZED = "initialized"
         internal const val PLATFORM_SECURE_KEYS_PREFS = "platform_secure_keys"
         internal const val BACKUP_PASSPHRASE_KEY = "backup_passphrase_v1"
-        const val MAX_SEEDS_PER_IMPORT = 16
+        const val DEFAULT_INVITE_TTL_SECS: ULong = 3600UL
+
+        /** At or below this battery percentage discovery uses the LOW power ceiling. */
+        private const val LOW_BATTERY_PERCENT = 15
 
         /**
          * UNIFICATION auth guard: only reject a federated contact update when the
@@ -545,6 +549,41 @@ open class MeshRepository(
 
     // P0_NETWORK_001: Network detector for cellular-aware transport selection
     private val networkDetector = NetworkDetector(context)
+
+    // #469 T7/T8: event-driven discovery. The scheduler policy lives in core
+    // (Rust); this driver feeds it platform events and wakes scan loops.
+    // Lazy so JVM unit tests that never touch discovery never load the native
+    // library.
+    // Closed (native scheduler freed, wake channels closed) by cleanup().
+    private val discoveryDriverLazy = lazy {
+        com.scmessenger.android.transport.discovery.DiscoveryDriver(com.scmessenger.android.transport.discovery.CoreDiscoveryPolicy()).also { driver ->
+            driver.addListener { _, lanes -> applyDiscoveryReset(lanes) }
+        }
+    }
+    val discoveryDriver: com.scmessenger.android.transport.discovery.DiscoveryDriver
+        get() = discoveryDriverLazy.value
+
+    // Serialises first creation against the final close in cleanup(): without
+    // it an event arriving after cleanup() could create a driver (and a native
+    // scheduler) that nothing ever closes.
+    private val discoveryLifecycleLock = Any()
+    private var discoveryShutdown = false
+
+    /** The driver, or null once [cleanup] released it. Never creates one after shutdown. */
+    private fun liveDiscoveryDriver(): com.scmessenger.android.transport.discovery.DiscoveryDriver? =
+        synchronized(discoveryLifecycleLock) {
+            if (discoveryShutdown) null else discoveryDriverLazy.value
+        }
+
+    // Makes "read the foreground flag + peer count + power, then push to core"
+    // one step, so two concurrent input updates cannot land out of order.
+    private val discoveryInputsLock = Any()
+
+    // Foreground flag fed to the scheduler's ceiling (MainActivity onResume/onPause).
+    @Volatile private var discoveryForeground = false
+    private val radioStateReceiver = com.scmessenger.android.transport.discovery.RadioStateReceiver { event ->
+        reportDiscoveryEvent(event)
+    }
     // P0_ANDROID_007: Diagnostics reporter for connectivity analysis
     private val diagnosticsReporter = com.scmessenger.android.network.DiagnosticsReporter(
         context,
@@ -577,6 +616,9 @@ open class MeshRepository(
 
     // Transport Manager for BLE/WiFi transport control
     @Volatile private var transportManager: TransportManager? = null
+
+    // Logs [TRANSPORT] availability per transport at start/on change + peer counts every 5 min
+    @Volatile private var transportStatusMonitor: com.scmessenger.android.transport.TransportStatusMonitor? = null
 
     // Topic Manager for gossipsub topic subscription and filtering
     @Volatile private var topicManager: TopicManager? = null
@@ -632,6 +674,37 @@ open class MeshRepository(
     // meshService.start() + migrateToCanonicalIds (10-60s on device). A shared
     // @Synchronized(this) froze any main-thread path that touched outbox/permissions.
     private val serviceLifecycleLock = Any()
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: upper bound on the swarm shutdown await inside
+     * [stopMeshService]. The FFI call is a suspend function awaited under
+     * [serviceLifecycleLock]; an acknowledgement that never arrives used to hold
+     * that monitor for the life of the process and wedge every later stop.
+     */
+    private val SWARM_SHUTDOWN_TIMEOUT_MS = 5_000L
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: upper bound on the synchronous Rust
+     * MeshService::stop() call inside [stopMeshService]. Joined on a daemon
+     * thread because the call is blocking FFI and cannot be cancelled.
+     */
+    private val RUST_STOP_TIMEOUT_MS = 10_000L
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: bound for the swarm shutdown awaited inside
+     * [resetAllData], which must degrade to a warned reset rather than wedge the
+     * data-wipe that follows it.
+     */
+    private val RESET_SHUTDOWN_TIMEOUT_MS = 5_000L
+
+    /** Bounds every blocking wait on the stop and reset paths; see [StopTeardown]. */
+    private val stopTeardown = StopTeardown()
+
+    /**
+     * STOP-TEARDOWN-TIMEOUT-001: bound for the [getTopics] bridge query. A wedged
+     * swarm must not be able to block a synchronous topic read forever.
+     */
+    private val TOPICS_QUERY_TIMEOUT_MS = 2_000L
     private val outboxIoLock = Any()
     private var pendingOutboxRetryJob: kotlinx.coroutines.Job? = null
     private var coverTrafficJob: kotlinx.coroutines.Job? = null
@@ -657,13 +730,10 @@ open class MeshRepository(
     private val receiptSendMaxAttempts = 6
     @Volatile
     private var serviceStartedAtEpochSec: Long = 0L
-    @Volatile
-    private var lastRelayBootstrapDialMs: Long = 0L
-    // P1_ANDROID_013: Track consecutive full-bootstrap failures for exponential backoff
-    @Volatile
-    private var consecutiveBootstrapFailures: Int = 0
-    @Volatile
-    private var nextBootstrapAttemptMs: Long = 0L
+    // P1_ANDROID_013 + #469 T8: bootstrap spacing and exponential backoff. One
+    // synchronized gate: the loop and the discovery reset listener (any thread)
+    // both mutate it, and a reset must not be overwritten by an older round.
+    private val bootstrapGate = BootstrapGate()
     private val dialThrottleState = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Long>>()
 
     // Reinstall detection: true when SharedPreferences has identity backup but contacts.db
@@ -1285,6 +1355,18 @@ open class MeshRepository(
      * TransportManager directly so restart-after-stop self-heals the same
      * way the BLE components already do.
      */
+    private fun startTransportStatusMonitor() = synchronized(serviceLifecycleLock) {
+        if (transportStatusMonitor != null) return@synchronized
+        val monitor = com.scmessenger.android.transport.TransportStatusMonitor(
+            context = context,
+            localPeerCounts = { transportManager?.peerCountsByKind().orEmpty() },
+            swarmPeerCount = { swarmBridge?.getPeers()?.size ?: 0 },
+        )
+        transportStatusMonitor = monitor
+        // start() contains its own failures (logged); it does not throw.
+        monitor.start()
+    }
+
     private fun ensureTransportManager() {
         if (transportManager != null) return
         transportManager = TransportManager(
@@ -1333,6 +1415,9 @@ open class MeshRepository(
                 meshService?.onWifiDirectConnectionInfo(peerId, groupOwnerIp, isGroupOwner)
             }
         )
+        // #469 T8: LAN discovery cadence comes from the core scheduler.
+        runCatching { transportManager?.discoveryCadences = discoveryDriver }
+            .onFailure { Timber.w(it, "Discovery cadence unavailable; LAN uses legacy fixed intervals") }
     }
 
     /**
@@ -1642,8 +1727,11 @@ open class MeshRepository(
             Timber.i("TopicManager initialized for gossipsub topic management")
 
             // P0_NETWORK_001: Start network detection for cellular-aware fallback
+            networkDetector.onDiscoveryEvent = { event -> reportDiscoveryEvent(event) }
             networkDetector.startMonitoring()
             Timber.i("NetworkDetector started — cellular-aware transport fallback active")
+            // #469 T7: Bluetooth / Wi-Fi radio state as discovery events.
+            radioStateReceiver.register(context)
 
             // P0_NETWORK_001: Watch for network type changes and re-bootstrap
             startNetworkChangeWatch()
@@ -1848,7 +1936,7 @@ open class MeshRepository(
 	                                transport = com.scmessenger.android.service.TransportType.INTERNET
 	                            )
 	                            transportToCanonicalMap[peerId] = peerId // Relay counts as its own canonical
-	                            activeSessions[peerId] = System.currentTimeMillis()
+	                            noteSessionStarted(peerId)
 	                        } else {
 	                            if (isHeadless && transportIdentity != null) {
 	                                Timber.i("Promoting peer $peerId to full node: identity resolved despite headless agent $agentVersion")
@@ -1858,7 +1946,7 @@ open class MeshRepository(
 	                        }
                             val canonicalId = transportIdentity?.canonicalPeerId ?: peerId
                             transportToCanonicalMap[peerId] = canonicalId
-                            activeSessions[peerId] = System.currentTimeMillis()
+                            noteSessionStarted(peerId)
 
                             val discoveredNickname = prepopulateDiscoveryNickname(
                                 nickname = transportIdentity?.nickname,
@@ -2028,6 +2116,7 @@ open class MeshRepository(
                     repoScope.launch {
                         val canonicalId = transportToCanonicalMap.remove(peerId) ?: peerId
                         activeSessions.remove(peerId)
+                        noteSessionEnded()
 
                         // NODE-RETENTION-001: keep the peer visible marked offline
                         // instead of removing it from the discovery map.
@@ -2753,6 +2842,7 @@ open class MeshRepository(
                         wifiDirectEnabled = settings.wifiDirectEnabled
                     )
                     transportManager?.startAll(enableMdns = settings.internetEnabled)
+                    startTransportStatusMonitor()
                 } catch (e: Exception) {
                     Timber.w(e, "TransportManager startAll failed; continuing with individual transports")
                 }
@@ -3260,8 +3350,12 @@ open class MeshRepository(
 
         // BLE Scanner: Feeds discovered peers to MeshService and handles GATT connections
         if (bleScanner == null) {
+            // Scheduler unavailable (JVM tests) -> null cadence -> legacy fixed duty cycle.
+            val bleCadence = runCatching { discoveryDriver.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.BLE) }.getOrNull()
             bleScanner = com.scmessenger.android.transport.ble.BleScanner(
                 context,
+                cadence = bleCadence,
+                backoffStrategy = com.scmessenger.android.transport.ble.BleBackoffStrategy(cadence = bleCadence),
                 onPeerDiscovered = { peerId ->
                     noteBleRouteObservation(peerId = peerId, bleAddress = peerId, source = "scan")
                     meshService?.onPeerDiscovered(peerId)
@@ -3942,13 +4036,63 @@ open class MeshRepository(
         wifiTransportManager?.startDiscovery()
     }
 
-    private suspend fun initializeAndStartSwarm() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /**
+     * Serializes swarm starts. initializeAndStartSwarm has many triggers
+     * (startMeshService, permission grant, identity creation, setNickname,
+     * network recovery); fired concurrently they each entered the FFI start
+     * while the first had not yet installed its handle (3 swarm starts in the
+     * first 14 s after launch, 3-node run 2026-10-08). Callers now queue here
+     * and the gate turns every redundant one into a no-op.
+     */
+    private val swarmStartCoordinator = SwarmStartCoordinator(
+        bridgePresent = { swarmBridge != null },
+        readIdentity = {
+            // Blocking FFI read: keep it off the caller's dispatcher (callers
+            // include main-thread-launched triggers).
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    SwarmIdentityRead(
+                        known = true,
+                        present = !ironCore?.getIdentityInfo()?.libp2pPeerId.isNullOrBlank()
+                    )
+                } catch (e: Exception) {
+                    // Unknown, not "absent": assuming absent would silently miss a
+                    // headless -> full upgrade until some later trigger. Assume an
+                    // identity may exist so the gate re-allows the upgrade start; a
+                    // persistently failing read therefore retries on each trigger.
+                    Timber.w(e, "Swarm start gate: identity read failed; treating as possibly present")
+                    SwarmIdentityRead(known = false, present = true)
+                }
+            }
+        },
+        // Non-reentrant Mutex inside the coordinator: nothing in
+        // initializeAndStartSwarmLocked may call initializeAndStartSwarm
+        // synchronously. Audited: it only calls ensureLocalIdentityFederation,
+        // startSwarm/getSwarmBridge FFI, dial(), and repoScope.launch'ed helpers
+        // (separate coroutines that would merely queue on the mutex).
+        start = { initializeAndStartSwarmLocked() }
+    )
+
+    private suspend fun initializeAndStartSwarm() {
+        if (!swarmStartCoordinator.trigger()) {
+            Timber.d("Swarm already started; skipping redundant start trigger")
+        }
+    }
+
+    /** Returns true only when the swarm started and a bridge is wired. */
+    private suspend fun initializeAndStartSwarmLocked(): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val settings = loadSettings()
         if (!settings.internetEnabled) {
             Timber.d("Swarm/Internet disabled in settings")
-            return@withContext
+            return@withContext false
         }
 
+        // A bridge wired by an earlier successful start belongs to a LIVE swarm.
+        // A retry whose startSwarm throws must not null it (core start_swarm is
+        // idempotent for the same mode), otherwise a healthy swarm is orphaned
+        // until the next trigger.
+        val hadLiveBridge = swarmBridge != null
+        var startSwarmThrew = false
         try {
             ensureLocalIdentityFederation()
             // Initiate swarm in Rust core.
@@ -3964,7 +4108,12 @@ open class MeshRepository(
             // first listener is actually bound, and throws NetworkException if the
             // bind fails or times out. That is why this function is a suspend fun
             // pinned to Dispatchers.IO — it must never run on the main thread.
-            meshService?.startSwarm("/ip4/0.0.0.0/tcp/9001", listOf())
+            try {
+                meshService?.startSwarm("/ip4/0.0.0.0/tcp/9001", listOf())
+            } catch (e: Exception) {
+                startSwarmThrew = true
+                throw e
+            }
 
             // Obtain the SwarmBridge managed by Rust MeshService — only after the
             // listener is confirmed bound, so a wired bridge implies real
@@ -3982,9 +4131,13 @@ open class MeshRepository(
             }
 
             Timber.i("[OK] Internet transport (Swarm) started and bridge wired; listeners=${getListeningAddresses()}")
+            swarmBridge != null
         } catch (e: Exception) {
-            swarmBridge = null
-            Timber.e(e, "Swarm failed to start listening — inbound internet/LAN transport unavailable")
+            if (startSwarmThrew && !hadLiveBridge) {
+                swarmBridge = null
+            }
+            Timber.e(e, "Swarm failed to start listening — inbound internet/LAN transport unavailable (liveBridgeKept=${hadLiveBridge})")
+            false
         }
     }
 
@@ -4251,6 +4404,7 @@ open class MeshRepository(
         synchronized(serviceLifecycleLock) {
         stopNetworkChangeWatch()
         networkDetector.stopMonitoring()
+        radioStateReceiver.unregister()
         pendingOutboxRetryJob?.cancel()
         pendingOutboxRetryJob = null
         coverTrafficJob?.cancel()
@@ -4259,7 +4413,11 @@ open class MeshRepository(
         pendingReceiptSendJobs.clear()
 
         try {
-            repoScope.launch { bleScanner?.stopScanning() }
+            // Capture first: the field is nulled below, before this coroutine
+            // runs, and a missed stop would leave the scheduler-driven scan
+            // cycle (#469 T8) rescheduling itself after the mesh stopped.
+            val scannerToStop = bleScanner
+            repoScope.launch { scannerToStop?.stopScanning() }
         } catch (e: Exception) {
             Timber.w(e, "Failed to stop BLE scanner")
         }
@@ -4307,17 +4465,42 @@ open class MeshRepository(
         //
         // cleanup() calls stopAll() first, so the WiFi Aware detach above is
         // preserved.
+        kotlin.runCatching { transportStatusMonitor?.stop() }
+            .onFailure { Timber.w(it, "Failed to stop TransportStatusMonitor; continuing teardown") }
+        transportStatusMonitor = null
         kotlin.runCatching { transportManager?.cleanup() }
             .onFailure { Timber.w(it, "Failed to clean up TransportManager (BLE/WiFi Aware/WiFi Direct/mDNS)") }
 
         // shutdown() is now a suspend FFI call; teardown must complete before
-        // meshService.stop() below, so block here (bounded: it only awaits the
-        // swarm command-channel acknowledgement).
-        kotlin.runCatching { kotlinx.coroutines.runBlocking { swarmBridge?.shutdown() } }
-            .onFailure { Timber.w(it, "Failed to shutdown swarm bridge") }
+        // meshService.stop() below, so block here.
+        //
+        // STOP-TEARDOWN-TIMEOUT-001 (2026-09-21): this await was UNBOUNDED. On
+        // the Pixel the swarm acknowledgement never arrived, so this call never
+        // returned while holding [serviceLifecycleLock] -- every later stop
+        // blocked behind the monitor, and stopForeground()/stopSelf() (which run
+        // after it) never executed. The service, its notification and the
+        // RUNNING state all survived, and no watchdog fired: the ANR watchdog
+        // only watches the main thread and this one is a Dispatchers.Default
+        // coroutine. Bound it so a missing acknowledgement costs one timeout
+        // instead of the whole lifecycle.
+        // Bounded by [StopTeardown.shutdownSwarm]: the shutdown runs on a daemon
+        // thread under a coroutine timeout, so neither a suspended nor a blocked
+        // acknowledgement can hold [serviceLifecycleLock]. Emits
+        // "[MESH-STOP] swarm_shutdown ok|timeout|failed ms=N" to the file log.
+        val capturedSwarm = swarmBridge
+        stopTeardown.shutdownSwarm(SWARM_SHUTDOWN_TIMEOUT_MS) { capturedSwarm?.shutdown() }
 
-        kotlin.runCatching { meshService?.stop() }
-            .onFailure { Timber.w(it, "Failed to stop Rust mesh service") }
+        // STOP-TEARDOWN-TIMEOUT-001: same hazard one line further down.
+        // MeshService::stop() (core/src/mobile_bridge.rs:527-551) sets Stopping
+        // then calls into the same blocking swarm shutdown machinery
+        // (shutdown_blocking), so it can wedge for exactly the same reason. It is
+        // a synchronous FFI call, so a coroutine timeout cannot bound it: run it
+        // on a daemon thread and bound the JOIN. A teardown that does not confirm
+        // in time is logged and the stop continues -- the user's ability to stop
+        // the mesh must not depend on the Rust side agreeing to finish.
+        // Emits "[MESH-STOP] rust_stop ok|timeout|failed ms=N".
+        val capturedMeshService = meshService
+        stopTeardown.stopBlocking("rust_stop", RUST_STOP_TIMEOUT_MS) { capturedMeshService?.stop() }
 
         identitySyncSentPeers.clear()
         historySyncSentPeers.clear()
@@ -4335,7 +4518,16 @@ open class MeshRepository(
         // Clear references to avoid stale lifecycle state on next start.
         coreDelegate = null
         swarmBridge = null
+        swarmStartCoordinator.reset()
         ironCore = null
+        // MESSAGE-STORE-LOCK-001: the summary logging tree is process-wide
+        // (Timber.forest()) and startMeshService() injects the core into it.
+        // Until this line existed, that tree was the ONE reference a stop never
+        // released: the Rust IronCore -- and with it sled's file lock on the
+        // message store -- stayed alive for the life of the process, so the
+        // next Start opened a still-locked store, fell back to DegradedStorage,
+        // and showed "Message Store Unavailable" until the app was killed.
+        releaseCoreReferencesFromLoggingTrees()
         meshService = null
         bleScanner = null
         bleAdvertiser = null
@@ -5984,6 +6176,13 @@ open class MeshRepository(
             swarmBridge?.dial(multiaddr)
             Timber.i("Dialed $multiaddr via SwarmBridge")
         } catch (e: Exception) {
+            if (DialSkip.isSkipped(e)) {
+                // Deliberate non-dispatch by the core guard: neither success
+                // nor failure, so no error log and no rethrow (callers book
+                // backoff/dead-marking on a throw).
+                Timber.d("Dial to $multiaddr skipped by core guard: ${e.message}")
+                return
+            }
             Timber.e(e, "Failed to dial $multiaddr")
             throw e
         }
@@ -6516,15 +6715,23 @@ open class MeshRepository(
 
         // 1. Stop all active services and release UniFFI objects.
         // shutdown() is a suspend FFI call; the reset flow must not proceed to
-        // data wiping until the swarm has stopped, so block (bounded await).
-        kotlin.runCatching { kotlinx.coroutines.runBlocking { swarmBridge?.shutdown() } }
-            .onFailure { Timber.w(it, "Swarm shutdown failed during reset") }
+        // data wiping until the swarm has stopped, so block -- BOUNDED, per
+        // STOP-TEARDOWN-TIMEOUT-001: this comment claimed a bound that the code
+        // did not implement, and the same unbounded await in stopMeshService is
+        // what made the mesh impossible to stop on the Pixel. A reset that is
+        // waiting on an acknowledgement must degrade, not wedge.
+        val resetSwarm = swarmBridge
+        stopTeardown.shutdownSwarm(RESET_SHUTDOWN_TIMEOUT_MS) { resetSwarm?.shutdown() }
         swarmBridge = null
+        swarmStartCoordinator.reset()
 
-        meshService?.stop()
+        // Blocking Rust FFI: bound both, a reset must not wedge on them either.
+        val resetMeshService = meshService
+        stopTeardown.stopBlocking("reset_rust_stop", RUST_STOP_TIMEOUT_MS) { resetMeshService?.stop() }
         meshService = null
 
-        ironCore?.stop()
+        val resetCore = ironCore
+        stopTeardown.stopBlocking("reset_core_stop", RESET_SHUTDOWN_TIMEOUT_MS) { resetCore?.stop() }
         try {
             contactManager?.flush()
             historyManager?.flush()
@@ -6532,6 +6739,10 @@ open class MeshRepository(
             Timber.w("Failed to flush managers during shutdown: ${e.message}")
         }
         ironCore = null
+        // Same release as stopMeshService(): a reset discards every manager and
+        // then wipes the store, so nothing may keep the old core -- and the
+        // sled lock it owns -- alive. See MESSAGE-STORE-LOCK-001.
+        releaseCoreReferencesFromLoggingTrees()
 
         contactManager = null
         historyManager = null
@@ -6587,44 +6798,143 @@ open class MeshRepository(
         ledgerManager?.recordFailure(multiaddr)
     }
 
+    // ------------------------------------------------------------------
+    // #469 T3: signed SCI1 invites (replaces the unsigned JSON join bundle)
+    // ------------------------------------------------------------------
+
     /**
-     * Persist bootstrap addresses learned from an invite or QR join bundle.
-     *
-     * Android parity with iOS MeshRepository.importSeedAddresses: seeds remain
-     * lower-confidence until an active transport session identifies the peer,
-     * but they must survive this screen and app launch via the ledger.
-     *
-     * No call-site yet; the follow-up wires JoinMesh parseAndJoin after PR1.
-     * Additive only: existing flows never call this, null ledger returns 0.
+     * Redeem a signed `SCI1:` invite from a QR scan, pasted text, or a shared
+     * message. Core verifies the Ed25519 signature and imports the seed
+     * ledger as unproven entries; the returned addresses are dialed through
+     * the normal dial path, and an InviteRedeemed event puts every discovery
+     * lane into its aggressive phase.
      */
-    open fun importSeedAddresses(addresses: List<String>): Int {
-        val seeds = addresses
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .take(MAX_SEEDS_PER_IMPORT)
-            .map { uniffi.api.SeedLedgerEntry(multiaddr = it) }
-            .toList()
-        if (seeds.isEmpty()) {
-            return 0
-        }
+    suspend fun redeemInvite(raw: String?): InviteRedeemResult {
+        val flow = InviteRedeemFlow(
+            redeem = { token ->
+                val core = ironCore ?: throw IllegalStateException("core not initialized")
+                val report = core.redeemInviteQr(token)
+                InviteReport(
+                    inviterId = report.inviterId,
+                    inviterPeerId = report.inviterPeerId,
+                    addressesOffered = report.addressesOffered.toInt(),
+                    addressesImported = report.addressesImported.toInt(),
+                    dialAddrs = report.dialAddrs
+                )
+            },
+            dial = { addr -> dialPeer(addr) },
+            classify = ::classifyInviteError,
+            onRedeemed = {
+                reportDiscoveryEvent(com.scmessenger.android.transport.discovery.DiscoveryEventKind.INVITE_REDEEMED)
+            }
+        )
+        return flow.run(raw)
+    }
+
+    internal fun classifyInviteError(e: Throwable): InviteFailure = when (e) {
+        is uniffi.api.IronCoreException.InvalidInput -> InviteFailure.INVALID
+        is uniffi.api.IronCoreException.CryptoException -> InviteFailure.BAD_SIGNATURE
+        is uniffi.api.IronCoreException.NotInitialized -> InviteFailure.NO_IDENTITY
+        is IllegalStateException -> InviteFailure.NO_IDENTITY
+        else -> InviteFailure.UNKNOWN
+    }
+
+    /**
+     * Mint a signed `SCI1:` invite from this node's reachable addresses.
+     * Returns the string to render as a QR code and offer for copy/share, or
+     * null when the node has no dialable address yet or no identity.
+     */
+    fun createInvite(ttlSecs: ULong = DEFAULT_INVITE_TTL_SECS): String? {
+        val core = ironCore ?: return null
+        val addrs = (getExternalAddresses() + getListeningAddresses()).distinct()
         return try {
-            val added = importSeedsToLedger(seeds)
-            Timber.i("Ledger: imported $added bootstrap seed(s) from join bundle")
-            added.toInt()
+            core.createInviteQr(addrs, ttlSecs)
         } catch (e: Exception) {
-            Timber.w(e, "Ledger: failed to import bootstrap seeds")
-            0
+            Timber.w(e, "Invite creation failed")
+            null
         }
     }
 
-    protected open fun importSeedsToLedger(seeds: List<uniffi.api.SeedLedgerEntry>): UInt {
-        val manager = ledgerManager
-        if (manager == null) {
-            Timber.w("Ledger: cannot import seeds - ledgerManager not initialized")
-            return 0u
+    // ------------------------------------------------------------------
+    // #469 T7/T8: discovery events and scheduler resets
+    // ------------------------------------------------------------------
+
+    /** Report a platform event to the core discovery scheduler. */
+    open fun reportDiscoveryEvent(event: com.scmessenger.android.transport.discovery.DiscoveryEventKind) {
+        try {
+            liveDiscoveryDriver()?.onEvent(event)
+        } catch (e: Throwable) {
+            // Never let a scheduler fault break a platform callback.
+            Timber.w(e, "Discovery event %s could not be delivered", event)
         }
-        return manager.importSeedEntries(seeds)
+    }
+
+    /** A transport session for [peerId] began; a peer not seen before is a discovery event. */
+    private fun noteSessionStarted(peerId: String) {
+        val isNew = activeSessions.put(peerId, System.currentTimeMillis()) == null
+        if (isNew) {
+            updateDiscoveryInputs()
+        }
+        com.scmessenger.android.transport.discovery.PeerPresence.onSessionStarted(isNew)
+            ?.let { reportDiscoveryEvent(it) }
+    }
+
+    /** A transport session ended; losing the last peer resets discovery to aggressive. */
+    private fun noteSessionEnded() {
+        updateDiscoveryInputs()
+        com.scmessenger.android.transport.discovery.PeerPresence.onSessionEnded(activeSessions.size)
+            ?.let { reportDiscoveryEvent(it) }
+    }
+
+    /**
+     * Feed the observed conditions that bound every lane's decay ceiling:
+     * connected peers, power, and foreground. [foreground] updates the stored
+     * flag (MainActivity onResume / onPause); null keeps the last value.
+     */
+    open fun updateDiscoveryInputs(foreground: Boolean? = null) {
+        if (foreground != null) discoveryForeground = foreground
+        try {
+            synchronized(discoveryInputsLock) {
+                liveDiscoveryDriver()?.setInputs(activeSessions.size, discoveryPowerLevel(), discoveryForeground)
+            }
+        } catch (e: Throwable) {
+            Timber.w(e, "Discovery inputs could not be delivered")
+        }
+    }
+
+    /**
+     * Record the foreground flag synchronously. Lifecycle callbacks (onResume,
+     * onPause) call this on the main thread, in order, before any background
+     * push of the inputs, so a late-running push can never publish a stale flag.
+     */
+    fun setDiscoveryForeground(foreground: Boolean) {
+        discoveryForeground = foreground
+    }
+
+    private fun discoveryPowerLevel(): com.scmessenger.android.transport.discovery.DiscoveryPowerLevel {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            ?: return com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.NORMAL
+        return when {
+            bm.isCharging -> com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.CHARGING
+            bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) in 1..LOW_BATTERY_PERCENT ->
+                com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.LOW
+            else -> com.scmessenger.android.transport.discovery.DiscoveryPowerLevel.NORMAL
+        }
+    }
+
+    /** Wake the scan loops whose lane the scheduler just reset to aggressive. */
+    private fun applyDiscoveryReset(lanes: Set<com.scmessenger.android.transport.discovery.DiscoveryLane>) {
+        if (com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER in lanes) {
+            // Failure history and spacing gates describe the OLD network
+            // state; clear them so the woken loop can dial at once.
+            bootstrapGate.reset()
+        }
+        if (com.scmessenger.android.transport.discovery.DiscoveryLane.BLE in lanes) {
+            bleScanner?.onDiscoveryReset()
+        }
+        if (com.scmessenger.android.transport.discovery.DiscoveryLane.LAN in lanes) {
+            transportManager?.onLanDiscoveryReset()
+        }
     }
 
     /**
@@ -7745,10 +8055,17 @@ open class MeshRepository(
      *
      * Bounded blocking bridge query: the FFI is a suspend fun (Issue 5), but
      * legacy sync callers (TopicManager.refreshKnownTopics) need a value in
-     * place. The await is a fast in-process command-channel roundtrip.
+     * place. The await is a fast in-process command-channel roundtrip --
+     * BOUNDED, per STOP-TEARDOWN-TIMEOUT-001: when the bridge is wedged this is
+     * exactly the call that never returns, and a topic list is not worth an
+     * unbounded wait. A timeout degrades to the same empty list as a failure.
      */
     fun getTopics(): List<String> = try {
-        kotlinx.coroutines.runBlocking { swarmBridge?.getTopics() ?: emptyList() }
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeoutOrNull(TOPICS_QUERY_TIMEOUT_MS) {
+                swarmBridge?.getTopics()
+            } ?: emptyList()
+        }
     } catch (e: Exception) {
         Timber.w("getTopics failed: ${e.message}")
         emptyList()
@@ -7833,14 +8150,35 @@ open class MeshRepository(
                     primeRelayBootstrapConnections()
 
                     flushPendingOutbox("periodic")
-                    kotlinx.coroutines.delay(8000)
+                    // #469 T8: cadence comes from the core scheduler (aggressive
+                    // after any network event, decaying, never stopping); an
+                    // event wakes this wait immediately.
+                    awaitLedgerTick()
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Timber.w(e, "Pending outbox retry loop error")
-                    kotlinx.coroutines.delay(5000)
+                    awaitLedgerTick()
                 }
             }
+        }
+    }
+
+    /**
+     * Wait for the scheduler's next ledger-lane attempt. If the native
+     * scheduler cannot be loaded (JVM unit tests) the loop still yields a
+     * bounded pause instead of spinning or dying.
+     */
+    private suspend fun awaitLedgerTick() {
+        try {
+            val driver = liveDiscoveryDriver()
+                ?: throw kotlinx.coroutines.CancellationException("discovery shut down")
+            driver.awaitNextAttempt(com.scmessenger.android.transport.discovery.DiscoveryLane.LEDGER)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Timber.w(e, "Discovery scheduler unavailable; bounded fallback pause")
+            kotlinx.coroutines.delay(1_000L)
         }
     }
 
@@ -11089,7 +11427,7 @@ open class MeshRepository(
         // is the LAN/external host we are already using.
         val peerCount = meshService?.getStats()?.peersDiscovered?.toInt() ?: 0
         return peerCount > 0 &&
-            (host.startsWith("192.168.") || host.startsWith("10.") || host == "18.234.62.247")
+            (host.startsWith("192.168.") || host.startsWith("10."))
     }
 
     /**
@@ -11105,11 +11443,8 @@ open class MeshRepository(
         val nowMs = System.currentTimeMillis()
 
         // P1_ANDROID_013: Respect exponential backoff from consecutive failures
-        if (nowMs < nextBootstrapAttemptMs) {
-            return
-        }
-        if (nowMs - lastRelayBootstrapDialMs < 10_000L) return
-        lastRelayBootstrapDialMs = nowMs
+        val gateToken = bootstrapGate.tryBegin(nowMs)
+        if (gateToken == BootstrapGate.DENIED) return
 
         // Determine transport priority based on current network
         val transportPriority = networkDetector.getTransportPriority()
@@ -11132,7 +11467,7 @@ open class MeshRepository(
                 "Bootstrap: no proven ledger relay candidates; " +
                     "network=${networkDetector.networkType.value}, cellular=$isCellular"
             )
-            nextBootstrapAttemptMs = nowMs + 30_000L
+            bootstrapGate.holdUntil(gateToken, nowMs + 30_000L)
             return
         }
 
@@ -11169,11 +11504,25 @@ open class MeshRepository(
                     anyBreakerBlocked = true
                     continue
                 }
-                anyDialAttempted = true
                 bridge.dial(addr)
+                // Reached only when the core dispatched a dial or reported the
+                // exact socket/peer already connected (Ok = evidence). Typed
+                // DialSkipped (self / own address / rate-limited probe) throws
+                // and is handled below as a neutral, non-evidence skip.
+                anyDialAttempted = true
                 Timber.d("Bootstrap dial initiated: %s", addr)
                 anySuccess = true
             } catch (e: Exception) {
+                if (DialSkip.isSkipped(e)) {
+                    // Core guard declined to dispatch: no reachability
+                    // evidence either way. No breaker/metrics failure, no
+                    // success, and it does not count as a real dial attempt
+                    // (so an all-skipped round books no backoff).
+                    Timber.d("Bootstrap dial skipped by core guard for %s: %s", addr, e.message)
+                    anyBreakerBlocked = true
+                    continue
+                }
+                anyDialAttempted = true
                 // P1_ANDROID_013: Record failure metrics directly without triggering
                 // enhanceNetworkErrorLogging for each failure. The fallback protocol
                 // is now handled by the racing bootstrap, not per-dial error logging.
@@ -11199,24 +11548,18 @@ open class MeshRepository(
             // R4-L3: read the cadence from the active breaker instance, not a
             // companion constant, so the two cannot silently diverge.
             val reprobeMs = relayCircuitBreaker.halfOpenTimeoutMs
-            nextBootstrapAttemptMs = nowMs + reprobeMs
+            bootstrapGate.holdUntil(gateToken, nowMs + reprobeMs)
             Timber.i(
                 "Bootstrap: all candidates breaker/throttle-blocked; re-probing in %dms (no failure counted)",
                 reprobeMs
             )
         } else if (!anySuccess) {
-            consecutiveBootstrapFailures++
-            val backoffMs = when {
-                consecutiveBootstrapFailures <= 1 -> 10_000L
-                consecutiveBootstrapFailures <= 3 -> 30_000L
-                else -> 60_000L.coerceAtMost(1000L * (1L shl consecutiveBootstrapFailures.coerceAtMost(6)))
+            bootstrapGate.recordFailure(gateToken, nowMs)?.let { b ->
+                Timber.w("Bootstrap all-failed (consecutive=%d), next attempt in %dms",
+                    b.consecutiveFailures, b.backoffMs)
             }
-            nextBootstrapAttemptMs = nowMs + backoffMs
-            Timber.w("Bootstrap all-failed (consecutive=%d), next attempt in %dms",
-                consecutiveBootstrapFailures, backoffMs)
         } else {
-            consecutiveBootstrapFailures = 0
-            nextBootstrapAttemptMs = 0L
+            bootstrapGate.recordSuccess(gateToken)
         }
     }
 
@@ -11224,8 +11567,7 @@ open class MeshRepository(
     fun primeRelayBootstrapConnectionsLegacy() {
         val bridge = swarmBridge ?: return
         val nowMs = System.currentTimeMillis()
-        if (nowMs - lastRelayBootstrapDialMs < 10_000L) return
-        lastRelayBootstrapDialMs = nowMs
+        if (bootstrapGate.tryBegin(nowMs, honourBackoff = false) == BootstrapGate.DENIED) return
 
         val addresses = (ledgerManager?.getPreferredRelays(MAX_SETTINGS_RELAYS) ?: emptyList())
             .mapNotNull { it.multiaddr.trim().takeIf(String::isNotEmpty) }
@@ -11362,6 +11704,10 @@ open class MeshRepository(
                             Timber.i("Bootstrap connected: %s", addr)
                             BootstrapAttempt.Success(addr)
                         } catch (e: Exception) {
+                            if (DialSkip.isSkipped(e)) {
+                                Timber.d("Bootstrap race dial skipped by core guard for $addr: ${e.message}")
+                                return@async BootstrapAttempt.Failure(addr, "skipped")
+                            }
                             // P1_ANDROID_013: Record failure metrics directly without triggering
                             // enhanceNetworkErrorLogging, which would cascade into fallback protocol
                             val detail = classifyBootstrapError(e, addr)
@@ -11684,6 +12030,7 @@ open class MeshRepository(
                     externalAddressesSnapshot = external
                     listeningAddressesSnapshot = listeners
                     Timber.d("Refreshed address snapshots: listeners=$listeners, external=$external")
+                    com.scmessenger.android.transport.TransportStatus.reportListeners(listeners)
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to refresh address snapshots: ${e.message}")
@@ -11937,6 +12284,11 @@ open class MeshRepository(
         try {
             stopMeshService()
             saveLedger()
+            // Final release of the Rust DiscoveryCoordinator (#469 T7/T8).
+            synchronized(discoveryLifecycleLock) {
+                discoveryShutdown = true
+                if (discoveryDriverLazy.isInitialized()) discoveryDriverLazy.value.close()
+            }
             pendingOutboxRetryJob?.cancel()
             pendingOutboxRetryJob = null
             coverTrafficJob?.cancel()

@@ -124,7 +124,7 @@ class WindowsCollector:
     """Local Windows CLI node: hourly-rotated scm.log.* plus /api/diagnostics."""
 
     def __init__(self, log_dir: Optional[str] = None,
-                 diag_url: str = "http://localhost:9001/api/diagnostics",
+                 diag_url: str = "http://localhost:9876/api/diagnostics",
                  since_epoch: Optional[float] = None,
                  fetch: Optional[Callable[[str, float], bytes]] = None):
         base = os.environ.get("LOCALAPPDATA", "")

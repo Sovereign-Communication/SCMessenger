@@ -34,10 +34,11 @@ fn deserialize_queued_message(data: &[u8]) -> Result<QueuedMessage, bincode::Err
             "empty",
         ))));
     }
-    // If the first byte is 1, it's the new versioned format.
+    // If the first byte is a known version, it's the versioned format (same
+    // layout for both versions; see `QUEUED_VERSION_FIRE_AND_FORGET`).
     // Legacy format starts with a String length. Since string lengths are usually 36 (for UUIDs),
-    // their first byte is 36, not 1.
-    if data[0] == 1 {
+    // their first byte is 36, not 1 or 2.
+    if data[0] == QUEUED_VERSION_STANDARD || data[0] == QUEUED_VERSION_FIRE_AND_FORGET {
         bincode::deserialize(data)
     } else {
         let legacy: LegacyQueuedMessage = bincode::deserialize(data)?;
@@ -55,6 +56,26 @@ fn deserialize_queued_message(data: &[u8]) -> Result<QueuedMessage, bincode::Err
         })
     }
 }
+
+/// `QueuedMessage::version` of an ordinary message: re-dispatched until an
+/// application-level delivery receipt clears it.
+pub const QUEUED_VERSION_STANDARD: u8 = 1;
+
+/// `QueuedMessage::version` of a delivery receipt. Same wire layout as
+/// `QUEUED_VERSION_STANDARD`; the version byte doubles as the kind marker so it
+/// persists with the entry and survives restarts without a schema change.
+/// Nothing ever acknowledges a receipt, so waiting for one re-sent the same
+/// envelope every grace window forever. A receipt is dispatched best-effort:
+/// cleared once the transport accepts it, and dropped once the message it
+/// refers to has aged out of protocol retention (`MESSAGE_RETENTION_SECS`).
+/// There is no attempt-count cap: attempts are driven by reconnect events.
+pub const QUEUED_VERSION_FIRE_AND_FORGET: u8 = 2;
+
+/// Protocol message retention: the lifetime of a message (the drift envelope
+/// default TTL, and the outbox expiry applied by maintenance). A receipt does
+/// not carry its target's TTL, so this is the bound on how long the target
+/// message can still matter to the sender.
+pub const MESSAGE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Maximum messages queued per peer
 const MAX_QUEUE_PER_PEER: usize = 1000;
@@ -262,6 +283,24 @@ pub struct QueuedMessage {
     /// Current state of the message
     #[serde(default = "default_enqueued")]
     pub state: MessageState,
+}
+
+impl QueuedMessage {
+    /// True for an entry that no peer will ever acknowledge (a delivery
+    /// receipt), so it must not wait for an acknowledgement to be cleared.
+    pub fn is_fire_and_forget(&self) -> bool {
+        self.version == QUEUED_VERSION_FIRE_AND_FORGET
+    }
+
+    /// True once a fire-and-forget entry (a delivery receipt) is no longer
+    /// useful: the message it confirms has outlived protocol retention, so the
+    /// original sender can no longer be waiting on it. The receipt is queued
+    /// when the target arrives, so `queued_at` bounds the target's age from
+    /// below; this is never earlier than the target's own expiry. Ordinary
+    /// messages never expire here.
+    pub fn receipt_expired(&self, now: u64) -> bool {
+        self.is_fire_and_forget() && now.saturating_sub(self.queued_at) >= MESSAGE_RETENTION_SECS
+    }
 }
 
 fn default_version() -> u8 {
@@ -1011,18 +1050,34 @@ impl Outbox {
     /// a queue split across the canonical key and a pre-canonicalization
     /// spelling is fully emptied by a single call.
     pub fn flush_peer_messages(&mut self, recipient_id: &str) -> Vec<QueuedMessage> {
+        self.flush_peer_messages_limited(recipient_id, usize::MAX)
+    }
+
+    /// Like [`flush_peer_messages`](Self::flush_peer_messages) but drains at
+    /// most `limit` due messages (#413 review F2: the periodic sweep must not
+    /// run an unbounded burst of synchronous store writes on the event loop).
+    /// Undrained due entries stay queued untouched for the next call.
+    pub fn flush_peer_messages_limited(
+        &mut self,
+        recipient_id: &str,
+        limit: usize,
+    ) -> Vec<QueuedMessage> {
         // Resolve before borrowing the backend, so the per-key drain below
         // can take &mut self.
         let keys = self.queue_keys_with_messages(recipient_id);
         let mut drained = Vec::new();
         for key in &keys {
-            drained.extend(self.flush_queue_key(key));
+            let room = limit.saturating_sub(drained.len());
+            if room == 0 {
+                break;
+            }
+            drained.extend(self.flush_queue_key(key, room));
         }
         drained
     }
 
-    /// Drain due messages from a single resolved queue key.
-    fn flush_queue_key(&mut self, queue_key: &str) -> Vec<QueuedMessage> {
+    /// Drain up to `limit` due messages from a single resolved queue key.
+    fn flush_queue_key(&mut self, queue_key: &str, limit: usize) -> Vec<QueuedMessage> {
         match &mut self.backend {
             OutboxBackend::Memory { queues, total, .. } => {
                 let now_ms = web_time::SystemTime::now()
@@ -1052,7 +1107,7 @@ impl Outbox {
                             remaining.push_back(msg);
                             continue;
                         }
-                        if is_due(msg.next_retry_at) {
+                        if drained.len() < limit && is_due(msg.next_retry_at) {
                             drained.push(msg);
                         } else {
                             remaining.push_back(msg);
@@ -1098,7 +1153,7 @@ impl Outbox {
                             if msg.in_custody || msg.state != MessageState::Enqueued {
                                 continue;
                             }
-                            if is_due(msg.next_retry_at) {
+                            if messages.len() < limit && is_due(msg.next_retry_at) {
                                 messages.push(msg);
                                 keys_to_remove.push(key);
                             }
@@ -1529,6 +1584,57 @@ mod tests {
             custody_established_at: 0,
             state: MessageState::Enqueued,
         }
+    }
+
+    #[test]
+    fn fire_and_forget_version_roundtrips_through_persistent_backend() {
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(crate::store::backend::MemoryStorage::new());
+        let mut outbox = Outbox::persistent(backend);
+        let mut receipt = make_msg("rcpt-ff", "ab".repeat(32).as_str());
+        receipt.version = QUEUED_VERSION_FIRE_AND_FORGET;
+        outbox.enqueue(receipt).unwrap();
+        outbox
+            .enqueue(make_msg("plain", "ab".repeat(32).as_str()))
+            .unwrap();
+        let drained = outbox.flush_peer_messages(&"ab".repeat(32));
+        assert_eq!(drained.len(), 2);
+        let ff = drained.iter().find(|m| m.message_id == "rcpt-ff").unwrap();
+        let plain = drained.iter().find(|m| m.message_id == "plain").unwrap();
+        assert!(ff.is_fire_and_forget());
+        assert!(!plain.is_fire_and_forget());
+    }
+
+    #[test]
+    fn receipt_expiry_follows_retention_not_attempts() {
+        let mut receipt = make_msg("rcpt", "peer_a");
+        receipt.version = QUEUED_VERSION_FIRE_AND_FORGET;
+        receipt.queued_at = 1_000;
+        receipt.attempts = u32::MAX;
+        assert!(!receipt.receipt_expired(1_000 + MESSAGE_RETENTION_SECS - 1));
+        assert!(receipt.receipt_expired(1_000 + MESSAGE_RETENTION_SECS));
+        let mut plain = make_msg("plain", "peer_a");
+        plain.queued_at = 1_000;
+        assert!(!plain.receipt_expired(u64::MAX));
+    }
+
+    #[test]
+    fn flush_peer_messages_limited_drains_at_most_limit_and_keeps_rest() {
+        let mut outbox = Outbox::new();
+        for i in 0..10 {
+            outbox
+                .enqueue(make_msg(&format!("lim-{i}"), "limit_peer"))
+                .unwrap();
+        }
+        let first = outbox.flush_peer_messages_limited("limit_peer", 3);
+        assert_eq!(first.len(), 3);
+        assert_eq!(outbox.total_count(), 7, "undrained entries stay queued");
+        assert!(outbox
+            .flush_peer_messages_limited("limit_peer", 0)
+            .is_empty());
+        assert_eq!(outbox.total_count(), 7);
+        let rest = outbox.flush_peer_messages("limit_peer");
+        assert_eq!(rest.len(), 7, "unbounded flush still drains everything");
     }
 
     #[test]

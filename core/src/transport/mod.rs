@@ -21,6 +21,7 @@ pub mod circuit_breaker;
 pub mod diagnostics;
 pub mod dial_policy;
 pub mod discovery;
+pub mod discovery_scheduler;
 pub mod escalation;
 pub mod health;
 pub mod hint_store;
@@ -64,9 +65,15 @@ pub use diagnostics::{
     get_network_diagnostics_report, NetworkDiagnosticsReport, PeerConnectionSummary,
 };
 pub use dial_policy::{
-    multiaddr_to_key, CircuitRelayLadder, DialPolicyManager, PerPeerBackoffState,
+    multiaddr_to_key, CircuitRelayLadder, DialPolicyManager, PerPeerBackoffState, WakeTrigger,
 };
 pub use discovery::{DiscoveryConfig, DiscoveryMode};
+pub use discovery_scheduler::{
+    compute_ceiling_ms, DiscoveryInputs, DiscoveryScheduler, JitterSource, NetworkEvent, Phase,
+    PowerState, SchedulerClock, SchedulerConfig, SchedulerSnapshot, TransportClass,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use discovery_scheduler::{SystemClock, ThreadRngJitter};
 pub use health::{
     ConnectionState, ConnectionStats, GlobalTransportMetrics, TransportHealthMonitor,
 };

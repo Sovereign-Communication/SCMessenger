@@ -5,6 +5,7 @@ import timber.log.Timber
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
+import java.lang.ref.WeakReference
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -19,9 +20,18 @@ import java.util.concurrent.atomic.AtomicBoolean
  * HANG-MAIN-001: log() must never do FFI or disk I/O on the caller thread
  * (including main). Lines are enqueued to a single writer thread; on overflow
  * the oldest line is dropped rather than blocking the UI.
+ *
+ * MESSAGE-STORE-LOCK-001: this tree is process-wide (installed on
+ * `Timber.forest()` by MeshApplication) and MeshRepository injects the core
+ * into it for summarized logging. It holds that core WEAKLY (see [WeakHold])
+ * and the stop path clears it explicitly
+ * ([releaseCoreReferencesFromLoggingTrees]); a strong field here kept the Rust
+ * store locked for the life of the process after a stop, which made the next
+ * Start fail with "Message Store Unavailable".
  */
-class FileLoggingTree(context: Context) : Timber.Tree() {
-    private val MAX_LOG_LINES = 10000
+class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
+    private val deduper = LogDeduper()
+    private val lossLedger = LogLossLedger()
     private val logFile: File = File(context.filesDir, "mesh_diagnostics.log")
     // Thread-safe immutable date formatter (minSdk 26).
     // G8: ISO-8601 with year and UTC offset (e.g. 2026-10-07T14:03:09.123+02:00;
@@ -30,8 +40,9 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         .withZone(ZoneId.systemDefault())
     // Guard against recursion (Timber -> FileLoggingTree -> Timber -> ...)
     private val isLogging = ThreadLocal.withInitial { false }
-    @Volatile
-    private var ironCore: uniffi.api.IronCore? = null
+    // Held weakly on purpose; see the class KDoc and WeakHold. Guarded by this
+    // tree's monitor (the same one writeEntry takes).
+    private val coreRef = WeakHold<uniffi.api.IronCore>()
     private var estimatedFileBytes: Long = -1L
 
     private data class LogEntry(val line: String, val throwable: Throwable?)
@@ -63,8 +74,23 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         it.start()
     }
 
-    fun setIronCore(core: uniffi.api.IronCore?) {
-        synchronized(this) { this.ironCore = core }
+    /** Memory-pressure hook: drops the deduper's tracked keys. Safe to call repeatedly. */
+    fun trimMemory() {
+        deduper.trimMemory()
+    }
+
+    /**
+     * Stops the writer thread (it drains the queue first) and drops deduper state.
+     * Idempotent; the tree must not be used for logging afterwards.
+     */
+    fun release() {
+        if (writerRunning.compareAndSet(true, false)) {
+            deduper.trimMemory()
+        }
+    }
+
+    override fun setIronCore(core: uniffi.api.IronCore?) {
+        synchronized(this) { coreRef.set(core) }
     }
 
     override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
@@ -82,12 +108,16 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                 android.util.Log.ASSERT -> "A"
                 else -> "U"
             }
-            val logLine = "$timestamp $priorityStr/${tag ?: "Mesh"}: $message\n"
-            // Drop oldest rather than block the caller (main) on a full queue.
-            if (!writeQueue.offer(LogEntry(logLine, t))) {
-                writeQueue.poll()
-                writeQueue.offer(LogEntry(logLine, t))
+            val decision = deduper.evaluate(priority, message, System.currentTimeMillis())
+            if (!decision.emit) return
+            decision.summary?.let { summary ->
+                val summaryLine = "$timestamp I/${tag ?: "Mesh"}: $summary\n"
+                offerDropOldest(writeQueue, LogEntry(summaryLine, null), lossLedger)
             }
+            val logLine = "$timestamp $priorityStr/${tag ?: "Mesh"}: $message\n"
+            // Drop oldest rather than block the caller (main) on a full queue;
+            // each drop is counted and reported by a later [LOG-LOSS] line.
+            offerDropOldest(writeQueue, LogEntry(logLine, t), lossLedger)
         } catch (t: Throwable) {
             // Guard against OutOfMemoryError and native runtime faults to prevent crashing caller threads
             try {
@@ -98,10 +128,27 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         }
     }
 
+    /**
+     * Write every queued line to disk on the CALLER's thread. Used by the stop
+     * path ([com.scmessenger.android.data.MeshStopLog]) so a lifecycle marker is
+     * durable before the next step -- which may wedge -- begins, instead of
+     * waiting on the low-priority writer thread. Safe to race with that thread:
+     * both go through the same monitor, so lines are never torn, only possibly
+     * interleaved by a few milliseconds.
+     */
+    fun flushPending() {
+        var entry = writeQueue.poll()
+        while (entry != null) {
+            try { writeEntry(entry) } catch (_: Throwable) {}
+            entry = writeQueue.poll()
+        }
+    }
+
     private fun writeEntry(entry: LogEntry) {
         synchronized(this) {
             try {
-                runCatching { ironCore?.recordLog(entry.line) ?: false }
+                val summaryCore = coreRef.get()
+                runCatching { summaryCore?.recordLog(entry.line) ?: false }
                     .onFailure { android.util.Log.w("FileLoggingTree", "IronCore logging failed; using file fallback", it) }
 
                 if (estimatedFileBytes < 0L) {
@@ -109,6 +156,11 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                 }
 
                 FileWriter(logFile, true).use { writer ->
+                    lossLedger.takeMarker()?.let { marker ->
+                        val markerLine = "${timestampFormatter.format(Instant.now())} W/FileLoggingTree: $marker\n"
+                        writer.write(markerLine)
+                        estimatedFileBytes += markerLine.length
+                    }
                     writer.write(entry.line)
                     estimatedFileBytes += entry.line.length
                     entry.throwable?.let { thr ->
@@ -118,12 +170,16 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
                     }
                 }
 
-                if (estimatedFileBytes > 100 * 1024) {
-                    truncateLogFile()
-                    estimatedFileBytes = 0L
+                if (estimatedFileBytes > MAX_FILE_BYTES) {
+                    // If rotation could not empty the file, re-measure it on the
+                    // next write instead of assuming it is empty.
+                    estimatedFileBytes = if (truncateLogFile()) 0L else -1L
                 }
                 Unit
             } catch (t: Throwable) {
+                lossLedger.recordWriteFailure()
+                // The file size is unknown after a failed write; re-measure next time.
+                estimatedFileBytes = -1L
                 try {
                     android.util.Log.e("FileLoggingTree", "Error writing log entry: ${t.javaClass.simpleName}: ${t.message}")
                 } catch (_: Throwable) {}
@@ -132,26 +188,77 @@ class FileLoggingTree(context: Context) : Timber.Tree() {
         }
     }
 
-    private fun truncateLogFile() {
-        try {
+    /** Rotates the log files. Returns true when the current file is now empty or absent. */
+    private fun truncateLogFile(): Boolean {
+        return try {
             android.util.Log.d("FileLoggingTree", "Truncating log file: $logFile")
-            // Consolidate logs: .4 -> .5, .3 -> .4, etc.
-            for (i in 4 downTo 1) {
-                val current = File(logFile.parent, "${logFile.name}.$i")
-                val next = File(logFile.parent, "${logFile.name}.${i + 1}")
-                if (current.exists()) {
-                    if (next.exists()) next.delete()
-                    current.renameTo(next)
-                }
+            rotateLogFiles(logFile, MAX_HISTORY_FILES) { problem ->
+                android.util.Log.w("FileLoggingTree", "Log rotation: $problem")
             }
-            // Move current to .1
-            val firstHistory = File(logFile.parent, "${logFile.name}.1")
-            if (firstHistory.exists()) firstHistory.delete()
-            logFile.renameTo(firstHistory)
-
-            // Re-create logFile if needed or it will be created on next write
         } catch (e: Exception) {
             android.util.Log.e("FileLoggingTree", "Error truncating log file", e)
+            false
         }
     }
+
+    companion object {
+        /**
+         * Rotation sizing: 5 files (current + 4 history) x 2 MB = 10 MB cap.
+         * With the [LogDeduper] spam limits this retains >= 24 h of normal
+         * operation (the previous 100 KB x 5 rotated about once a minute).
+         */
+        const val MAX_FILE_BYTES: Long = 2L * 1024 * 1024
+        const val MAX_HISTORY_FILES = 4
+    }
+}
+
+/**
+ * A reference that does not keep its referent alive.
+ *
+ * MESSAGE-STORE-LOCK-001: the Rust `IronCore` owns sled's file lock on the
+ * message store, and that lock is released only when the *last* reference to it
+ * goes. `MeshService::stop` drops its own `Arc<IronCore>`, which has no effect
+ * on Android while a Kotlin wrapper is still reachable -- and this tree is
+ * reachable for the whole process. With a strong field here, stopping the mesh
+ * left the store locked, the next Start fell back to DegradedStorage, and every
+ * start after that failed with "Message Store Unavailable" until the app was
+ * killed. Holding weakly makes that impossible by construction: logging can
+ * never extend the core's life, no matter which call site injects it.
+ *
+ * Written and read under the owning tree's monitor; `ref` is volatile as well
+ * so a future reader outside that monitor cannot observe a torn reference.
+ */
+internal class WeakHold<T : Any> {
+    @Volatile
+    private var ref: WeakReference<T>? = null
+
+    fun set(value: T?) {
+        ref = value?.let { WeakReference(it) }
+    }
+
+    fun get(): T? = ref?.get()
+}
+
+/**
+ * A log tree that keeps a core reference for summarized logging.
+ *
+ * MeshRepository injects the core on start (`setIronCore`) and MUST release it
+ * on stop; see [releaseCoreReferencesFromLoggingTrees].
+ */
+interface CoreReferenceHolder {
+    fun setIronCore(core: uniffi.api.IronCore?)
+}
+
+/**
+ * Drop the core reference from every logging tree in [forest].
+ *
+ * Called from the stop path next to where MeshRepository nulls its own
+ * references. Before this existed, the process-wide logging tree was the one
+ * reference a stop never released, so the previous instance kept sled's file
+ * lock on the message store and the next Start reported the store as degraded
+ * (MESSAGE-STORE-LOCK-001). The tree's own hold is weak, so this is the
+ * deterministic half of the same guarantee.
+ */
+fun releaseCoreReferencesFromLoggingTrees(forest: Iterable<Timber.Tree> = Timber.forest()) {
+    forest.filterIsInstance<CoreReferenceHolder>().forEach { it.setIronCore(null) }
 }
