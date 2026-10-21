@@ -1,3 +1,9 @@
+## Launch config
+
+- **Backend:** GPT
+- **Model:** GPT-6 Luna
+- If this tab is running on a different backend/model, note it in your first status report.
+
 # SCMessenger WIP Audit + Burn-Down — Freebuff Lane 0 (2026-10-21)
 
 **Mission:** Find every SCMessenger work product on this machine, back it up to GitHub safely without disturbing active work in progress, verify 100% backup, purge local copies only when proven non-destructive, then burn down branch-by-branch until there is one unified app on main.

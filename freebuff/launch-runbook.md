@@ -1,27 +1,22 @@
 # Launch Runbook — Freebuff Lanes (2026-10-21 ~12:50 HST)
 
-## Tab order and models
+## Tab order, backends, and models
 
-Open mission tabs in this order. Paste the prompt file's full contents into each tab.
+Open mission tabs in this order. Paste the prompt file's full contents into each tab. **Backend rule:** free tier for high-volume mechanical work, GPT for judgment-heavy and long-horizon work. The harness provider router does free-tier arbitrage automatically — these assignments are the explicit policy on top of it.
 
-| # | Tab | Model | Prompt file |
-|---|-----|-------|-------------|
-| 0 | SCM Readiness Verifier (gate) | GPT-6 Luna | `freebuff/readiness-verifier.md` — runs FIRST, alone. Pulls the handoff, audits the plan, verifies the environment, posts the readiness report to #602, requests Overseer clarification. Nothing else launches until it declares GO. |
-| 1 | SCM Lane 0 — WIP Audit + Burn-Down | GPT-6 Luna | `~/workspace/scmessenger-wip-audit-burndown-prompt-2026-10-21.md` |
-| 2 | SCM Lane 1 — Merge Train | GPT-6 Luna | `~/workspace/scmessenger-lane-1-merge-train.md` |
-| 3 | SCM Lane 2 — Fix-Forwards | GPT-6 Luna | `~/workspace/scmessenger-lane-2-fix-forwards.md` |
-| 4 | SCM Lane 3 — Transport | GPT-6 Luna | `~/workspace/scmessenger-lane-3-transport.md` |
-| 5 | SCM Lane 4 — Infra (Ubicloud) | 6.1 Sol (Luna fallback) | `~/workspace/scmessenger-lane-4-infra.md` |
-| 6 | BigEnergyCo lane | GPT-6 Luna | `~/workspace/lane-prompts/bigenergyco-lane-2026-10-21.md` |
-| 7 | CivicScope lane | 6.1 Sol (Luna fallback) | `~/workspace/lane-prompts/civicscope-lane-2026-10-21.md` |
-| — | Harness burndown | (already running — your existing tab) | `~/workspace/harness-burndown-lane-prompt-2026-10-20.md` |
+| # | Tab | Backend | Model | Prompt file |
+|---|-----|---------|-------|-------------|
+| 0 | SCM Readiness Verifier (gate) | Freebuff tokens | 6.1 Sol (Luna if thorough) | `freebuff/readiness-verifier.md` — runs FIRST, alone. Pulls the handoff, audits the plan, verifies the environment, posts the readiness report to #602, requests Overseer clarification. Nothing else launches until it declares GO. |
+| 1 | SCM Lane 0 — WIP Audit + Burn-Down | GPT | GPT-6 Luna | `freebuff/lane-0-wip-audit-burndown.md` — long phased mission, the foundation everything builds on. Don't cheap out here. |
+| 2 | SCM Lane 1 — Merge Train | Freebuff tokens | GPT-6 Luna | `freebuff/lane-1-merge-train.md` — high-volume mechanical (rebases, CI checks, merges); rules are explicit, Overseer verifies every merge. |
+| 3 | SCM Lane 2 — Fix-Forwards | GPT | GPT-6 Luna | `freebuff/lane-2-fix-forwards.md` — diagnostic work, judgment-heavy. |
+| 4 | SCM Lane 3 — Transport | GPT | GPT-6 Luna | `freebuff/lane-3-transport.md` — hardest implementation, Rule-8 heavy. |
+| 5 | SCM Lane 4 — Infra (Ubicloud) | Freebuff tokens | 6.1 Sol (Luna fallback) | `freebuff/lane-4-infra.md` — scoped ops checklist. |
+| 6 | BigEnergyCo lane | GPT | GPT-6 Luna | `freebuff/bigenergyco-lane.md` (bigenergyco branch) |
+| 7 | CivicScope lane | Freebuff tokens | 6.1 Sol (Luna fallback) | `freebuff/civicscope-lane.md` (civicscope branch) |
+| — | Harness burndown | (already running — your existing tab) | — | `~/workspace/harness-burndown-lane-prompt-2026-10-20.md` |
 
-**Why this mapping:** Luna on every implementation/judgment lane (0–3, BigEnergyCo) — it's the proven implementer and these lanes make merge/ship decisions. Sol on Lane 4 and CivicScope — both are well-scoped, lower-stakes work (ops checklist; pre-build prep), and diversifying models is free robustness. If Sol ever stalls, fall back to Luna, no ceremony.
-
-**Rule-8 reviewers:** separate thread, **6.1 Sol or Astra** — a different model from the implementer on purpose (different blind spots). Two ways to run it:
-- (a) The reviewing lane spawns the reviewer as a subagent inline (fast; fresh context, different model).
-- (b) You open a dedicated review tab and paste the reviewer prompt below + the PR number (cleanest independence; use for the big ones: #521, #599).
-- Reviewer prompt file: `~/workspace/scmessenger-rule8-reviewer-prompt-2026-10-21.md`
+**Reviewers:** separate thread, **6.1 Sol or Astra**, backend per availability — a different model from the implementer on purpose. Reviewer prompt: `freebuff/rule8-reviewer-prompt.md`.
 
 ## Sequence
 
