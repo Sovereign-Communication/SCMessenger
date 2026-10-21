@@ -372,6 +372,3 @@ jobs:
           echo "For comprehensive security scanning, see the 'Security Scan' workflow"
           echo "For code quality checks, see the 'Lint' workflow"
           echo ""
-      - name: Clean self-hosted workspace
-        if: always()
-        uses: ./.github/actions/self-hosted-cleanup
