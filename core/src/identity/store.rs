@@ -55,7 +55,7 @@ impl IdentityStore {
                 Ok(())
             }
             Self::Persistent(db) => {
-                let mut bytes = keys.to_bytes();
+                let mut bytes = keys.to_bytes()?;
                 db.put(IDENTITY_KEY, &bytes)
                     .map_err(|e| anyhow::anyhow!(e))?;
                 db.flush().map_err(|e| anyhow::anyhow!(e))?;

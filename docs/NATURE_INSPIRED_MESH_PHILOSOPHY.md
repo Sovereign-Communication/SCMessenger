@@ -1,7 +1,7 @@
 # SCMessenger Nature-Inspired Mesh Philosophy & Scaling Architecture
 
 Status: Active
-Last updated: 2026-07-29
+Last updated: 2026-10-07
 
 This document establishes the biological scaling philosophy for SCMessenger's sovereign mesh routing architecture. Grounded in West-Brown-Enquist (WBE) network scaling theory and Kleiber's Law of biological metabolism, SCMessenger models its network topology, battery energy consumption, and message propagation after fractal biological transport systems.
 
@@ -73,7 +73,7 @@ SCMessenger applies these exact scaling invariants to its Rust core (`core/src/t
 | Biological Scaling Law | SCMessenger Core Module | Primary Contract / Struct | Mechanism |
 |---|---|---|---|
 | Fractal Topology | `core/src/transport/behaviour.rs` | `SwarmBridge` / `NetworkMode` | Adaptive transport ladder (BLE < mDNS < TCP/QUIC) |
-| Invariant Terminal Unit | `core/src/store/ledger_entry.rs` | `LedgerManager` | `MAX_SEED_LEDGER_ENTRIES` (64) & `MAX_LEDGER_ENTRIES` bounds |
+| Invariant Terminal Unit | `core/src/store/ledger_entry.rs` | `LedgerManager` | `MAX_SEED_LEDGER_ENTRIES` (16) & `MAX_LEDGER_ENTRIES` bounds |
 | Reflection Suppression | `core/src/transport/mesh_routing.rs` | `MultiPathDelivery` | Recency-based route deduplication & non-reflecting path choice |
 | Sublinear Scaling | `core/src/routing/adaptive_ttl.rs` | `AdaptiveTTL` | Density-aware TTL adjustment & duty-cycle reduction |
 | Superlinear Output | `core/src/transport/swarm.rs` | `SwarmEvent` / `Outbox` | Multi-path opportunistic flush on `ConnectionEstablished` |

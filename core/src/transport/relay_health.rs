@@ -7,8 +7,10 @@
 // - Network connectivity and geographic distribution
 // - Real-time performance indicators
 //
-// Headless nodes (without identity) often rank highly due to dedicated
-// resources, but any stable node can become a priority relay.
+// Scoring is purely behavioural (uptime, latency, stability, recent
+// failures). There is no node-class term: whether a node has an identity does
+// not affect its rank. An always-on node simply earns a high score through
+// its uptime and recency (#469, docs/rules/NODE_MODEL.md).
 
 use libp2p::{Multiaddr, PeerId};
 use std::collections::{HashMap, VecDeque};
@@ -22,8 +24,6 @@ pub struct RelayMetrics {
     pub peer_id: PeerId,
     /// Known multiaddresses
     pub addresses: Vec<Multiaddr>,
-    /// Whether this is a headless node (no identity)
-    pub is_headless: bool,
     /// Historical uptime percentage (0.0-1.0)
     pub uptime_ratio: f64,
     /// Average response latency in milliseconds
@@ -49,13 +49,10 @@ impl RelayMetrics {
             + (1.0 - (self.avg_latency_ms as f64 / 1000.0).min(1.0)) * 0.3
             + self.stability_score * 0.3;
 
-        // Boost score for headless nodes (dedicated resources)
-        let headless_bonus = if self.is_headless { 0.1 } else { 0.0 };
-
         // Penalty for recent failures
         let failure_penalty = (self.recent_failures as f64 / 100.0).min(0.2);
 
-        (base_score + headless_bonus - failure_penalty).clamp(0.0, 1.0)
+        (base_score - failure_penalty).clamp(0.0, 1.0)
     }
 
     /// Check if relay is considered healthy
@@ -298,7 +295,6 @@ mod tests {
         let metrics = RelayMetrics {
             peer_id,
             addresses: vec![],
-            is_headless: true,
             uptime_ratio: 0.95,
             avg_latency_ms: 50,
             bandwidth_estimate: 1_000_000,
@@ -321,6 +317,42 @@ mod tests {
     }
 
     #[test]
+    fn test_priority_score_is_purely_behavioural() {
+        // Scoring has no node-class input: two relays with identical
+        // behavioural metrics score identically, and an always-on relay
+        // (high uptime, fresh, low latency) outranks a flaky one purely on
+        // behaviour.
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let make = |uptime: f64, latency: u64, failures: u32, stability: f64| RelayMetrics {
+            peer_id: identity::Keypair::generate_ed25519().public().to_peer_id(),
+            addresses: vec![],
+            uptime_ratio: uptime,
+            avg_latency_ms: latency,
+            bandwidth_estimate: 1_000_000,
+            recent_connections: 100,
+            recent_failures: failures,
+            last_seen: now_ms,
+            region: None,
+            stability_score: stability,
+        };
+
+        let a = make(0.9, 100, 2, 0.85);
+        let b = make(0.9, 100, 2, 0.85);
+        assert!((a.priority_score() - b.priority_score()).abs() < f64::EPSILON);
+
+        // Exact weights: 0.4 uptime + 0.3 latency + 0.3 stability - failures.
+        let expected = 0.9 * 0.4 + (1.0 - 0.1) * 0.3 + 0.85 * 0.3 - 0.02;
+        assert!((a.priority_score() - expected).abs() < 1e-9);
+
+        let always_on = make(0.99, 40, 0, 0.97);
+        let flaky = make(0.82, 400, 30, 0.72);
+        assert!(always_on.priority_score() > flaky.priority_score());
+    }
+
+    #[test]
     fn test_relay_discovery_priority_ordering() {
         let mut discovery = RelayDiscovery::new(vec![]);
 
@@ -328,7 +360,6 @@ mod tests {
         let high_quality = RelayMetrics {
             peer_id: identity::Keypair::generate_ed25519().public().to_peer_id(),
             addresses: vec![],
-            is_headless: true,
             uptime_ratio: 0.98,
             avg_latency_ms: 30,
             bandwidth_estimate: 10_000_000,
@@ -345,7 +376,6 @@ mod tests {
         let low_quality = RelayMetrics {
             peer_id: identity::Keypair::generate_ed25519().public().to_peer_id(),
             addresses: vec![],
-            is_headless: false,
             uptime_ratio: 0.85, // Increased from 0.75 to pass health check (> 0.8)
             avg_latency_ms: 200,
             bandwidth_estimate: 1_000_000,

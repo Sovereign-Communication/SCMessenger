@@ -8,8 +8,7 @@
 # D-Bus policy governs non-root access. The actual root requirement in this
 # codebase is core/src/transport/multiport.rs's privileged-port listen
 # addresses (used when running as a public bootstrap/relay node offering a
-# cellular-friendly WebSocket fallback on :443, matching the
-# CORE_BOOTSTRAP_NODES addresses in transport/bootstrap.rs) — binding those
+# cellular-friendly WebSocket fallback on :443) — binding those
 # ports below 1024 requires CAP_NET_BIND_SERVICE without root.
 #
 # Usage:

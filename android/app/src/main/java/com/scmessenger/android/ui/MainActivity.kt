@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // #469 T3: invite shared into the app (cold start)
+        handleInviteIntent(intent)
+
         // Handle deep links for cold start
         intent?.let {
             when (it.action) {
@@ -353,6 +356,16 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         Timber.d("MainActivity resumed")
         platformBridge.notifyForeground()
+        // #469 T7: returning to the foreground resets discovery to aggressive.
+        // Flag is recorded here on the main thread so resume/pause order holds
+        // even though the push to core runs on the IO pool.
+        meshRepository.setDiscoveryForeground(true)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            meshRepository.updateDiscoveryInputs()
+            meshRepository.reportDiscoveryEvent(
+                com.scmessenger.android.transport.discovery.DiscoveryEventKind.APP_FOREGROUND
+            )
+        }
         checkPermissions()
         if (meshRepository.hasRequiredRuntimePermissions()) {
             // HANG-MAIN-001: onResume is main-thread. Do not touch repository
@@ -375,36 +388,30 @@ class MainActivity : ComponentActivity() {
      */
     private fun ensureMeshForegroundService() {
         // R3-F1: never resurrect a mesh the user explicitly stopped this
-        // session. Only an in-app Start (ACTION_START via the service view
-        // model) clears the latch.
-        if (MeshForegroundService.userStoppedForSession) {
-            Timber.d("Mesh start skipped: user stop in effect this session")
-            return
+        // R3-F1/R4-M2: the user-stop latch is honoured inside MeshAutoRestart;
+        // ACTION_ENSURE cannot clear it. Logs "[MESH-START] trigger=activity ...".
+        com.scmessenger.android.service.MeshAutoRestart.ensure(
+            this,
+            com.scmessenger.android.service.MeshStartTrigger.ACTIVITY
+        )
+    }
+
+    /**
+     * #469 T3: a signed `SCI1:` invite shared as text (ACTION_SEND) or opened
+     * through a `sci1:` view intent is handed to the join screen.
+     */
+    private fun handleInviteIntent(intent: Intent?) {
+        val shared = when (intent?.action) {
+            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+            Intent.ACTION_VIEW -> intent.dataString
+            else -> null
         }
-        try {
-            // R4-M2: ACTION_ENSURE starts the mesh but cannot clear the
-            // user-stop latch, so a STOP racing ahead of this queued intent
-            // still wins.
-            val intent = android.content.Intent(this, com.scmessenger.android.service.MeshForegroundService::class.java)
-                .apply { action = com.scmessenger.android.service.MeshForegroundService.ACTION_ENSURE }
-            startForegroundService(intent)
-            MeshForegroundService.fgsStartFailed.value = false
-            Timber.d("Mesh foreground service ensured (ACTION_ENSURE)")
-        } catch (e: Exception) {
-            // R1-6 + R4-L1: background-start restrictions and permission gaps
-            // land here; record the failure as observable companion state
-            // (survives activity recreation) instead of silently swallowing.
-            MeshForegroundService.fgsStartFailed.value = true
-            if (e is IllegalStateException) {
-                Timber.w(e, "Mesh foreground service start rejected (background-start restriction?)")
-            } else {
-                Timber.e(e, "Failed to start mesh foreground service")
-            }
-        }
+        mainViewModel.offerInvite(shared)
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        handleInviteIntent(intent)
         intent?.let {
             when (it.action) {
                 Intent.ACTION_VIEW -> {
@@ -435,10 +442,17 @@ class MainActivity : ComponentActivity() {
         super.onPause()
         Timber.d("MainActivity paused")
         platformBridge.notifyBackground()
+        // Backgrounded: the scheduler's decay ceiling relaxes (#469 T8).
+        meshRepository.setDiscoveryForeground(false)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            meshRepository.updateDiscoveryInputs()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        // Drop the delayed permission-reset post so the Handler does not hold this activity.
+        handler.removeCallbacksAndMessages(null)
         // Stop ANR watchdog when activity is destroyed
         try {
             anrWatchdog.stop()
