@@ -10,22 +10,10 @@ ignore = [
     "RUSTSEC-2025-0141",
     # Transitive via sled — no safe upgrade available
     "RUSTSEC-2025-0057",
-    # Transitive via libp2p -> hickory-proto 0.25.x — no fix in 0.25 series
-    "RUSTSEC-2026-0118",
-    # Transitive via libp2p -> hickory-proto 0.25.x — no fix in 0.25 series
-    "RUSTSEC-2026-0119",
     # Transitive via sled -> parking_lot — no safe upgrade available
     "RUSTSEC-2024-0384",
     # Transitive via libp2p -> if-watch -> netlink-packet-core — no safe upgrade
     "RUSTSEC-2024-0436",
-    # Transitive via tokio-tungstenite -> rustls 0.22.x -> rustls-webpki 0.102.x
-    "RUSTSEC-2026-0049",
-    # Same as above
-    "RUSTSEC-2026-0098",
-    # Same as above
-    "RUSTSEC-2026-0099",
-    # Same as above
-    "RUSTSEC-2026-0104",
     # Transitive via proc-macro-error2 — unmaintained, transitive, no fix available
     "RUSTSEC-2026-0173",
     # Transitive via zbus 4.4.0; unmaintained as standalone crates, no safe upgrade available.
