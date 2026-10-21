@@ -84,3 +84,25 @@ changes to `vendor/` needed for the sweep.
 - `core/src/iron_core.rs` lines 3196–3379 (flush + grace re-enqueue)
 - `core/src/store/outbox.rs` `flush_peer_messages` (due check exists)
 - WP4 / WP5 acceptance on the P0 umbrella ticket
+
+## Fix (MT-07, merge train)
+
+Implemented on branch `freebuff/train-mt07-outbox-sweep` (PR #413), branched on
+`freebuff/train-mt06` (#411) per the landing runbook. The delta is exactly two files:
+
+- `core/src/transport/swarm.rs` **+41 / -0** -- the 120 s `outbox_sweep_interval`
+  declared before the native event `loop`, plus one `_ = outbox_sweep_interval.tick()`
+  arm inside the existing `tokio::select!` that re-invokes the single-owner flush
+  (`handle_peer_connection_event_with_egress`) for peers that are still connected.
+- `core/tests/integration_outbox_flush_reconnect.rs` **+84 / -0** -- pure addition of
+  `test_sweep_reflushes_entry_after_grace_expiry_on_live_connection`, pinning the due
+  semantics the sweep relies on (inside the grace window: not drained; after expiry:
+  drained; custody entries untouched). The 9 pre-existing tests in that file are unchanged.
+
+Acceptance criteria 1 and 3 are met by this delta. **Criterion 2 (wasm parity) is NOT
+met** -- only the native loop gets a sweep; the wasm loop at ~9469 still has no periodic
+re-flush, so the F5/WASM asymmetry this ticket cites remains open. Criterion 4 is live
+evidence and belongs to TRI-040 R9, not to this branch.
+
+No `vendor/` change is included, per this ticket's Gates section: the sweep does not need
+the D9 patch, and MT-05 carries the vendored tree separately.

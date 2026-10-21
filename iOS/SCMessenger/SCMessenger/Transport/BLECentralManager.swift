@@ -35,7 +35,12 @@ final class BLECentralManager: NSObject {
     private var isBackgroundMode: Bool = false
     private var scanTimer: Timer?
     private var isScanning: Bool = false
-    private var pendingScanOnReady: Bool = false  // P3: Defer scan until BLE is poweredOn
+    /// wantsScan is true between startScanning() and stopScanning(); scheduler
+    /// resets and queued timer arms only act while the owner still wants a scan,
+    /// which keeps a reset arriving after Stop from restarting the radio.
+    /// pendingScanOnReady defers a start until BLE is poweredOn (P3).
+    private var scanIntent = BLEScanIntent()
+    private var lastReportedCentralState: CBManagerState = .unknown
 
     // Write queue (mirrors Android BleGattClient pattern - CRITICAL)
     private var writeInProgress: [UUID: Bool] = [:]
@@ -75,10 +80,10 @@ final class BLECentralManager: NSObject {
 
     func startScanning() {
         logger.info("Starting BLE scanning")
-        guard centralManager.state == .poweredOn else {
+        let canScanNow = scanIntent.start(poweredOn: centralManager.state == .poweredOn)
+        guard canScanNow else {
             logger.warning("Cannot start scanning: BLE not powered on (state=\(self.centralManager.state.rawValue)), will auto-start when ready")
             // P3: Don't log as failure — just defer until BLE is ready
-            pendingScanOnReady = true
             if self.centralManager.state == .unknown {
                 // State .unknown means CBCentralManager hasn't reported yet — this is normal at launch.
                 // Scanning will begin automatically when centralManagerDidUpdateState fires with .poweredOn.
@@ -87,13 +92,14 @@ final class BLECentralManager: NSObject {
             appendRepositoryDiagnostic("ble_central_start_deferred state=\(self.centralManager.state.rawValue)")
             return
         }
-        pendingScanOnReady = false
         appendRepositoryDiagnostic("ble_central_scan_start")
         scheduleDutyCycle()
     }
 
     func stopScanning() {
         logger.info("Stopping BLE scanning")
+        // A deferred start must not fire when Bluetooth later powers on.
+        scanIntent.stop()
         scanTimer?.invalidate()
         scanTimer = nil
         centralManager.stopScan()
@@ -293,16 +299,43 @@ final class BLECentralManager: NSObject {
         // Timer MUST run on the main RunLoop — background dispatch queues don't
         // have a running RunLoop, so Timer.scheduledTimer would silently never fire.
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.scanIntent.allowsQueuedCycle else { return }
             self.scanTimer?.invalidate()
-            self.scanTimer = Timer.scheduledTimer(withTimeInterval: self.scanInterval, repeats: true) { [weak self] _ in
-                self?.performScanCycle()
-            }
-            if let scanTimer = self.scanTimer {
-                RunLoop.main.add(scanTimer, forMode: .common)
-            }
             self.performScanCycle() // Start immediately
+            self.armNextScanCycle()
         }
+    }
+
+    /// #469 T8: the pause before the next scan cycle comes from the core
+    /// discovery scheduler (aggressive after an event, decaying, never
+    /// stopping). `scanInterval` is only the fallback when the repository
+    /// is gone.
+    private func armNextScanCycle() {
+        scanTimer?.invalidate()
+        scanTimer = nil
+        guard scanIntent.wantsScan else { return }
+        // Always entered on the main thread (main-queue dispatch or a timer
+        // on RunLoop.main), which is MeshRepository's actor.
+        let repository = meshRepository
+        let fallback = scanInterval
+        let delay: TimeInterval = MainActor.assumeIsolated {
+            repository?.discoveryDelaySeconds(.ble) ?? fallback
+        }
+        logger.info("[DISCOVERY] transport=ble next scan cycle in \(delay)s")
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            self?.performScanCycle()
+            self?.armNextScanCycle()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scanTimer = timer
+    }
+
+    /// The scheduler reset the BLE transport (Bluetooth on, app foreground,
+    /// network change, ...): scan now instead of waiting out a decayed pause.
+    func onDiscoveryReset() {
+        guard scanIntent.discoveryReset(poweredOn: centralManager.state == .poweredOn) else { return }
+        if isScanning { stopScan() }
+        scheduleDutyCycle()
     }
 
     private func performScanCycle() {
@@ -310,7 +343,8 @@ final class BLECentralManager: NSObject {
             // Background: duty-cycle to preserve battery
             if !isScanning {
                 startScan()
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + scanWindow) { [weak self] in
+                // CBCentralManager and isScanning are confined to the main queue.
+                BLEScanWindow.scheduleStop(after: scanWindow) { [weak self] in
                     self?.stopScan()
                 }
             }
@@ -360,11 +394,21 @@ final class BLECentralManager: NSObject {
 extension BLECentralManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         logger.info("Central manager state: \(central.state.rawValue)")
+        // #469 T7: every Bluetooth state transition is a discovery event.
+        if central.state != lastReportedCentralState {
+            lastReportedCentralState = central.state
+            if central.state == .poweredOn {
+                let repository = meshRepository
+                DispatchQueue.main.async { repository?.reportDiscoveryEvent(.bleOn) }
+            } else if central.state == .poweredOff {
+                let repository = meshRepository
+                DispatchQueue.main.async { repository?.reportDiscoveryEvent(.bleOff) }
+            }
+        }
         if central.state == .poweredOn {
             // P3: If startScanning() was called before BLE was ready, start now
-            if pendingScanOnReady {
+            if scanIntent.bluetoothPoweredOn() {
                 logger.info("BLE now powered on — starting deferred scan")
-                pendingScanOnReady = false
                 appendRepositoryDiagnostic("ble_central_scan_start_deferred")
                 scheduleDutyCycle()
             }

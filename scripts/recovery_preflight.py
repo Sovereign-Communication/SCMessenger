@@ -23,7 +23,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 FRESH = Path(r"C:\Users\SCM\Documents\GitHub\MiMoSCMessengerFresh")
-AWS_HOST = "18.234.62.247"
+# Always-on node host is supplied per run via --host; nothing is stored here
+# (#469: no static node addresses in the repo).
+ALWAYS_ON_HOST = ""
 ALWAYS_ON_TAG_HINT = "scm-always-on-node"
 CONFIG = REPO / ".mimocode" / "mimocode.json"
 CONFIG_BAK_GLOB = "mimocode.json.bak*"
@@ -210,6 +212,10 @@ def check_docker_redeploy() -> int:
         "AWS container MUST use --network host; bridge-only drops :9001 "
         "(already burned once on 2026-09-11)"
     )
+    if not ALWAYS_ON_HOST:
+        _warn("no --host given; skipping live inspect of the always-on node")
+        _block("operator approval required for docker pull/redeploy")
+        return rc
     ssh = [
         "ssh",
         "-i",
@@ -218,7 +224,7 @@ def check_docker_redeploy() -> int:
         "StrictHostKeyChecking=no",
         "-o",
         "ConnectTimeout=8",
-        f"ec2-user@{AWS_HOST}",
+        f"ec2-user@{ALWAYS_ON_HOST}",
         "docker inspect scm-node --format '{{.HostConfig.NetworkMode}} {{.Config.Image}}' 2>/dev/null || true",
     ]
     try:
@@ -323,7 +329,14 @@ def main() -> int:
         help="destructive action to preflight",
     )
     parser.add_argument("--path", default="", help="optional path context")
+    parser.add_argument(
+        "--host",
+        default="",
+        help="always-on node host for live inspection (not stored in the repo)",
+    )
     args = parser.parse_args()
+    global ALWAYS_ON_HOST
+    ALWAYS_ON_HOST = args.host
     print(f"[PREFLIGHT] action={args.action} path={args.path or '(none)'}")
     print(f"[PREFLIGHT] repo={REPO}")
     rc = ACTIONS[args.action]()
