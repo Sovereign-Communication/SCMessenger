@@ -7,7 +7,8 @@
 //!
 //! ```text
 //! B_fd    = share_fd  x RLIMIT_NOFILE (soft)              -- paths that own a descriptor
-//! pool    = available_memory + used x per_connection_RSS  -- what we could hold if we held none
+//! pool    = used_at_sample x per_connection_RSS + available_memory
+//!           (available_memory is charged for paths admitted since the sample)
 //! B_mem   = max(active, share_mem x pool / per_connection_RSS)
 //! total   = min(B_mem, B_fd + descriptor-free paths) x platform_scale
 //! ```
@@ -66,9 +67,13 @@ pub const FD_SHARE: f64 = 0.5;
 /// the application and the OS page cache pressure it already causes.
 pub const MEMORY_SHARE: f64 = 0.5;
 
-/// Model parameter: smallest number of descriptors the hard ceiling always
-/// leaves unclaimed by connections, for sled, log files, listeners and outbound
-/// dials, even at the peak of a connection flood.
+/// Model parameter: the reserve of descriptors the hard ceiling leaves
+/// unclaimed by connections (sled, log files, listeners, outbound dials) is
+/// `max(FD_CEILING_RESERVE_MIN, soft_limit / FD_CEILING_RESERVE_DIVISOR)`. The
+/// ceiling never falls below the bound, though, and that floor wins on very
+/// small limits: a soft limit of 64 leaves 32 free and a soft limit of 8 leaves
+/// 4, so the reserve is smaller than this minimum there. Soft limits of 128 or
+/// more get the full reserve.
 pub const FD_CEILING_RESERVE_MIN: u64 = 64;
 
 /// Model parameter: the ceiling also leaves `1 / FD_CEILING_RESERVE_DIVISOR` of
@@ -182,6 +187,13 @@ pub struct ResourceSnapshot {
     pub mem_available: Option<u64>,
     /// Resident set size of this process.
     pub rss: Option<u64>,
+    /// Live paths of every kind at the moment `mem_available` was read. The
+    /// figure has not yet absorbed the cost of paths that arrived after that
+    /// moment, so the memory pool is derived from this count, not from the
+    /// live one (see [`ResourceModel::derive`]). Stamped by the caller that
+    /// owns the ledger when it accepts a fresh `mem_available`; probes leave it
+    /// zero. Meaningless while `mem_available` is `None`.
+    pub mem_sampled_paths: usize,
 }
 
 /// A derived bound and the input that binds it.
@@ -340,9 +352,26 @@ impl ResourceModel {
         // Physical caps for the hard ceiling (see `TotalLimits`); unbounded
         // when the matching input is unavailable.
         let cap_fd = snapshot.fd_soft_limit.map(fd_hard_cap);
-        let cap_mem = snapshot.mem_available.map(|avail| {
+        // Memory pool, derived from ONE consistent instant. `mem_available` was
+        // read when `mem_sampled_paths` paths were live, so
+        //   pool = mem_sampled_paths x per + mem_available
+        // is what the machine supported at that instant. Paths admitted since
+        // are NOT added to the pool: their cost is still inside it, because
+        // `mem_available` has not yet absorbed them (the memory they will take
+        // is charged against `mem_available`, leaving
+        //   headroom = max(0, mem_available - (live - mem_sampled_paths) x per)
+        // for further paths, which the bound-minus-live comparison in the
+        // ledger already enforces). Using live x per + mem_available instead
+        // would count each late arrival twice, once in the live count and once
+        // in free memory that has not yet fallen. Paths that closed since the
+        // sample leave the pool at its sampled value until the next sample
+        // reports the freed memory.
+        let pool_of = |avail: u64| {
             let per = self.per_connection_bytes();
-            let pool = occupancy.total as f64 * per + avail as f64;
+            (snapshot.mem_sampled_paths as f64 * per + avail as f64, per)
+        };
+        let cap_mem = snapshot.mem_available.map(|avail| {
+            let (pool, per) = pool_of(avail);
             to_usize((pool * MEMORY_CEILING_SHARE / per) as u64)
         });
         let cap_total = match (cap_fd, cap_mem) {
@@ -353,8 +382,7 @@ impl ResourceModel {
         };
         let cap_fd = cap_fd.unwrap_or(usize::MAX);
         let b_mem = snapshot.mem_available.map(|avail| {
-            let per = self.per_connection_bytes();
-            let pool = occupancy.total as f64 * per + avail as f64;
+            let (pool, per) = pool_of(avail);
             // Floor on authenticated and trafficked paths only. `protected` never
             // counts grace-window paths (see `PathLedger::protected_paths`), so a
             // flood of new connections cannot raise the memory bound.
@@ -478,6 +506,7 @@ pub fn sample_resources() -> ResourceSnapshot {
         fd_soft_limit: probe::fd_soft_limit(),
         mem_available: probe::mem_available(),
         rss: probe::rss(),
+        mem_sampled_paths: 0,
     }
 }
 
@@ -706,6 +735,7 @@ mod tests {
             fd_soft_limit: Some(1024),
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         };
         let d = model.derive(&snap, occ(0, 0), 1000).expect("derived");
         assert_eq!(d.limits.total, 512);
@@ -721,6 +751,7 @@ mod tests {
                 fd_soft_limit: Some(soft),
                 mem_available: None,
                 rss: None,
+                mem_sampled_paths: 0,
             };
             model
                 .derive(&snap, occ(0, 0), 1000)
@@ -750,6 +781,7 @@ mod tests {
             fd_soft_limit: None,
             mem_available: Some(GIB),
             rss: None,
+            mem_sampled_paths: 100,
         };
         let d = model.derive(&snap, occ(100, 100), 1000).expect("derived");
         // Pool is 100 + 4096 paths; the bound is half, the ceiling at most
@@ -770,6 +802,7 @@ mod tests {
             fd_soft_limit: None,
             mem_available: Some(GIB),
             rss: None,
+            mem_sampled_paths: 100,
         };
         let d = model.derive(&snap, occ(100, 100), 1000).expect("derived");
         assert_eq!(d.limits.total, 50 + 2048);
@@ -784,6 +817,7 @@ mod tests {
             fd_soft_limit: Some(200), // 100 descriptor-owning paths
             mem_available: Some(64 * GIB),
             rss: None,
+            mem_sampled_paths: 500,
         };
         // 500 live paths of which only 40 own a descriptor: the descriptor
         // limit still allows 100 of them, plus every QUIC path.
@@ -809,6 +843,7 @@ mod tests {
                 fd_soft_limit: None,
                 mem_available: Some(pool - used * per),
                 rss: None,
+                mem_sampled_paths: used as usize,
             };
             model
                 .derive(&snap, occ(used as usize, used as usize), 1000)
@@ -827,6 +862,7 @@ mod tests {
             fd_soft_limit: None,
             mem_available: Some(0),
             rss: None,
+            mem_sampled_paths: 100,
         };
         // Memory is gone: only half the pool (our own footprint) is usable.
         let idle = model.derive(&snap, occ(100, 100), 1000).expect("derived");
@@ -845,12 +881,42 @@ mod tests {
     }
 
     #[test]
+    fn paths_arriving_after_the_sample_are_charged_to_available_memory_once() {
+        let model = ResourceModel::new();
+        let per = model.per_connection_bytes() as u64;
+        // Sampled with 100 live paths and 1 GiB free.
+        let snap = ResourceSnapshot {
+            fd_soft_limit: None,
+            mem_available: Some(GIB),
+            rss: None,
+            mem_sampled_paths: 100,
+        };
+        let at_sample = model.derive(&snap, occ(100, 100), 1000).expect("derived");
+        // 1000 more paths arrive before the next sample. The old formula
+        // (live x per + avail) would count them twice and raise the bound by
+        // half of 1000; the pool must stay what memory supported at sample time.
+        let later = model.derive(&snap, occ(1100, 1100), 1000).expect("derived");
+        assert_eq!(later.limits.total, at_sample.limits.total);
+        assert_eq!(later.limits.ceiling_total, at_sample.limits.ceiling_total);
+        // Late arrivals beyond the sampled free memory do not raise the pool:
+        // 100 sampled paths + 10 paths of free memory, half usable.
+        let tiny = ResourceSnapshot {
+            mem_available: Some(10 * per),
+            mem_sampled_paths: 100,
+            ..snap
+        };
+        let flooded = model.derive(&tiny, occ(5000, 5000), 1000).expect("derived");
+        assert_eq!(flooded.limits.total, 55);
+    }
+
+    #[test]
     fn the_smaller_of_memory_and_descriptors_binds() {
         let model = ResourceModel::new();
         let snap = ResourceSnapshot {
             fd_soft_limit: Some(1_000_000),
             mem_available: Some(16 * 1024 * 1024), // 8 MiB usable = 32 conns
             rss: None,
+            mem_sampled_paths: 0,
         };
         let d = model.derive(&snap, occ(0, 0), 1000).expect("derived");
         assert_eq!(d.limits.total, 32);
@@ -955,6 +1021,7 @@ mod tests {
             fd_soft_limit: Some(10_000),
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         };
         let normal = model.derive(&snap, occ(100, 100), 1000).expect("derived");
         assert_eq!(normal.limits.total, 5_000);
@@ -1022,6 +1089,7 @@ mod tests {
             fd_soft_limit: Some(2000),
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         };
         let full = model.derive(&snap, occ(0, 0), 1000).expect("derived");
         assert_eq!(full.limits.total, 1000);

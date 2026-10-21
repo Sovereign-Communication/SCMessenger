@@ -459,6 +459,7 @@ impl AdmissionBehaviour {
     pub fn with_sampler(mut self, sampler: fn() -> ResourceSnapshot) -> Self {
         self.sampler = sampler;
         self.snapshot = sampler();
+        self.snapshot.mem_sampled_paths = self.occupancy().total;
         let now = Instant::now();
         self.fd_at = now;
         self.mem_at = now;
@@ -837,7 +838,16 @@ impl AdmissionBehaviour {
     /// Merge a probe reading with the figures it failed to supply. A missing
     /// figure stands in from the last reading for at most
     /// `SNAPSHOT_MAX_AGE_SAMPLES` sample intervals, then is dropped.
-    fn merge_snapshot(&mut self, fresh: ResourceSnapshot, now: Instant) -> ResourceSnapshot {
+    ///
+    /// `live` is the number of live paths now: a fresh `mem_available` is
+    /// stamped with it (`mem_sampled_paths`), a remembered one keeps the count
+    /// it was read with, so figure and count always describe the same instant.
+    fn merge_snapshot(
+        &mut self,
+        fresh: ResourceSnapshot,
+        live: usize,
+        now: Instant,
+    ) -> ResourceSnapshot {
         let max_age = RESOURCE_SAMPLE_INTERVAL * SNAPSHOT_MAX_AGE_SAMPLES;
         fn pick(
             new: Option<u64>,
@@ -871,6 +881,11 @@ impl AdmissionBehaviour {
                 max_age,
             ),
             rss: pick(fresh.rss, self.snapshot.rss, &mut self.rss_at, now, max_age),
+            mem_sampled_paths: if fresh.mem_available.is_some() {
+                live
+            } else {
+                self.snapshot.mem_sampled_paths
+            },
         }
     }
 
@@ -913,8 +928,8 @@ impl AdmissionBehaviour {
         if let Some(snapshot) = fresh {
             // A probe that failed (it needs a descriptor, and descriptors are
             // what ran out) must not erase the last good figures.
-            self.snapshot = self.merge_snapshot(snapshot, now);
             let occupancy = self.occupancy();
+            self.snapshot = self.merge_snapshot(snapshot, occupancy.total, now);
             self.resources.observe(snapshot.rss, occupancy.total);
             if periodic {
                 self.resources.clear_pressure();
@@ -1339,6 +1354,7 @@ mod tests {
             fd_soft_limit: Some(8), // 4 descriptor-owning paths
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         }
     }
 
@@ -1347,6 +1363,7 @@ mod tests {
             fd_soft_limit: Some(1000),
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         }
     }
 
@@ -1708,6 +1725,7 @@ mod tests {
             fd_soft_limit: Some(8),
             mem_available: Some(1 << 40),
             rss: None,
+            mem_sampled_paths: 0,
         }
     }
 
@@ -2124,12 +2142,14 @@ mod tests {
                 fd_soft_limit: Some(1000),
                 mem_available: Some(1 << 40),
                 rss: Some(1 << 20),
+                mem_sampled_paths: 0,
             }
         }
         let degraded = ResourceSnapshot {
             fd_soft_limit: Some(1000),
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         };
         let mut b = AdmissionBehaviour::new().with_sampler(good);
         b.tick_with(at(base, 5_000), Some(degraded), true);
@@ -2153,6 +2173,7 @@ mod tests {
                 fd_soft_limit: Some(1000),
                 mem_available: Some(1 << 40),
                 rss: None,
+                mem_sampled_paths: 0,
             }
         }
         let mut b = AdmissionBehaviour::new().with_sampler(good);
@@ -2162,6 +2183,7 @@ mod tests {
             fd_soft_limit: Some(1000),
             mem_available: None,
             rss: None,
+            mem_sampled_paths: 0,
         };
         b.tick_with(at(base, 10_000), Some(degraded), true);
         assert_eq!(b.snapshot.mem_available, Some(1 << 40));
