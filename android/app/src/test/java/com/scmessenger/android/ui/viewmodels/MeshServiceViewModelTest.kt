@@ -94,6 +94,11 @@ class MeshServiceViewModelTest {
         every { mockMeshRepository.serviceState } returns stateFlow
         viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
 
+        // Trigger subscription so stateIn(WhileSubscribed) reflects STARTING
+        backgroundScope.launch(UnconfinedTestDispatcher(testDispatcher.scheduler)) {
+            viewModel.serviceState.collect()
+        }
+
         viewModel.toggleService()
         testDispatcher.scheduler.advanceUntilIdle()
 
@@ -109,6 +114,11 @@ class MeshServiceViewModelTest {
         val stateFlow = MutableStateFlow(uniffi.api.ServiceState.STOPPING)
         every { mockMeshRepository.serviceState } returns stateFlow
         viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
+
+        // Trigger subscription so stateIn(WhileSubscribed) reflects STOPPING
+        backgroundScope.launch(UnconfinedTestDispatcher(testDispatcher.scheduler)) {
+            viewModel.serviceState.collect()
+        }
 
         viewModel.toggleService()
         testDispatcher.scheduler.advanceUntilIdle()
