@@ -30,7 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Start fail with "Message Store Unavailable".
  */
 class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
-    private val MAX_LOG_LINES = 10000
+    private val deduper = LogDeduper()
+    private val lossLedger = LogLossLedger()
     private val logFile: File = File(context.filesDir, "mesh_diagnostics.log")
     // Thread-safe immutable date formatter (minSdk 26).
     // G8: ISO-8601 with year and UTC offset (e.g. 2026-10-07T14:03:09.123+02:00;
@@ -73,6 +74,21 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
         it.start()
     }
 
+    /** Memory-pressure hook: drops the deduper's tracked keys. Safe to call repeatedly. */
+    fun trimMemory() {
+        deduper.trimMemory()
+    }
+
+    /**
+     * Stops the writer thread (it drains the queue first) and drops deduper state.
+     * Idempotent; the tree must not be used for logging afterwards.
+     */
+    fun release() {
+        if (writerRunning.compareAndSet(true, false)) {
+            deduper.trimMemory()
+        }
+    }
+
     override fun setIronCore(core: uniffi.api.IronCore?) {
         synchronized(this) { coreRef.set(core) }
     }
@@ -92,12 +108,16 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
                 android.util.Log.ASSERT -> "A"
                 else -> "U"
             }
-            val logLine = "$timestamp $priorityStr/${tag ?: "Mesh"}: $message\n"
-            // Drop oldest rather than block the caller (main) on a full queue.
-            if (!writeQueue.offer(LogEntry(logLine, t))) {
-                writeQueue.poll()
-                writeQueue.offer(LogEntry(logLine, t))
+            val decision = deduper.evaluate(priority, message, System.currentTimeMillis())
+            if (!decision.emit) return
+            decision.summary?.let { summary ->
+                val summaryLine = "$timestamp I/${tag ?: "Mesh"}: $summary\n"
+                offerDropOldest(writeQueue, LogEntry(summaryLine, null), lossLedger)
             }
+            val logLine = "$timestamp $priorityStr/${tag ?: "Mesh"}: $message\n"
+            // Drop oldest rather than block the caller (main) on a full queue;
+            // each drop is counted and reported by a later [LOG-LOSS] line.
+            offerDropOldest(writeQueue, LogEntry(logLine, t), lossLedger)
         } catch (t: Throwable) {
             // Guard against OutOfMemoryError and native runtime faults to prevent crashing caller threads
             try {
@@ -136,6 +156,11 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
                 }
 
                 FileWriter(logFile, true).use { writer ->
+                    lossLedger.takeMarker()?.let { marker ->
+                        val markerLine = "${timestampFormatter.format(Instant.now())} W/FileLoggingTree: $marker\n"
+                        writer.write(markerLine)
+                        estimatedFileBytes += markerLine.length
+                    }
                     writer.write(entry.line)
                     estimatedFileBytes += entry.line.length
                     entry.throwable?.let { thr ->
@@ -145,12 +170,16 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
                     }
                 }
 
-                if (estimatedFileBytes > 100 * 1024) {
-                    truncateLogFile()
-                    estimatedFileBytes = 0L
+                if (estimatedFileBytes > MAX_FILE_BYTES) {
+                    // If rotation could not empty the file, re-measure it on the
+                    // next write instead of assuming it is empty.
+                    estimatedFileBytes = if (truncateLogFile()) 0L else -1L
                 }
                 Unit
             } catch (t: Throwable) {
+                lossLedger.recordWriteFailure()
+                // The file size is unknown after a failed write; re-measure next time.
+                estimatedFileBytes = -1L
                 try {
                     android.util.Log.e("FileLoggingTree", "Error writing log entry: ${t.javaClass.simpleName}: ${t.message}")
                 } catch (_: Throwable) {}
@@ -159,27 +188,27 @@ class FileLoggingTree(context: Context) : Timber.Tree(), CoreReferenceHolder {
         }
     }
 
-    private fun truncateLogFile() {
-        try {
+    /** Rotates the log files. Returns true when the current file is now empty or absent. */
+    private fun truncateLogFile(): Boolean {
+        return try {
             android.util.Log.d("FileLoggingTree", "Truncating log file: $logFile")
-            // Consolidate logs: .4 -> .5, .3 -> .4, etc.
-            for (i in 4 downTo 1) {
-                val current = File(logFile.parent, "${logFile.name}.$i")
-                val next = File(logFile.parent, "${logFile.name}.${i + 1}")
-                if (current.exists()) {
-                    if (next.exists()) next.delete()
-                    current.renameTo(next)
-                }
+            rotateLogFiles(logFile, MAX_HISTORY_FILES) { problem ->
+                android.util.Log.w("FileLoggingTree", "Log rotation: $problem")
             }
-            // Move current to .1
-            val firstHistory = File(logFile.parent, "${logFile.name}.1")
-            if (firstHistory.exists()) firstHistory.delete()
-            logFile.renameTo(firstHistory)
-
-            // Re-create logFile if needed or it will be created on next write
         } catch (e: Exception) {
             android.util.Log.e("FileLoggingTree", "Error truncating log file", e)
+            false
         }
+    }
+
+    companion object {
+        /**
+         * Rotation sizing: 5 files (current + 4 history) x 2 MB = 10 MB cap.
+         * With the [LogDeduper] spam limits this retains >= 24 h of normal
+         * operation (the previous 100 KB x 5 rotated about once a minute).
+         */
+        const val MAX_FILE_BYTES: Long = 2L * 1024 * 1024
+        const val MAX_HISTORY_FILES = 4
     }
 }
 
