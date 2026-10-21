@@ -38,6 +38,18 @@ class TransportManager @JvmOverloads constructor(
     private val onWifiDirectConnectionInfo: ((peerId: String, groupOwnerIp: String, isGroupOwner: Boolean) -> Unit)? = null
 ) {
 
+    /**
+     * #469 T8: scheduler-driven cadence for LAN discovery. Set by the owner
+     * before [startAll]; null keeps each component's legacy fixed behaviour.
+     */
+    @Volatile var discoveryCadences: com.scmessenger.android.transport.discovery.DiscoveryCadences? = null
+
+    /** The core scheduler reset the LAN lane: restart mDNS and sweep the subnets now. */
+    fun onLanDiscoveryReset() {
+        mdnsDiscovery?.restartDiscovery()
+        subnetProbe?.triggerNow()
+    }
+
     // Transport health monitor for health-aware transport selection
     private val transportHealthMonitor = TransportHealthMonitor()
 
@@ -168,7 +180,8 @@ class TransportManager @JvmOverloads constructor(
                     onLanAddressResolved?.invoke(multiaddr)
                     onPeerDiscovered(peerId, TransportType.TCP_MDNS)
                 },
-                getLocalPeerId = getLocalPeerId
+                getLocalPeerId = getLocalPeerId,
+                cadence = discoveryCadences?.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.LAN)
             )
             mdnsDiscovery = mdns
         }
@@ -195,7 +208,8 @@ class TransportManager @JvmOverloads constructor(
                     onLanAddressResolved?.invoke(multiaddr)
                     activeTransports[TransportType.TCP_MDNS] = true
                 },
-                getLocalPeerId = getLocalPeerId
+                getLocalPeerId = getLocalPeerId,
+                cadence = discoveryCadences?.cadenceFor(com.scmessenger.android.transport.discovery.DiscoveryLane.LAN)
             )
             subnetProbe = probe
         }
@@ -349,6 +363,25 @@ class TransportManager @JvmOverloads constructor(
      */
     fun getActiveTransports(): List<TransportType> {
         return activeTransports.filter { it.value }.keys.toList()
+    }
+
+    /**
+     * Connected-peer counts for the local radios, keyed by the `[TRANSPORT]` kind name.
+     * INTERNET peers live in the swarm and are counted separately.
+     */
+    fun peerCountsByKind(): Map<String, Int> {
+        val counts = HashMap<String, Int>()
+        for (t in peerTransports.values) {
+            val kind = when (t) {
+                TransportType.BLE -> "ble"
+                TransportType.WIFI_AWARE -> "wifi_aware"
+                TransportType.WIFI_DIRECT -> "wifi_direct"
+                TransportType.TCP_MDNS -> "mdns"
+                else -> null
+            } ?: continue
+            counts[kind] = (counts[kind] ?: 0) + 1
+        }
+        return counts
     }
 
     /**

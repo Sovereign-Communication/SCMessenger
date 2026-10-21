@@ -11,11 +11,14 @@ pub mod ble_mesh;
 pub mod bootstrap;
 pub mod cli;
 pub mod config;
+pub mod invite;
 pub mod ledger;
+pub mod platform_signals;
 pub mod seed_dial;
 pub mod server;
 pub mod transport_api;
 pub mod transport_bridge;
+pub mod transport_status;
 pub mod watchdog;
 
 #[cfg(target_os = "windows")]

@@ -404,6 +404,23 @@ class MainViewModel @Inject constructor(
         _pendingChatPeer.value = peerId
     }
 
+    // #469 T3: an SCI1 invite arrived via share intent or view intent. MeshApp
+    // routes to the join screen, which consumes it and redeems through core.
+    private val _pendingInvite = MutableStateFlow<String?>(null)
+    val pendingInvite: StateFlow<String?> = _pendingInvite.asStateFlow()
+
+    /** Offer shared text; only a well-formed `SCI1:` token is kept. */
+    fun offerInvite(sharedText: String?) {
+        com.scmessenger.android.data.InviteText.extract(sharedText)?.let {
+            _pendingInvite.value = it
+        }
+    }
+
+    fun consumeInvite(): String? {
+        // Atomic take: two collectors consuming at once must not both get it.
+        return _pendingInvite.getAndUpdate { null }
+    }
+
     fun consumeChatNav(): String? {
         val peerId = _pendingChatPeer.value
         _pendingChatPeer.value = null

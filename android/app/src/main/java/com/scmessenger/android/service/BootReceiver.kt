@@ -30,7 +30,16 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
-        Timber.i("Boot completed, checking auto-start preference")
+        Timber.i("Boot/update broadcast %s, checking auto-start preference", intent.action)
+        val trigger = if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            MeshStartTrigger.PACKAGE_REPLACED
+        } else {
+            MeshStartTrigger.BOOT
+        }
+        // BOOT_COMPLETED / MY_PACKAGE_REPLACED are exempt from the Android 12+
+        // background FGS-start restriction. Receiver runs before Application
+        // state is guaranteed seeded in some paths, so seed the latch here too.
+        UserStopStore.install(context)
 
         // Check if auto-start is enabled
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -40,7 +49,7 @@ class BootReceiver : BroadcastReceiver() {
 
                 if (shouldAutoStart(intent.action, autoStart)) {
                     Timber.i("Auto-start enabled, starting mesh service")
-                    startMeshService(context)
+                    MeshAutoRestart.ensure(context, trigger)
                 } else {
                     Timber.d("Auto-start disabled, not starting service")
                 }
@@ -50,24 +59,14 @@ class BootReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun startMeshService(context: Context) {
-        val intent = Intent(context, MeshForegroundService::class.java).apply {
-            action = MeshForegroundService.ACTION_START
-        }
-
-        try {
-            context.startForegroundService(intent)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to start mesh service from BootReceiver (likely Android 12+ background restriction)")
-        }
-    }
-
     companion object {
         internal const val ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON"
 
         /** True for the boot-completed broadcasts this receiver is registered for. */
         internal fun isBootAction(action: String?): Boolean {
-            return action == Intent.ACTION_BOOT_COMPLETED || action == ACTION_QUICKBOOT_POWERON
+            return action == Intent.ACTION_BOOT_COMPLETED ||
+            action == ACTION_QUICKBOOT_POWERON ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED
         }
 
         /**

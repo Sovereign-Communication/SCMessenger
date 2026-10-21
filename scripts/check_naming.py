@@ -374,7 +374,10 @@ def _canonical_of(policy: Policy, rule_id: str) -> Sequence[str]:
 
 def _git(root: Path, args: Sequence[str]) -> str:
     try:
-        proc = subprocess.run(["git", *args], capture_output=True, text=True, cwd=root)
+        proc = subprocess.run(
+            ["git", *args], capture_output=True, text=True, cwd=root,
+            encoding="utf-8", errors="replace",
+        )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise PolicyError(f"git {' '.join(args)} failed: {exc}") from None
     if proc.returncode != 0:

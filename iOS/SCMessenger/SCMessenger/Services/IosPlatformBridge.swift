@@ -360,3 +360,124 @@ extension MotionState: CustomStringConvertible {
         }
     }
 }
+
+// MARK: - Discovery driver (#469 T7/T8)
+
+/// Connects platform events to the core discovery scheduler and wakes scan
+/// loops. All cadence math (aggressive floor after an event, decay with
+/// jitter, computed ceiling) lives in core; this class only forwards events
+/// and reads delays. There is no give-up path: every wait is bounded.
+final class DiscoveryDriver: @unchecked Sendable {
+    private let logger: Logger = Logger(subsystem: "com.scmessenger", category: "Discovery")
+    private let coordinator: DiscoveryCoordinator
+    /// Guards every field below. The driver is reached from the main actor
+    /// (events, shutdown) and from the unstructured outbox Task (awaitNextAttempt),
+    /// so the mutable state cannot be confined to one actor. Never held across a
+    /// callback or an await.
+    private let lock = NSLock()
+    private var wakeContinuations: [DiscoveryTransport: AsyncStream<Void>.Continuation] = [:]
+    private var wakeStreams: [DiscoveryTransport: AsyncStream<Void>] = [:]
+    private var closed: Bool = false
+    private var resetHandler: ((Set<DiscoveryTransport>) -> Void)?
+
+    /// Invoked with the transports the scheduler reset to aggressive.
+    var onReset: ((Set<DiscoveryTransport>) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return resetHandler }
+        set { lock.lock(); defer { lock.unlock() }; if !closed { resetHandler = newValue } }
+    }
+
+    var isShutdown: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return closed
+    }
+
+    init(coordinator: DiscoveryCoordinator = DiscoveryCoordinator()) {
+        self.coordinator = coordinator
+        let all: [DiscoveryTransport] = [.ble, .lan, .wifiDirect, .ledger]
+        for transport in all {
+            var continuation: AsyncStream<Void>.Continuation?
+            let stream: AsyncStream<Void> = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) { continuation = $0 }
+            wakeStreams[transport] = stream
+            wakeContinuations[transport] = continuation
+        }
+    }
+
+    /// Report a platform event (Bluetooth on, Wi-Fi changed, app foreground, ...).
+    /// A no-op after `shutdown()`.
+    @discardableResult
+    func report(_ event: DiscoveryEvent) -> Set<DiscoveryTransport> {
+        guard !isShutdown else { return [] }
+        let reset: Set<DiscoveryTransport> = Set(coordinator.onEvent(event: event))
+        publish(reset, label: "\(event)")
+        return reset
+    }
+
+    func setInputs(connectedPeers: UInt32, power: DiscoveryPower, foreground: Bool) {
+        guard !isShutdown else { return }
+        coordinator.setInputs(connectedPeers: connectedPeers, power: power, foreground: foreground)
+    }
+
+    /// Release the wake streams and the reset hook. Idempotent and safe from any
+    /// thread. Owner: `MeshRepository.stopMeshService()`. A waiter parked on a
+    /// stream ends when its stream finishes and then serves out its bounded sleep.
+    func shutdown() {
+        lock.lock()
+        closed = true
+        resetHandler = nil
+        let continuations = Array(wakeContinuations.values)
+        wakeContinuations.removeAll()
+        wakeStreams.removeAll()
+        lock.unlock()
+        for continuation in continuations {
+            continuation.finish()
+        }
+    }
+
+    /// Seconds to wait before the next attempt on `transport`; advances the decay.
+    func nextDelaySeconds(_ transport: DiscoveryTransport) -> TimeInterval {
+        return TimeInterval(coordinator.nextDelayMs(transport: transport)) / 1000.0
+    }
+
+    /// Wait for the scheduler's next delay, or return early when an event
+    /// resets `transport`. Returns true when an event woke the wait.
+    func awaitNextAttempt(_ transport: DiscoveryTransport) async -> Bool {
+        let seconds: TimeInterval = nextDelaySeconds(transport)
+        lock.lock()
+        let stream = wakeStreams[transport]
+        lock.unlock()
+        guard let stream = stream else {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return false
+        }
+        return await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return false
+            }
+            group.addTask {
+                for await _ in stream { return true }
+                // Stream finished by shutdown(): not a wake, keep waiting on the sleep.
+                return nil
+            }
+            var woke = false
+            while let result = await group.next() {
+                if let value = result { woke = value; break }
+            }
+            group.cancelAll()
+            return woke
+        }
+    }
+
+    private func publish(_ reset: Set<DiscoveryTransport>, label: String) {
+        logger.info("[DISCOVERY] event=\(label, privacy: .public) reset=\(reset.count)")
+        guard !reset.isEmpty else { return }
+        lock.lock()
+        let continuations = reset.compactMap { wakeContinuations[$0] }
+        let handler = resetHandler
+        lock.unlock()
+        for continuation in continuations {
+            continuation.yield(())
+        }
+        handler?(reset)
+    }
+}

@@ -78,6 +78,29 @@ object PeerIdValidator {
         normalize(id1) == normalize(id2)
 
     /**
+     * Identity-aware comparison: two ids are the same peer when they are
+     * [isSame] spellings, or when [canonicalize] (e.g. the repository's
+     * IronCore-backed resolver) maps both to the same non-empty canonical id.
+     * Bridges public-key hex, identity_id and libp2p spellings of one node.
+     * An empty canonical form never matches, so an unresolved id cannot
+     * collapse unrelated peers.
+     */
+    fun isSameIdentity(id1: String, id2: String, canonicalize: (String) -> String): Boolean {
+        if (isSame(id1, id2)) return true
+        val c1 = canonicalize(id1).trim()
+        val c2 = canonicalize(id2).trim()
+        return c1.isNotEmpty() && c1.equals(c2, ignoreCase = true)
+    }
+
+    /**
+     * Conversation-thread key: the canonical id when [canonicalize] resolves
+     * one, otherwise the id itself, so a single identity never splits into
+     * several threads while unresolved ids keep their own thread.
+     */
+    fun threadKey(peerId: String, canonicalize: (String) -> String): String =
+        normalize(canonicalize(peerId)).ifEmpty { peerId }
+
+    /**
      * Canonical identity key for UI list dedup: same node under PeerID and
      * public_key must collapse to one entry.
      *

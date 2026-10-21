@@ -181,7 +181,6 @@ impl StorageBackend for DegradedStorage {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn is_lock_contention(err: &std::io::Error) -> bool {
     use std::io::ErrorKind;
     if err.kind() == ErrorKind::WouldBlock {
@@ -204,8 +203,32 @@ fn is_lock_contention(err: &std::io::Error) -> bool {
         || msg.contains("being used by another process")
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn open_with_lock_retry<F>(mut open: F) -> std::result::Result<sled::Db, (u32, sled::Error)>
+/// How long an open may keep retrying while another handle on the same path is
+/// still releasing sled's file lock.
+///
+/// MESSAGE-STORE-LOCK-001 (2026-09-21): this budget used to be 10 x 50 ms
+/// (~0.5 s), which is shorter than every stage of teardown that precedes a
+/// user's next Start. `MeshService::stop` drops its `Arc<IronCore>`, but the
+/// sled `Db` only closes once the *last* reference goes, and the Android side
+/// holds the `uniffi.api.IronCore` wrapper until the GC/cleaner releases it --
+/// so the real release window is the 5 s swarm-shutdown bound plus a GC delay,
+/// not 0.5 s. When the budget ran out the store was declared degraded,
+/// `MeshService::start` failed loud, and the app showed "Message Store
+/// Unavailable" on every start until the process was killed. 50 x 100 ms
+/// covers the teardown tail; a genuinely foreign holder (a second process)
+/// still fails loud, 5 s later.
+pub const LOCK_MAX_OPEN_ATTEMPTS: u32 = 50;
+pub const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The retry loop itself, with the budget injected so tests can exercise the
+/// control flow without sleeping for the real budget. Returns the successful
+/// `Db` and the attempt that succeeded (1-based), or the final attempt count
+/// and the error that ended the loop.
+pub(crate) fn open_sled_with_budget<F>(
+    max_attempts: u32,
+    retry_delay: std::time::Duration,
+    mut open: F,
+) -> std::result::Result<(sled::Db, u32), (u32, sled::Error)>
 where
     F: FnMut() -> sled::Result<sled::Db>,
 {
@@ -213,27 +236,43 @@ where
     loop {
         attempt += 1;
         match open() {
-            Ok(db) => return Ok(db),
+            Ok(db) => return Ok((db, attempt)),
             Err(error)
                 if matches!(&error, sled::Error::Io(io_err) if is_lock_contention(io_err))
-                    && attempt < SledStorage::LOCK_MAX_OPEN_ATTEMPTS =>
+                    && attempt < max_attempts =>
             {
-                std::thread::sleep(SledStorage::LOCK_RETRY_DELAY);
+                std::thread::sleep(retry_delay);
             }
             Err(error) => return Err((attempt, error)),
         }
     }
 }
 
+/// Open a sled database at a path a just-stopped instance may still hold.
+///
+/// Only lock contention is retried: corruption, permission, and disk-full
+/// errors still fail immediately. Every open on the stop -> Start path must go
+/// through this (message store, contacts, history) so the release window is
+/// tolerated uniformly instead of one store failing the whole start.
+pub(crate) fn open_with_lock_retry<F>(
+    open: F,
+) -> std::result::Result<(sled::Db, u32), (u32, sled::Error)>
+where
+    F: FnMut() -> sled::Result<sled::Db>,
+{
+    open_sled_with_budget(LOCK_MAX_OPEN_ATTEMPTS, LOCK_RETRY_DELAY, open)
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::is_lock_contention;
     use std::io::{Error, ErrorKind};
+    use std::time::Duration;
 
     #[test]
     fn retry_control_flow_allows_nine_retries_before_tenth_open() {
         let mut failures = 9;
-        let (opens, retries) = super::open_with_lock_retry(|| {
+        let (db, attempt) = super::open_sled_with_budget(10, Duration::from_millis(1), || {
             if failures == 0 {
                 Ok(sled::Config::default().temporary(true).open().unwrap())
             } else {
@@ -241,14 +280,60 @@ mod tests {
                 Err(sled::Error::Io(Error::new(ErrorKind::WouldBlock, "busy")))
             }
         })
-        .map(|_| (10, 9))
         .unwrap();
-        assert_eq!((opens, retries), (10, 9));
+        drop(db);
+        assert_eq!(attempt, 10);
 
-        let result = super::open_with_lock_retry(|| {
+        let result = super::open_sled_with_budget(10, Duration::from_millis(1), || {
             Err(sled::Error::Io(Error::new(ErrorKind::WouldBlock, "held")))
         });
         assert_eq!(result.unwrap_err().0, 10);
+    }
+
+    #[test]
+    fn a_clean_open_does_not_retry() {
+        let mut calls = 0;
+        let (db, attempt) = super::open_sled_with_budget(50, Duration::from_millis(1), || {
+            calls += 1;
+            Ok(sled::Config::default().temporary(true).open().unwrap())
+        })
+        .unwrap();
+        drop(db);
+        assert_eq!((calls, attempt), (1, 1));
+    }
+
+    #[test]
+    fn a_non_lock_error_is_not_retried() {
+        let mut calls = 0;
+        let result = super::open_sled_with_budget(50, Duration::from_millis(1), || {
+            calls += 1;
+            Err(sled::Error::Io(Error::new(
+                ErrorKind::PermissionDenied,
+                "denied",
+            )))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            calls, 1,
+            "a permission error must fail immediately, not burn the budget"
+        );
+    }
+
+    /// MESSAGE-STORE-LOCK-001: the budget's *value* is half of the fix. A
+    /// shrink back under the teardown tail reintroduces "Message Store
+    /// Unavailable" on stop -> Start, and this assertion is what such an edit
+    /// has to face.
+    #[test]
+    fn production_budget_covers_the_teardown_tail() {
+        let total_ms =
+            u64::from(super::LOCK_MAX_OPEN_ATTEMPTS) * super::LOCK_RETRY_DELAY.as_millis() as u64;
+        assert!(
+            total_ms >= 4_000,
+            "lock retry budget is {} ms; a stop -> Start cycle can hold the store for up to \
+             5 s (swarm shutdown bound) plus a GC-timed UniFFI release, so the store would be \
+             declared degraded and the app would show 'Message Store Unavailable'",
+            total_ms
+        );
     }
 
     #[test]
@@ -279,10 +364,6 @@ pub struct SledStorage {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SledStorage {
-    /// Maximum number of open attempts, including the first attempt.
-    const LOCK_MAX_OPEN_ATTEMPTS: u32 = 10;
-    const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
-
     pub fn new(path: &str) -> std::result::Result<Self, String> {
         match open_with_lock_retry(|| {
             sled::Config::default()
@@ -291,7 +372,7 @@ impl SledStorage {
                 .use_compression(false)
                 .open()
         }) {
-            Ok(db) => Ok(Self { db }),
+            Ok((db, _)) => Ok(Self { db }),
             Err((attempt, e)) => Err(match e {
                 sled::Error::Corruption { at, .. } => {
                     format!("corruption detected at {:?}: {}", at, e)
