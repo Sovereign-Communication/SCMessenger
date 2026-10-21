@@ -157,6 +157,7 @@ enum IronCoreError {
     "MultiaddrNotSupported",
     "IoError",
     "OnionRoutingDisabled",
+    "DialSkipped",
 };
 
 // ============================================================================

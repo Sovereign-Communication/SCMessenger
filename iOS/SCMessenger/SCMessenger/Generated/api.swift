@@ -8284,6 +8284,8 @@ public enum IronCoreError: Swift.Error, Equatable, Hashable, Foundation.Localize
 
     case OnionRoutingDisabled(message: String)
 
+    case DialSkipped(message: String)
+
 
 
 
@@ -8377,6 +8379,10 @@ public struct FfiConverterTypeIronCoreError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
 
+        case 17: return .DialSkipped(
+            message: try FfiConverterString.read(from: &buf)
+        )
+
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -8420,6 +8426,8 @@ public struct FfiConverterTypeIronCoreError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(15))
         case .OnionRoutingDisabled(_ /* message is ignored*/):
             writeInt(&buf, Int32(16))
+        case .DialSkipped(_ /* message is ignored*/):
+            writeInt(&buf, Int32(17))
 
 
         }

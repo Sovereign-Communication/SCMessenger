@@ -71,7 +71,9 @@ the same relay behavior.
 9. ESCALATE to the human operator — do not improvise — on: architecture
    direction, security/privacy trade-offs, tech-stack changes, API-contract
    breaks, release timing/versioning.
-10. Backlog order is `HANDOFF/todo/_QUEUE.md`; sequencing authority is
+10. Execution authority is the pointer at the top of `SHIP_PLAN.md` (currently
+    `HANDOFF/freebuff/queue/V051_UNIFIED_MERGE_TRAIN_2026-10-14.md`);
+    `HANDOFF/todo/_QUEUE.md` is backlog reference only; sequencing authority is
     `HANDOFF/V1_0_0_EXECUTION_PLAN.md` (operator-settled — do not relitigate).
 11. THIS CHECKOUT IS SHARED. Other agents and the operator work in it at the
     same time. Touch ONLY the files your task requires. Specifically:
@@ -424,6 +426,6 @@ re-queued, not merged.
 
 - `CLAUDE.md` — Claude-session superset (subagents, skills, hooks)
 - `docs/CLAUDE_REFERENCE.md` — build commands, module map, test inventory
-- `HANDOFF/todo/_QUEUE.md` — live dispatch order
+- `HANDOFF/todo/_QUEUE.md` — backlog reference only (execution authority: SHIP_PLAN.md pointer)
 - `HANDOFF/freebuff/` — Freebuff lane queue; `docs/rules/FREEBUFF.md` for its rules
 - `.claude/commands/orchestrate.md` + `docs/ORCHESTRATION.md` — the one unified orchestrator loop that verifies your work (the old per-backend commands are archived under `.claude/archive/commands/`)
