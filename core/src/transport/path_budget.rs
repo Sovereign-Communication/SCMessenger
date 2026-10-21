@@ -347,6 +347,15 @@ pub struct BudgetStats {
     pub peers: usize,
 }
 
+/// Model parameter: the hard ceiling is this multiple of the derived bound.
+/// Between the bound and the ceiling, paths inside their grace window stay
+/// pinned (an honest burst of new peers gets time to prove itself); above the
+/// ceiling, unauthenticated paths without traffic lose that protection, youngest
+/// first, so a connection flood cannot hold descriptors or memory past a fixed
+/// multiple of what the machine can afford. Authenticated paths and paths that
+/// carried validated traffic are never released by the ceiling.
+pub const HARD_CEILING_FACTOR: usize = 2;
+
 /// Resource-derived bounds across all peers (see `conn_resources`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TotalLimits {
@@ -978,6 +987,11 @@ where
     /// call can never take an authenticated peer's last path, nor drop a peer
     /// that had several paths to zero.
     ///
+    /// The total bound is soft for paths inside their grace window, but only up
+    /// to [`HARD_CEILING_FACTOR`] times the bound: past that ceiling the
+    /// unauthenticated, trafficless paths in grace are evictable too (youngest
+    /// first) until the counts are back at the ceiling.
+    ///
     /// `keep` (the connection that triggered the check) is never chosen.
     ///
     /// Victims are found by partial selection (`select_nth_unstable_by`) in
@@ -995,6 +1009,12 @@ where
         if excess_total == 0 && excess_fd == 0 {
             return Vec::new();
         }
+        // Grace-window paths released above the hard ceiling: how far each
+        // count is past the ceiling, so eviction stops once back at it.
+        let mut grace_release_total =
+            live_total.saturating_sub(limits.total.saturating_mul(HARD_CEILING_FACTOR));
+        let mut grace_release_fd =
+            live_fd.saturating_sub(limits.fd.saturating_mul(HARD_CEILING_FACTOR));
         #[derive(Clone, Copy)]
         struct Candidate<C, I> {
             peer: C,
@@ -1067,7 +1087,12 @@ where
                 // an earlier victim in this call may have been this peer's
                 // other path.
                 let left = remaining.get(&c.peer).copied().unwrap_or(0);
-                let pinned = c.authenticated || c.traffic || c.protected || c.peer_live > 1;
+                // A grace-window path is released only when it is neither
+                // authenticated nor carrying traffic and a count is past the
+                // hard ceiling (a descriptor-free path cannot relieve fd).
+                let grace_pinned = c.protected
+                    && !(grace_release_total > 0 || (c.uses_fd && grace_release_fd > 0));
+                let pinned = c.authenticated || c.traffic || grace_pinned || c.peer_live > 1;
                 if left <= 1 && pinned {
                     continue;
                 }
@@ -1080,6 +1105,12 @@ where
                 };
                 let due = mark_closing(&mut self.counts, path, now);
                 let class = path.class;
+                if c.protected && !c.authenticated && !c.traffic {
+                    grace_release_total = grace_release_total.saturating_sub(1);
+                    if c.uses_fd {
+                        grace_release_fd = grace_release_fd.saturating_sub(1);
+                    }
+                }
                 if let Some(n) = remaining.get_mut(&c.peer) {
                     *n = n.saturating_sub(1);
                 }
@@ -2089,6 +2120,42 @@ mod tests {
         let ev = ledger.evict_over_total(limits, at(base, 50_000), Some(4));
         assert_eq!(ev.len(), 4);
         assert!(!ev.iter().any(|e| e.id == 4));
+    }
+
+    #[test]
+    fn hard_ceiling_releases_only_unauthenticated_trafficless_grace_paths() {
+        let base = Instant::now();
+        let mut ledger = Ledger::new();
+        // Peer 1 is authenticated, peer 2 carries traffic; both are in grace.
+        ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.note_authenticated(1);
+        ledger.on_established(2, 2, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.stamp_traffic(&2, &2, at(base, 1));
+        // 20 more peers, all inside their grace windows.
+        for n in 0..20u32 {
+            ledger.on_established(
+                100 + n,
+                100 + n,
+                PathClass::WanV4,
+                rtt(),
+                at(base, 2 + u64::from(n)),
+            );
+        }
+        let limits = TotalLimits { total: 4, fd: 4 };
+        let ceiling = limits.total * HARD_CEILING_FACTOR;
+        let now = at(base, 100);
+        let ev = ledger.evict_over_total(limits, now, None);
+        assert_eq!(
+            ledger.occupancy().0,
+            ceiling,
+            "shed back to the ceiling only"
+        );
+        assert_eq!(ev.len(), 22 - ceiling);
+        assert!(!ev.iter().any(|e| e.id == 1 || e.id == 2), "{ev:?}");
+        // Youngest first: the oldest grace-window peers survive.
+        assert!(!ev.iter().any(|e| e.id == 100));
+        assert!(ev.iter().any(|e| e.id == 119));
+        assert!(ledger.counters_consistent());
     }
 
     #[test]

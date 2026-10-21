@@ -27,7 +27,9 @@ use super::mesh_routing::{
 };
 use crate::store::ledger_entry::{LedgerExchangeRequest, LedgerExchangeResponse, SharedPeerEntry};
 // Import mycorrhizal routing modules
-use super::envelope_gate::{contact_signed_envelope_earns_traffic, RecentEnvelopeIds};
+use super::envelope_gate::{
+    authenticated_parse_allowed, contact_signed_envelope_earns_traffic, RecentEnvelopeIds,
+};
 #[cfg(target_arch = "wasm32")]
 use super::multiport::MultiPortConfig;
 #[cfg(not(target_arch = "wasm32"))]
@@ -247,6 +249,11 @@ fn inbound_message_is_validated(
     }
     if !authenticated && !may_probe_stranger() {
         return false;
+    }
+    // Authenticated peers are admitted regardless; parsing only keeps replay IDs
+    // shared, so it is rate-limited per peer and skipped once over budget.
+    if authenticated && !authenticated_parse_allowed(recent_envelopes, peer_id) {
+        return true;
     }
     let payload = match DriftFrame::from_bytes(envelope_data) {
         Ok(frame) => frame.payload,

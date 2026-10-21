@@ -107,11 +107,17 @@ pub const SNAPSHOT_MAX_AGE_SAMPLES: u32 = 3;
 /// at most one line per category per quantum.
 pub const LOG_INTERVAL: Duration = EVAL_QUANTUM;
 
-/// Most non-known pending inbound connections admitted at zero headroom. Each
-/// distinct /24 gets one slot during fd exhaustion, but the total never
-/// exceeds this, so a source spread across many networks cannot open an
-/// unbounded number of sockets.
-pub const ZERO_HEADROOM_PENDING_CEILING: usize = 4;
+/// Model parameter: zero-headroom pending inbound slots are drawn from the
+/// descriptor reserve (the soft limit minus the connection share), and may use
+/// at most one `ZERO_HEADROOM_RESERVE_DIVISOR`-th of it. Each distinct /24 gets
+/// one slot during fd exhaustion, but the total never exceeds that share, so a
+/// source spread across many networks cannot open an unbounded number of
+/// sockets.
+pub const ZERO_HEADROOM_RESERVE_DIVISOR: usize = 16;
+
+/// Model parameter: zero-headroom ceiling used only while no descriptor limit
+/// is known, so no reserve can be derived.
+pub const ZERO_HEADROOM_FALLBACK_CEILING: usize = 4;
 
 // ---------------------------------------------------------------------------
 // OS exhaustion detection
@@ -980,6 +986,20 @@ impl AdmissionBehaviour {
         }
     }
 
+    /// Most general pending inbound connections admitted at zero headroom:
+    /// a share of the descriptor reserve (soft limit minus the connection
+    /// share), at least one, or the fallback when no limit is known.
+    fn zero_headroom_ceiling(&self) -> usize {
+        self.snapshot
+            .fd_soft_limit
+            .map_or(ZERO_HEADROOM_FALLBACK_CEILING, |limit| {
+                let reserve = usize::try_from(limit)
+                    .unwrap_or(usize::MAX)
+                    .saturating_sub(connection_fd_share(limit));
+                (reserve / ZERO_HEADROOM_RESERVE_DIVISOR).max(1)
+            })
+    }
+
     /// Why a new pending inbound from `src` must be refused while `cap` is in
     /// force (None: admit). Known sources have their own allowance, one
     /// concurrent handshake per known address, so a flood cannot starve a
@@ -997,10 +1017,10 @@ impl AdmissionBehaviour {
         // Zero headroom: a source on a /24 with no pending connection still gets
         // one slot, so a roaming contact on a new network is not refused during
         // fd exhaustion. A second source from an already-pending /24 is shed, and
-        // the slots are capped in total at ZERO_HEADROOM_PENDING_CEILING.
+        // the slots are capped in total at `zero_headroom_ceiling`.
         let new_prefix =
             src.is_some_and(|ip| !self.pending_by_prefix.contains_key(&source_prefix(ip)));
-        let zero_headroom_slot = cap == 0 && new_prefix && general < ZERO_HEADROOM_PENDING_CEILING;
+        let zero_headroom_slot = cap == 0 && new_prefix && general < self.zero_headroom_ceiling();
         if general >= cap && !zero_headroom_slot {
             return Some("cap");
         }
@@ -1038,8 +1058,9 @@ impl AdmissionBehaviour {
         let evictions = self.ledger.evict_over_total(derived.limits, now, keep);
         self.queue(evictions, now);
         // A peer's last path is pinned while authenticated, trafficked or in
-        // grace, so the bound can stay exceeded. Report it as a soft bound
-        // rather than evicting those peers.
+        // grace, so the bound can stay exceeded (grace-window paths only up to
+        // the hard ceiling, `HARD_CEILING_FACTOR` times the bound). Report it as
+        // a soft bound rather than evicting authenticated or trafficked peers.
         let after = self.occupancy();
         if after.total > derived.limits.total || after.fd > derived.limits.fd {
             if let Some(suppressed) = self.soft_bound_log.permit(now, LOG_INTERVAL) {
@@ -1544,23 +1565,26 @@ mod tests {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         // 40 single-path peers arrive inside one quantum. Each is inside its
-        // own grace window, so none is a victim yet: the total bound is soft
-        // until the window has passed.
+        // own grace window, so the total bound (4) is soft up to the hard
+        // ceiling (HARD_CEILING_FACTOR times the bound). Past the ceiling the
+        // youngest grace-window paths are shed, holding occupancy at the ceiling.
+        let ceiling = 4 * crate::transport::path_budget::HARD_CEILING_FACTOR;
         for n in 0..40usize {
             b.path_established(PeerId::random(), cid(n), &wan(), true, at(base, n as u64));
         }
         assert_eq!(
             b.ledger.occupancy().0,
-            40,
-            "protected paths are never shed early"
+            ceiling,
+            "grace-window paths are shed only above the hard ceiling"
         );
-        assert!(drain(&mut b).is_empty());
-        // One arrival after every grace window has closed sheds the excess
-        // (41 paths against a bound of 4) in one pass, logged once per reason.
+        assert_eq!(drain(&mut b).len(), 40 - ceiling);
+        // One arrival after every grace window has closed sheds the rest of
+        // the excess (ceiling + 1 paths against a bound of 4) in one pass,
+        // logged once per reason.
         b.path_established(PeerId::random(), cid(40), &wan(), true, at(base, 60_000));
-        assert_eq!(drain(&mut b).len(), 37);
+        assert_eq!(drain(&mut b).len(), ceiling + 1 - 4);
         let gate = b.evict_logs.get("over-total").expect("gate exists");
-        assert!(gate.suppressed >= 30, "suppressed: {}", gate.suppressed);
+        assert!(gate.suppressed >= 4, "suppressed: {}", gate.suppressed);
     }
 
     // ---- total bound ------------------------------------------------------
@@ -2356,9 +2380,13 @@ mod tests {
     #[test]
     fn zero_headroom_total_is_capped_across_many_slash24s() {
         let mut b = AdmissionBehaviour::new();
+        // A soft limit of 128 leaves a reserve of 64 descriptors.
+        b.snapshot.fd_soft_limit = Some(128);
+        let ceiling = b.zero_headroom_ceiling();
+        assert_eq!(ceiling, 64 / ZERO_HEADROOM_RESERVE_DIVISOR);
         let now = Instant::now();
         // Each distinct /24 gets its one slot until the global ceiling is reached.
-        for net in 1..=ZERO_HEADROOM_PENDING_CEILING as u8 {
+        for net in 1..=ceiling as u8 {
             let src = src_ip(1, net);
             assert_eq!(
                 b.pending_refusal(0, Some(src)),
@@ -2367,9 +2395,9 @@ mod tests {
             );
             b.track_pending(cid(usize::from(net)), now, true, Some(src));
         }
-        assert_eq!(b.pending_inbound, ZERO_HEADROOM_PENDING_CEILING);
+        assert_eq!(b.pending_inbound, ceiling);
         // A new /24 past the ceiling is shed, and so is another source on a pending /24.
-        let beyond = ZERO_HEADROOM_PENDING_CEILING as u8 + 1;
+        let beyond = ceiling as u8 + 1;
         assert_eq!(b.pending_refusal(0, Some(src_ip(1, beyond))), Some("cap"));
         assert_eq!(b.pending_refusal(0, Some(src_ip(2, 1))), Some("cap"));
     }

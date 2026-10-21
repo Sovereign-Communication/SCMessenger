@@ -12,72 +12,144 @@
 //! - The age window is `drift::envelope::DEFAULT_TTL_SECS`, the single source for
 //!   the envelope lifetime.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-/// Largest future skew accepted on an envelope's `created_at`, in seconds.
+/// Model parameter: largest future skew accepted on an envelope's `created_at`,
+/// in seconds. Bounds honest clock disagreement between two devices; it is a
+/// tolerance, not a capacity, so it has no derivation from resource state.
 const ENVELOPE_MAX_FUTURE_SKEW_SECS: u32 = 300;
 /// Oldest `created_at` that still earns a traffic bit: the default envelope
 /// TTL, so anything older has expired on its own terms.
 const ENVELOPE_MAX_AGE_SECS: u32 = crate::drift::envelope::DEFAULT_TTL_SECS;
-/// Most message IDs the replay record holds at once. Each ID is kept for its
-/// whole freshness window. At the cap, contact-signed traffic awards pause
-/// until every envelope observed without a replay record has expired.
+/// Model parameter: most message IDs the replay record holds at once. At 16 bytes
+/// of ID plus index overhead this is a few tens of MiB at worst. When full, the
+/// ID with the earliest expiry is evicted; a replay of an evicted ID can only
+/// re-earn one traffic bit, it cannot block other signers.
 const RECENT_ENVELOPE_IDS_CAP: usize = 262_144;
+/// Model parameter: the record is shared by at most this many full-quota
+/// signers, so one saved contact can hold only `1 / SIGNER_QUOTA_DIVISOR` of it.
+const SIGNER_QUOTA_DIVISOR: usize = 64;
+/// Most replay IDs a single signer may hold at once, derived from the cap.
+const SIGNER_IDS_CAP: usize = RECENT_ENVELOPE_IDS_CAP / SIGNER_QUOTA_DIVISOR;
+
+/// Model parameter: envelope parses plus signature verifications one
+/// authenticated peer may trigger on the swarm event loop per second. Past it
+/// the request is still admitted (authenticated standing is unchanged) but is
+/// not parsed, so it cannot earn or record anything at the gate.
+const AUTHENTICATED_PARSES_PER_SEC: u32 = 8;
+/// Model parameter: most peers the parse-budget table tracks. Entries older than
+/// the current second are dropped when it fills; peers beyond it are not parsed.
+const PARSE_BUDGET_PEERS_CAP: usize = 1_024;
+
+type SignerKey = [u8; 32];
 
 /// Message IDs that earned the contact-signed traffic bit, each kept until its
 /// envelope falls out of the freshness window. A captured envelope replayed
-/// while still fresh cannot earn the bit again, however many other envelopes
-/// have arrived in between.
+/// while still fresh cannot earn the bit again unless capacity pressure evicted
+/// it first. Capacity is bounded globally and per signer; eviction removes the
+/// entry that expires soonest.
 #[derive(Default)]
 pub(super) struct RecentEnvelopeIds {
-    /// Message ID -> last unix second at which it is still fresh.
-    until: HashMap<[u8; 16], u32>,
-    /// Expiry second -> IDs expiring then, so pruning walks in time order.
-    by_expiry: std::collections::BTreeMap<u32, Vec<[u8; 16]>>,
-    /// Last fresh second among IDs observed while the replay record was full.
-    /// No unrecorded ID may earn a traffic bit until this second has passed.
-    saturated_until: Option<u32>,
+    /// Message ID -> (last unix second at which it is still fresh, signer).
+    until: HashMap<[u8; 16], (u32, SignerKey)>,
+    /// (Expiry second, ID) in time order, so pruning and eviction walk oldest first.
+    by_expiry: BTreeSet<(u32, [u8; 16])>,
+    /// Per-signer (expiry second, ID) index enforcing the per-signer quota.
+    by_signer: HashMap<SignerKey, BTreeSet<(u32, [u8; 16])>>,
+    /// Peer -> (unix second of the current window, parses used in it).
+    parse_budget: HashMap<libp2p::PeerId, (u32, u32)>,
 }
 
 impl RecentEnvelopeIds {
-    /// Records `id` and returns true when it was not already in its window.
-    /// An envelope stays fresh through `created_at + ENVELOPE_MAX_AGE_SECS`,
+    /// Records `id` from `signer` and returns true when it was not already in its
+    /// window. An envelope stays fresh through `created_at + ENVELOPE_MAX_AGE_SECS`,
     /// subject to the exclusive `ttl_expiry`. Remember its ID through the last
-    /// second it can pass. If the record is full, the ID cannot be recorded;
-    /// all new IDs are then refused until the freshness windows of every
-    /// unrecorded ID observed during saturation have passed.
-    fn first_seen(&mut self, id: [u8; 16], created_at: u32, ttl_expiry: u32, now: u32) -> bool {
+    /// second it can pass. At the signer quota that signer's soonest-expiring ID
+    /// is evicted, and at the global cap the soonest-expiring ID overall is.
+    fn first_seen(
+        &mut self,
+        id: [u8; 16],
+        signer: SignerKey,
+        created_at: u32,
+        ttl_expiry: u32,
+        now: u32,
+    ) -> bool {
         self.prune(now);
         if self.until.contains_key(&id) {
             return false;
         }
         let until = last_fresh_second(created_at, ttl_expiry);
-        if let Some(saturated_until) = self.saturated_until.filter(|until| *until >= now) {
-            self.saturated_until = Some(saturated_until.max(until));
-            return false;
+        let signer_full = self
+            .by_signer
+            .get(&signer)
+            .is_some_and(|ids| ids.len() >= SIGNER_IDS_CAP);
+        if signer_full {
+            let victim = self
+                .by_signer
+                .get(&signer)
+                .and_then(|ids| ids.first().copied());
+            if let Some((_, victim_id)) = victim {
+                self.remove(&victim_id);
+            }
         }
         if self.until.len() >= RECENT_ENVELOPE_IDS_CAP {
-            self.saturated_until = Some(until);
+            if let Some((_, victim_id)) = self.by_expiry.first().copied() {
+                self.remove(&victim_id);
+            }
+        }
+        self.until.insert(id, (until, signer));
+        self.by_expiry.insert((until, id));
+        self.by_signer
+            .entry(signer)
+            .or_default()
+            .insert((until, id));
+        true
+    }
+
+    /// Charges one envelope parse to `peer` for second `now`; false when the
+    /// peer has used its per-second budget or the table is full of live peers.
+    fn charge_parse(&mut self, peer: libp2p::PeerId, now: u32) -> bool {
+        if self.parse_budget.len() >= PARSE_BUDGET_PEERS_CAP {
+            self.parse_budget.retain(|_, (window, _)| *window == now);
+        }
+        if self.parse_budget.len() >= PARSE_BUDGET_PEERS_CAP
+            && !self.parse_budget.contains_key(&peer)
+        {
             return false;
         }
-        self.until.insert(id, until);
-        self.by_expiry.entry(until).or_default().push(id);
+        let entry = self.parse_budget.entry(peer).or_insert((now, 0));
+        if entry.0 != now {
+            *entry = (now, 0);
+        }
+        if entry.1 >= AUTHENTICATED_PARSES_PER_SEC {
+            return false;
+        }
+        entry.1 += 1;
         true
+    }
+
+    /// Drops one ID from every index.
+    fn remove(&mut self, id: &[u8; 16]) {
+        let Some((until, signer)) = self.until.remove(id) else {
+            return;
+        };
+        self.by_expiry.remove(&(until, *id));
+        if let Some(ids) = self.by_signer.get_mut(&signer) {
+            ids.remove(&(until, *id));
+            if ids.is_empty() {
+                self.by_signer.remove(&signer);
+            }
+        }
     }
 
     /// Forgets IDs whose envelopes can no longer pass the freshness check, which
     /// fails only once `now` is past `until`.
     fn prune(&mut self, now: u32) {
-        while let Some(entry) = self.by_expiry.first_entry() {
-            if *entry.key() >= now {
+        while let Some((until, id)) = self.by_expiry.first().copied() {
+            if until >= now {
                 break;
             }
-            for id in entry.remove() {
-                self.until.remove(&id);
-            }
-        }
-        if self.saturated_until.is_some_and(|until| until < now) {
-            self.saturated_until = None;
+            self.remove(&id);
         }
     }
 }
@@ -111,8 +183,10 @@ fn envelope_is_fresh(created_at: u32, ttl_expiry: u32, now: u32) -> bool {
 /// and be fresh, and its message ID must not have earned the bit recently. The
 /// replay record is written last, so only envelopes that pass every other check
 /// fill it.
+#[allow(clippy::too_many_arguments)]
 fn contact_envelope_earns_traffic(
     message_id: [u8; 16],
+    signer: SignerKey,
     created_at: u32,
     ttl_expiry: u32,
     signer_is_contact: bool,
@@ -123,7 +197,7 @@ fn contact_envelope_earns_traffic(
     signer_is_contact
         && recipient_matches
         && envelope_is_fresh(created_at, ttl_expiry, now)
-        && recent.first_seen(message_id, created_at, ttl_expiry, now)
+        && recent.first_seen(message_id, signer, created_at, ttl_expiry, now)
 }
 
 fn unix_now_secs() -> u32 {
@@ -133,6 +207,15 @@ fn unix_now_secs() -> u32 {
         .ok()
         .and_then(|d| u32::try_from(d.as_secs()).ok())
         .unwrap_or(0)
+}
+
+/// Whether an authenticated peer may have this message parsed and verified now.
+/// Rate-limits the event-loop cost an authenticated peer can impose per second.
+pub(super) fn authenticated_parse_allowed(
+    recent: &mut RecentEnvelopeIds,
+    peer: libp2p::PeerId,
+) -> bool {
+    recent.charge_parse(peer, unix_now_secs())
 }
 
 /// True when the signer of a Drift envelope (signature verified) is a saved
@@ -169,6 +252,7 @@ pub(super) fn contact_signed_envelope_earns_traffic(
         .is_some();
     contact_envelope_earns_traffic(
         envelope.message_id,
+        envelope.sender_public_key,
         envelope.created_at,
         envelope.ttl_expiry,
         signer_is_contact,
@@ -183,6 +267,13 @@ mod contact_envelope_gate_tests {
     use super::*;
 
     const NOW: u32 = 1_800_000_000;
+    const SIGNER: SignerKey = [1u8; 32];
+
+    fn signer(n: u64) -> SignerKey {
+        let mut out = [0u8; 32];
+        out[..8].copy_from_slice(&n.to_be_bytes());
+        out
+    }
 
     fn id(n: u64) -> [u8; 16] {
         let mut out = [0u8; 16];
@@ -223,8 +314,8 @@ mod contact_envelope_gate_tests {
     #[test]
     fn recent_ids_reject_repeat_within_window() {
         let mut recent = RecentEnvelopeIds::default();
-        assert!(recent.first_seen(id(0), NOW, 0, NOW));
-        assert!(!recent.first_seen(id(0), NOW, 0, NOW + 1));
+        assert!(recent.first_seen(id(0), SIGNER, NOW, 0, NOW));
+        assert!(!recent.first_seen(id(0), SIGNER, NOW, 0, NOW + 1));
     }
 
     #[test]
@@ -232,6 +323,7 @@ mod contact_envelope_gate_tests {
         let mut recent = RecentEnvelopeIds::default();
         assert!(contact_envelope_earns_traffic(
             id(0),
+            SIGNER,
             NOW,
             0,
             true,
@@ -241,12 +333,13 @@ mod contact_envelope_gate_tests {
         ));
         // Far more than the old 4,096-entry LRU could hold, all still in window.
         for n in 1..=5_000u64 {
-            assert!(recent.first_seen(id(n), NOW, 0, NOW + 1));
+            assert!(recent.first_seen(id(n), signer(100 + n % 8), NOW, 0, NOW + 1));
         }
         // The first envelope is still fresh, so its replay must not earn the bit.
         assert!(envelope_is_fresh(NOW, 0, NOW + 2));
         assert!(!contact_envelope_earns_traffic(
             id(0),
+            SIGNER,
             NOW,
             0,
             true,
@@ -259,29 +352,31 @@ mod contact_envelope_gate_tests {
     #[test]
     fn replay_stays_rejected_through_the_last_fresh_second() {
         let mut recent = RecentEnvelopeIds::default();
-        assert!(recent.first_seen(id(1), NOW, 0, NOW));
+        assert!(recent.first_seen(id(1), SIGNER, NOW, 0, NOW));
         let last = NOW + ENVELOPE_MAX_AGE_SECS;
         assert!(envelope_is_fresh(NOW, 0, last));
-        assert!(!recent.first_seen(id(1), NOW, 0, last));
+        assert!(!recent.first_seen(id(1), SIGNER, NOW, 0, last));
         // One second later the envelope is stale, and its ID is forgotten.
         assert!(!envelope_is_fresh(NOW, 0, last + 1));
         recent.prune(last + 1);
         assert!(recent.until.is_empty());
         assert!(recent.by_expiry.is_empty());
+        assert!(recent.by_signer.is_empty());
     }
 
     #[test]
-    fn saturation_quarantines_unrecorded_ids_until_their_freshness_windows_end() {
+    fn full_record_evicts_soonest_expiring_id_instead_of_blocking() {
         let mut recent = RecentEnvelopeIds::default();
+        // Fill the record from many signers, each under its own quota.
         for n in 0..RECENT_ENVELOPE_IDS_CAP as u64 {
-            assert!(recent.first_seen(id(n), NOW, NOW + 2, NOW));
+            assert!(recent.first_seen(id(n), signer(n % 128), NOW, NOW + 2, NOW));
         }
         assert_eq!(recent.until.len(), RECENT_ENVELOPE_IDS_CAP);
-        let unrecorded_id = id(RECENT_ENVELOPE_IDS_CAP as u64);
-        // Full: refuse this still-fresh envelope and remember its last-fresh
-        // second in the bounded overflow quarantine.
-        assert!(!contact_envelope_earns_traffic(
-            unrecorded_id,
+        // A new signer is not blocked; the soonest-expiring entry makes room.
+        let new_id = id(RECENT_ENVELOPE_IDS_CAP as u64);
+        assert!(contact_envelope_earns_traffic(
+            new_id,
+            signer(9_999),
             NOW,
             NOW + 100,
             true,
@@ -289,62 +384,54 @@ mod contact_envelope_gate_tests {
             NOW,
             &mut recent
         ));
-        assert_eq!(recent.saturated_until, Some(NOW + 99));
+        assert_eq!(recent.until.len(), RECENT_ENVELOPE_IDS_CAP);
+        assert!(recent.until.contains_key(&new_id));
+        // Its replay is still rejected while it is recorded.
+        assert!(!recent.first_seen(new_id, signer(9_999), NOW, NOW + 100, NOW));
+    }
 
-        // The recorded IDs expire and free the map, but a replay of the
-        // unrecorded envelope cannot earn during its original freshness window.
-        assert!(!contact_envelope_earns_traffic(
-            unrecorded_id,
-            NOW,
-            NOW + 100,
-            true,
-            true,
-            NOW + 2,
-            &mut recent
-        ));
-        assert!(recent.until.is_empty());
-        assert_eq!(recent.saturated_until, Some(NOW + 99));
+    #[test]
+    fn one_signer_cannot_consume_more_than_its_quota() {
+        let mut recent = RecentEnvelopeIds::default();
+        let hostile = signer(7);
+        for n in 0..(SIGNER_IDS_CAP as u64 * 2) {
+            assert!(recent.first_seen(id(n), hostile, NOW, 0, NOW));
+        }
+        assert_eq!(
+            recent.by_signer.get(&hostile).map(|ids| ids.len()),
+            Some(SIGNER_IDS_CAP)
+        );
+        assert_eq!(recent.until.len(), SIGNER_IDS_CAP);
+        // Another signer is unaffected.
+        assert!(recent.first_seen(id(u64::MAX), signer(8), NOW, 0, NOW));
+        assert_eq!(recent.until.len(), SIGNER_IDS_CAP + 1);
+    }
 
-        // Unrecorded IDs observed during quarantine extend it to cover their
-        // own freshness windows, including bounded future clock skew.
-        let later_created_at = NOW + ENVELOPE_MAX_FUTURE_SKEW_SECS;
-        let later_last_fresh = last_fresh_second(later_created_at, 0);
-        assert!(!contact_envelope_earns_traffic(
-            id(RECENT_ENVELOPE_IDS_CAP as u64 + 1),
-            later_created_at,
-            0,
-            true,
-            true,
-            NOW + 2,
-            &mut recent
-        ));
-        assert_eq!(recent.saturated_until, Some(later_last_fresh));
-        recent.prune(later_last_fresh);
-        assert_eq!(recent.saturated_until, Some(later_last_fresh));
-        recent.prune(later_last_fresh + 1);
-        assert_eq!(recent.saturated_until, None);
-
-        // Once every unrecorded ID is stale, fresh IDs can earn again.
-        assert!(recent.first_seen(
-            id(RECENT_ENVELOPE_IDS_CAP as u64 + 2),
-            later_last_fresh + 1,
-            0,
-            later_last_fresh + 1
-        ));
-        assert_eq!(recent.until.len(), 1);
+    #[test]
+    fn parse_budget_limits_each_peer_per_second_and_resets_next_second() {
+        let mut recent = RecentEnvelopeIds::default();
+        let peer = libp2p::PeerId::random();
+        let other = libp2p::PeerId::random();
+        for _ in 0..AUTHENTICATED_PARSES_PER_SEC {
+            assert!(recent.charge_parse(peer, NOW));
+        }
+        assert!(!recent.charge_parse(peer, NOW));
+        assert!(recent.charge_parse(other, NOW));
+        assert!(recent.charge_parse(peer, NOW + 1));
     }
 
     #[test]
     fn recent_ids_are_pruned_when_their_earlier_ttl_expires() {
         let mut recent = RecentEnvelopeIds::default();
-        assert!(recent.first_seen(id(1), NOW, NOW + 2, NOW));
+        assert!(recent.first_seen(id(1), SIGNER, NOW, NOW + 2, NOW));
         assert_eq!(recent.until.get(&id(1)), Some(&(NOW + 1)));
 
         // TTL is exclusive, so the envelope is no longer fresh at NOW + 2.
         recent.prune(NOW + 2);
         assert!(recent.until.is_empty());
         assert!(recent.by_expiry.is_empty());
-        assert!(recent.first_seen(id(2), NOW + 2, NOW + 3, NOW + 2));
+        assert!(recent.by_signer.is_empty());
+        assert!(recent.first_seen(id(2), SIGNER, NOW + 2, NOW + 3, NOW + 2));
     }
 
     #[test]
@@ -352,6 +439,7 @@ mod contact_envelope_gate_tests {
         let mut recent = RecentEnvelopeIds::default();
         assert!(contact_envelope_earns_traffic(
             id(7),
+            SIGNER,
             NOW,
             0,
             true,
@@ -361,6 +449,7 @@ mod contact_envelope_gate_tests {
         ));
         assert!(!contact_envelope_earns_traffic(
             id(7),
+            SIGNER,
             NOW,
             0,
             true,
@@ -376,6 +465,7 @@ mod contact_envelope_gate_tests {
         // A stranger-signed envelope earns nothing and is not recorded.
         assert!(!contact_envelope_earns_traffic(
             id(9),
+            SIGNER,
             NOW,
             0,
             false,
@@ -387,6 +477,7 @@ mod contact_envelope_gate_tests {
         // A stale envelope earns nothing and is not recorded.
         assert!(!contact_envelope_earns_traffic(
             id(9),
+            SIGNER,
             NOW - ENVELOPE_MAX_AGE_SECS - 1,
             0,
             true,
@@ -398,6 +489,7 @@ mod contact_envelope_gate_tests {
         // The same ID, once fresh and from a contact, still earns the bit.
         assert!(contact_envelope_earns_traffic(
             id(9),
+            SIGNER,
             NOW,
             0,
             true,
@@ -412,6 +504,7 @@ mod contact_envelope_gate_tests {
         let mut recent = RecentEnvelopeIds::default();
         assert!(!contact_envelope_earns_traffic(
             id(10),
+            SIGNER,
             NOW,
             0,
             true,
@@ -422,6 +515,7 @@ mod contact_envelope_gate_tests {
         assert!(recent.until.is_empty());
         assert!(contact_envelope_earns_traffic(
             id(10),
+            SIGNER,
             NOW,
             0,
             true,
