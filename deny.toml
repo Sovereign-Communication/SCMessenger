@@ -32,6 +32,12 @@ ignore = [
     "RUSTSEC-2026-0370",
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0372",
+    # RUSTSEC-2026-0381 also flags webpki-roots 0.26.11 (patched = >=1.0.10;
+    # no patched release exists in the 0.26 series). The 1.x line is bumped
+    # to 1.0.10 in Cargo.lock. The 0.26 line is pulled by tokio-tungstenite
+    # 0.24 (rustls 0.22) and ureq 2.x - upgrading those is a major dependency
+    # upgrade, tracked separately. Transitive, no safe upgrade available.
+    "RUSTSEC-2026-0381",
 ]
 
 [licenses]
