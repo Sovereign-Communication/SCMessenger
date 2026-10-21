@@ -58,6 +58,47 @@ impl EnergyClass {
 /// must not be churned by a gossip burst that exceeds max_gateways.
 const MIN_GATEWAY_AGE_BEFORE_EVICT_SECS: u64 = 30;
 
+/// Maximum neighborhood summaries accepted in a single gossip message.
+pub const MAX_GOSSIP_SUMMARIES: usize = 64;
+/// Maximum recipient hints accepted per cell/neighborhood summary.
+pub const MAX_HINTS_PER_SUMMARY: usize = 256;
+/// Maximum neighborhood summaries retained in the table (bounds memory
+/// growth from repeated hostile gossip carrying distinct hint sets).
+pub const MAX_STORED_SUMMARIES: usize = 512;
+/// Upper bound on any peer-claimed reachable-peer count.
+pub const MAX_CLAIMED_REACHABLE: u32 = 10_000_000;
+/// How far into the future (seconds) a peer-supplied timestamp may be.
+/// A far-future timestamp would otherwise always look "fresher" than honest
+/// data and would never age out in `cleanup`.
+pub const MAX_GOSSIP_FUTURE_SKEW_SECS: u64 = 300;
+
+/// Why an incoming gossip message was rejected. Rejection is atomic: no
+/// table state is mutated when any of these is returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GossipRejection {
+    /// Sender id is the all-zero (unset) peer id.
+    #[error("gossip sender peer id is the all-zero id")]
+    InvalidPeerId,
+    /// Sender id equals our own peer id.
+    #[error("gossip claims to originate from the local peer")]
+    SelfReferential,
+    /// More than `MAX_GOSSIP_SUMMARIES` summaries.
+    #[error("gossip carries too many neighborhood summaries")]
+    TooManySummaries,
+    /// A summary carries more than `MAX_HINTS_PER_SUMMARY` hints.
+    #[error("gossip summary carries too many recipient hints")]
+    TooManyHints,
+    /// A reliability value is NaN, infinite, or outside 0.0..=1.0.
+    #[error("gossip reliability value out of range")]
+    InvalidReliability,
+    /// A claimed peer count exceeds `MAX_CLAIMED_REACHABLE`.
+    #[error("gossip claimed reachable count out of range")]
+    InvalidCount,
+    /// A timestamp is further in the future than the allowed skew.
+    #[error("gossip timestamp is too far in the future")]
+    FutureTimestamp,
+}
+
 /// Information about a gateway peer that connects to other cells
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GatewayInfo {
@@ -112,6 +153,8 @@ pub struct NeighborhoodTable {
     max_gateways: usize,
     /// Maximum hop count we accept in gossip (prevent routing loops)
     max_hops: u8,
+    /// Our own peer id, when known; gossip claiming to come from it is rejected.
+    local_peer_id: Option<PeerId>,
 }
 
 impl NeighborhoodTable {
@@ -123,7 +166,13 @@ impl NeighborhoodTable {
             max_staleness: 3600, // 1 hour
             max_gateways: 100,
             max_hops: 4,
+            local_peer_id: None,
         }
+    }
+
+    /// Record our own peer id so self-originated gossip can be rejected.
+    pub fn set_local_peer_id(&mut self, local_peer_id: PeerId) {
+        self.local_peer_id = Some(local_peer_id);
     }
 
     /// Create with custom max staleness
@@ -134,6 +183,7 @@ impl NeighborhoodTable {
             max_staleness,
             max_gateways: 100,
             max_hops: 4,
+            local_peer_id: None,
         }
     }
 
@@ -220,8 +270,76 @@ impl NeighborhoodTable {
         base_cost * energy_mult / reliability
     }
 
-    /// Process incoming gossip from a peer (they share their neighborhood knowledge)
-    pub fn process_gossip(&mut self, from_peer: PeerId, gossip: NeighborhoodGossip) {
+    fn validate_reliability(value: f64) -> Result<(), GossipRejection> {
+        if value.is_finite() && (0.0..=1.0).contains(&value) {
+            Ok(())
+        } else {
+            Err(GossipRejection::InvalidReliability)
+        }
+    }
+
+    fn validate_timestamp(ts: u64, now: u64) -> Result<(), GossipRejection> {
+        if ts > now.saturating_add(MAX_GOSSIP_FUTURE_SKEW_SECS) {
+            Err(GossipRejection::FutureTimestamp)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Validate an entire gossip message before any state is touched.
+    fn validate_gossip(
+        &self,
+        from_peer: &PeerId,
+        gossip: &NeighborhoodGossip,
+        now: u64,
+    ) -> Result<(), GossipRejection> {
+        if *from_peer == [0u8; 32] {
+            return Err(GossipRejection::InvalidPeerId);
+        }
+        if self.local_peer_id.as_ref() == Some(from_peer) {
+            return Err(GossipRejection::SelfReferential);
+        }
+        Self::validate_timestamp(gossip.timestamp, now)?;
+        if gossip.neighborhood_summaries.len() > MAX_GOSSIP_SUMMARIES {
+            return Err(GossipRejection::TooManySummaries);
+        }
+
+        let local = &gossip.local_summary;
+        if local.reachable_hints.len() > MAX_HINTS_PER_SUMMARY {
+            return Err(GossipRejection::TooManyHints);
+        }
+        if local.peer_count > MAX_CLAIMED_REACHABLE || local.gateway_count > MAX_CLAIMED_REACHABLE {
+            return Err(GossipRejection::InvalidCount);
+        }
+        Self::validate_reliability(local.avg_reliability)?;
+        Self::validate_timestamp(local.timestamp, now)?;
+
+        for summary in &gossip.neighborhood_summaries {
+            if summary.reachable_hints.len() > MAX_HINTS_PER_SUMMARY {
+                return Err(GossipRejection::TooManyHints);
+            }
+            if summary.total_reachable > MAX_CLAIMED_REACHABLE {
+                return Err(GossipRejection::InvalidCount);
+            }
+            Self::validate_reliability(summary.path_reliability)?;
+            Self::validate_timestamp(summary.timestamp, now)?;
+        }
+        Ok(())
+    }
+
+    /// Process incoming gossip from a peer (they share their neighborhood knowledge).
+    ///
+    /// The whole message is validated first (sender id, sizes, reliability
+    /// and count ranges, timestamps); a hostile message is rejected without
+    /// mutating any state. Individual summaries whose hop count would exceed
+    /// our limit are skipped (not an error: honest distant peers send them).
+    pub fn process_gossip(
+        &mut self,
+        from_peer: PeerId,
+        gossip: NeighborhoodGossip,
+    ) -> Result<(), GossipRejection> {
+        self.validate_gossip(&from_peer, &gossip, current_timestamp())?;
+
         // The local summary tells us about the peer's local cell
         let hops = 1; // Direct peer is 1 hop away
 
@@ -235,10 +353,12 @@ impl NeighborhoodTable {
         );
 
         // Process their neighborhood knowledge
-        let _now = current_timestamp();
         for neighbor_summary in gossip.neighborhood_summaries {
-            // Add hops (they were N hops away, we're 1 hop from them)
-            let our_hops = neighbor_summary.hop_count + 1;
+            // Add hops (they were N hops away, we're 1 hop from them).
+            // checked_add: a hostile hop_count of 255 must not overflow.
+            let Some(our_hops) = neighbor_summary.hop_count.checked_add(1) else {
+                continue;
+            };
 
             // Only accept if still within our limits
             if our_hops <= self.max_hops {
@@ -257,20 +377,21 @@ impl NeighborhoodTable {
                         };
                     }
                 } else {
-                    // Add new summary
-                    self.summaries.push(NeighborhoodSummary {
+                    let candidate = NeighborhoodSummary {
                         total_reachable: neighbor_summary.total_reachable,
                         reachable_hints: neighbor_summary.reachable_hints,
                         path_reliability: neighbor_summary.path_reliability,
                         hop_count: our_hops,
                         timestamp: gossip.timestamp,
-                    });
+                    };
+                    self.insert_bounded_summary(candidate);
                 }
             }
         }
 
         // Rebuild and deduplicate
         self.rebuild_summaries();
+        Ok(())
     }
 
     /// Generate gossip to share with a peer
@@ -310,11 +431,11 @@ impl NeighborhoodTable {
 
         // Remove stale gateways
         self.gateways
-            .retain(|_, gateway| now - gateway.last_updated <= self.max_staleness);
+            .retain(|_, gateway| now.saturating_sub(gateway.last_updated) <= self.max_staleness);
 
         // Remove stale neighborhood summaries
         self.summaries
-            .retain(|summary| now - summary.timestamp <= self.max_staleness);
+            .retain(|summary| now.saturating_sub(summary.timestamp) <= self.max_staleness);
 
         initial_count - self.gateways.len()
     }
@@ -360,6 +481,37 @@ impl NeighborhoodTable {
     }
 
     /// Rebuild neighborhood summaries (deduplicate and clean)
+    /// Insert a summary, keeping at most `MAX_STORED_SUMMARIES`. When full, the
+    /// weakest stored entry (lowest reliability, then stalest) is evicted to
+    /// make room, but only if the candidate ranks strictly above it; otherwise
+    /// the candidate is dropped. First-come entries therefore cannot pin the
+    /// table against fresher or better-measured knowledge.
+    fn insert_bounded_summary(&mut self, candidate: NeighborhoodSummary) {
+        if self.summaries.len() < MAX_STORED_SUMMARIES {
+            self.summaries.push(candidate);
+            return;
+        }
+        let rank = |s: &NeighborhoodSummary| (s.path_reliability, s.timestamp);
+        let weakest = self
+            .summaries
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                rank(a)
+                    .partial_cmp(&rank(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = weakest {
+            if rank(&candidate)
+                .partial_cmp(&rank(&self.summaries[i]))
+                .is_some_and(|o| o == std::cmp::Ordering::Greater)
+            {
+                self.summaries[i] = candidate;
+            }
+        }
+    }
+
     fn rebuild_summaries(&mut self) {
         // Deduplicate by reachable hints (prefer freshest)
         let mut unique_summaries: HashMap<Vec<[u8; 8]>, NeighborhoodSummary> = HashMap::new();
@@ -578,7 +730,7 @@ mod tests {
             energy_class: EnergyClass::default(),
         };
 
-        table.process_gossip(peer_id, gossip);
+        table.process_gossip(peer_id, gossip).expect("valid gossip");
 
         // Should have 1 gateway (the direct peer)
         assert_eq!(table.gateway_count(), 1);
@@ -617,7 +769,7 @@ mod tests {
             energy_class: EnergyClass::default(),
         };
 
-        table.process_gossip(peer_id, gossip);
+        table.process_gossip(peer_id, gossip).expect("valid gossip");
 
         // Should not add the distant summary since it would exceed max_hops
         assert_eq!(table.summary_count(), 0);
@@ -872,7 +1024,9 @@ mod tests {
         };
 
         // B processes this gossip
-        table_b.process_gossip(peer_a, gossip);
+        table_b
+            .process_gossip(peer_a, gossip)
+            .expect("valid gossip");
 
         // B should now know about hint_c (through A)
         let hints = table_b.all_reachable_hints();
@@ -920,7 +1074,9 @@ mod tests {
             timestamp: now - 100,
             energy_class: EnergyClass::default(),
         };
-        table.process_gossip(peer_id, gossip1);
+        table
+            .process_gossip(peer_id, gossip1)
+            .expect("valid gossip");
 
         // Then process newer version
         let gossip2 = NeighborhoodGossip {
@@ -929,7 +1085,9 @@ mod tests {
             timestamp: now,
             energy_class: EnergyClass::default(),
         };
-        table.process_gossip(peer_id, gossip2);
+        table
+            .process_gossip(peer_id, gossip2)
+            .expect("valid gossip");
 
         // Should keep the newer version with better reliability
         let summaries_with_hint: Vec<_> = table
@@ -939,5 +1097,228 @@ mod tests {
             .collect();
         assert_eq!(summaries_with_hint.len(), 1);
         assert_eq!(summaries_with_hint[0].path_reliability, 0.9);
+    }
+
+    fn make_summary(hint: u32, hops: u8, reliability: f64) -> NeighborhoodSummary {
+        NeighborhoodSummary {
+            total_reachable: 3,
+            reachable_hints: vec![make_hint(hint)],
+            path_reliability: reliability,
+            hop_count: hops,
+            timestamp: current_timestamp(),
+        }
+    }
+
+    fn make_gossip(summaries: Vec<NeighborhoodSummary>) -> NeighborhoodGossip {
+        NeighborhoodGossip {
+            local_summary: make_cell_summary(vec![make_hint(1)]),
+            neighborhood_summaries: summaries,
+            timestamp: current_timestamp(),
+            energy_class: EnergyClass::default(),
+        }
+    }
+
+    fn assert_untouched(table: &NeighborhoodTable) {
+        assert_eq!(table.gateway_count(), 0);
+        assert_eq!(table.summary_count(), 0);
+    }
+
+    #[test]
+    fn test_gossip_rejects_all_zero_sender() {
+        let mut table = NeighborhoodTable::new();
+        let r = table.process_gossip([0u8; 32], make_gossip(vec![make_summary(5, 1, 0.5)]));
+        assert_eq!(r, Err(GossipRejection::InvalidPeerId));
+        assert_untouched(&table);
+    }
+
+    #[test]
+    fn test_gossip_rejects_self_referential_sender() {
+        let mut table = NeighborhoodTable::new();
+        let me = make_peer_id(9);
+        table.set_local_peer_id(me);
+        let r = table.process_gossip(me, make_gossip(vec![make_summary(5, 1, 0.5)]));
+        assert_eq!(r, Err(GossipRejection::SelfReferential));
+        assert_untouched(&table);
+    }
+
+    #[test]
+    fn test_gossip_rejects_oversized_summary_list() {
+        let mut table = NeighborhoodTable::new();
+        let summaries = (0..(MAX_GOSSIP_SUMMARIES as u32 + 1))
+            .map(|i| make_summary(i + 10, 1, 0.5))
+            .collect();
+        let r = table.process_gossip(make_peer_id(1), make_gossip(summaries));
+        assert_eq!(r, Err(GossipRejection::TooManySummaries));
+        assert_untouched(&table);
+    }
+
+    #[test]
+    fn test_gossip_rejects_oversized_hint_list() {
+        let mut table = NeighborhoodTable::new();
+        let mut s = make_summary(5, 1, 0.5);
+        s.reachable_hints = (0..(MAX_HINTS_PER_SUMMARY as u32 + 1))
+            .map(make_hint)
+            .collect();
+        let r = table.process_gossip(make_peer_id(1), make_gossip(vec![s]));
+        assert_eq!(r, Err(GossipRejection::TooManyHints));
+        assert_untouched(&table);
+
+        let mut g = make_gossip(vec![]);
+        g.local_summary.reachable_hints = (0..(MAX_HINTS_PER_SUMMARY as u32 + 1))
+            .map(make_hint)
+            .collect();
+        assert_eq!(
+            table.process_gossip(make_peer_id(1), g),
+            Err(GossipRejection::TooManyHints)
+        );
+        assert_untouched(&table);
+    }
+
+    #[test]
+    fn test_gossip_rejects_non_finite_or_out_of_range_reliability() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.5] {
+            let mut table = NeighborhoodTable::new();
+            let r =
+                table.process_gossip(make_peer_id(1), make_gossip(vec![make_summary(5, 1, bad)]));
+            assert_eq!(r, Err(GossipRejection::InvalidReliability), "bad={bad}");
+            assert_untouched(&table);
+
+            let mut g = make_gossip(vec![]);
+            g.local_summary.avg_reliability = bad;
+            assert_eq!(
+                table.process_gossip(make_peer_id(1), g),
+                Err(GossipRejection::InvalidReliability)
+            );
+            assert_untouched(&table);
+        }
+    }
+
+    #[test]
+    fn test_gossip_rejects_absurd_counts() {
+        let mut table = NeighborhoodTable::new();
+        let mut s = make_summary(5, 1, 0.5);
+        s.total_reachable = u32::MAX;
+        assert_eq!(
+            table.process_gossip(make_peer_id(1), make_gossip(vec![s])),
+            Err(GossipRejection::InvalidCount)
+        );
+        let mut g = make_gossip(vec![]);
+        g.local_summary.peer_count = u32::MAX;
+        assert_eq!(
+            table.process_gossip(make_peer_id(1), g),
+            Err(GossipRejection::InvalidCount)
+        );
+        assert_untouched(&table);
+    }
+
+    #[test]
+    fn test_gossip_rejects_far_future_timestamps() {
+        let mut table = NeighborhoodTable::new();
+        let mut g = make_gossip(vec![]);
+        g.timestamp = u64::MAX;
+        assert_eq!(
+            table.process_gossip(make_peer_id(1), g),
+            Err(GossipRejection::FutureTimestamp)
+        );
+        let mut s = make_summary(5, 1, 0.5);
+        s.timestamp = u64::MAX;
+        assert_eq!(
+            table.process_gossip(make_peer_id(1), make_gossip(vec![s])),
+            Err(GossipRejection::FutureTimestamp)
+        );
+        assert_untouched(&table);
+    }
+
+    #[test]
+    fn test_gossip_hop_count_255_does_not_overflow() {
+        let mut table = NeighborhoodTable::new();
+        let r = table.process_gossip(
+            make_peer_id(1),
+            make_gossip(vec![make_summary(5, u8::MAX, 0.5)]),
+        );
+        assert_eq!(r, Ok(()));
+        assert_eq!(table.gateway_count(), 1);
+        assert_eq!(table.summary_count(), 0);
+    }
+
+    #[test]
+    fn test_gossip_duplicate_summaries_collapse() {
+        let mut table = NeighborhoodTable::new();
+        let dup = make_summary(5, 1, 0.5);
+        let r = table.process_gossip(
+            make_peer_id(1),
+            make_gossip(vec![dup.clone(), dup.clone(), dup]),
+        );
+        assert_eq!(r, Ok(()));
+        assert_eq!(table.summary_count(), 1);
+    }
+
+    #[test]
+    fn test_stored_summaries_are_bounded() {
+        let mut table = NeighborhoodTable::new();
+        let mut n = 0u32;
+        while n < (MAX_STORED_SUMMARIES as u32 + 128) {
+            let batch = (0..MAX_GOSSIP_SUMMARIES as u32)
+                .map(|i| make_summary(1000 + n + i, 1, 0.5))
+                .collect();
+            n += MAX_GOSSIP_SUMMARIES as u32;
+            table
+                .process_gossip(make_peer_id(1), make_gossip(batch))
+                .expect("valid gossip");
+        }
+        assert!(table.summary_count() <= MAX_STORED_SUMMARIES);
+    }
+
+    #[test]
+    fn test_full_summary_table_evicts_weakest_for_better_entry() {
+        let mut table = NeighborhoodTable::new();
+        for i in 0..MAX_STORED_SUMMARIES as u32 {
+            // hop 2 so these never collide with the incoming hop-1 summary.
+            table.summaries.push(make_summary(5000 + i, 2, 0.5));
+        }
+        // One clearly weakest entry.
+        table.summaries[100] = make_summary(9999, 2, 0.01);
+        assert_eq!(table.summary_count(), MAX_STORED_SUMMARIES);
+
+        // A worse newcomer is dropped; the table is unchanged.
+        table
+            .process_gossip(
+                make_peer_id(1),
+                make_gossip(vec![make_summary(7, 0, 0.001)]),
+            )
+            .expect("valid gossip");
+        assert_eq!(table.summary_count(), MAX_STORED_SUMMARIES);
+        assert!(table
+            .summaries
+            .iter()
+            .all(|s| s.reachable_hints != vec![make_hint(7)]));
+        assert!(table
+            .summaries
+            .iter()
+            .any(|s| s.reachable_hints == vec![make_hint(9999)]));
+
+        // A better newcomer evicts the weakest entry rather than being rejected.
+        table
+            .process_gossip(make_peer_id(1), make_gossip(vec![make_summary(8, 0, 0.9)]))
+            .expect("valid gossip");
+        assert_eq!(table.summary_count(), MAX_STORED_SUMMARIES);
+        assert!(table
+            .summaries
+            .iter()
+            .any(|s| s.reachable_hints == vec![make_hint(8)]));
+        assert!(table
+            .summaries
+            .iter()
+            .all(|s| s.reachable_hints != vec![make_hint(9999)]));
+    }
+
+    #[test]
+    fn test_cleanup_tolerates_future_summary_timestamp() {
+        let mut table = NeighborhoodTable::new();
+        let mut s = make_summary(5, 1, 0.5);
+        s.timestamp = current_timestamp() + 100_000;
+        table.summaries.push(s);
+        // Must not underflow/panic.
+        let _ = table.cleanup(current_timestamp());
     }
 }
