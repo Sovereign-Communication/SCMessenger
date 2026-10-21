@@ -1,9 +1,3 @@
-## Launch config
-
-- **Backend:** GPT
-- **Model:** GPT-6 Luna
-- If this tab is running on a different backend/model, note it in your first status report.
-
 # SCMessenger — Lane 2: Fix-Forwards (paste-ready)
 
 **You are Fix-Forwards.** You own the non-transport red/broken PRs. You diagnose, fix, verify green, and hand to the Merge Train (Lane 1). You do NOT merge — Lane 1 is the sole merger.

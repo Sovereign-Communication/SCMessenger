@@ -2,21 +2,21 @@
 
 ## Tab order, backends, and models
 
-Open mission tabs in this order. Paste the prompt file's full contents into each tab. **Backend rule:** free tier for high-volume mechanical work, GPT for judgment-heavy and long-horizon work. The harness provider router does free-tier arbitrage automatically — these assignments are the explicit policy on top of it.
+Open mission tabs in this order. Paste the prompt file's full contents into each tab. **You select the backend and model at tab creation** — the prompts don't carry it. Guidance: **GPT-6 Luna will be available** — use it on every lane. Backend rule of thumb: freebuff tokens for high-volume mechanical work, GPT backend for judgment-heavy and long-horizon work. The harness provider router does free-tier arbitrage automatically.
 
-| # | Tab | Backend | Model | Prompt file |
-|---|-----|---------|-------|-------------|
-| 0 | SCM Readiness Verifier (gate) | Freebuff tokens | 6.1 Sol (Luna if thorough) | `freebuff/readiness-verifier.md` — runs FIRST, alone. Pulls the handoff, audits the plan, verifies the environment, posts the readiness report to #602, requests Overseer clarification. Nothing else launches until it declares GO. |
-| 1 | SCM Lane 0 — WIP Audit + Burn-Down | GPT | GPT-6 Luna | `freebuff/lane-0-wip-audit-burndown.md` — long phased mission, the foundation everything builds on. Don't cheap out here. |
+| # | Tab | Suggested backend | Model | Prompt file |
+|---|-----|-------------------|-------|-------------|
+| 0 | SCM Readiness Verifier (gate) | Freebuff tokens | GPT-6 Luna | `freebuff/readiness-verifier.md` — runs FIRST, alone. Pulls the handoff, audits the plan, verifies the environment, posts the readiness report to #602, requests Overseer clarification. Nothing else launches until it declares GO. |
+| 1 | SCM Lane 0 — WIP Audit + Burn-Down | GPT | GPT-6 Luna | `freebuff/lane-0-wip-audit-burndown.md` — long phased mission, the foundation everything builds on. |
 | 2 | SCM Lane 1 — Merge Train | Freebuff tokens | GPT-6 Luna | `freebuff/lane-1-merge-train.md` — high-volume mechanical (rebases, CI checks, merges); rules are explicit, Overseer verifies every merge. |
 | 3 | SCM Lane 2 — Fix-Forwards | GPT | GPT-6 Luna | `freebuff/lane-2-fix-forwards.md` — diagnostic work, judgment-heavy. |
 | 4 | SCM Lane 3 — Transport | GPT | GPT-6 Luna | `freebuff/lane-3-transport.md` — hardest implementation, Rule-8 heavy. |
-| 5 | SCM Lane 4 — Infra (Ubicloud) | Freebuff tokens | 6.1 Sol (Luna fallback) | `freebuff/lane-4-infra.md` — scoped ops checklist. |
+| 5 | SCM Lane 4 — Infra (Ubicloud) | Freebuff tokens | GPT-6 Luna | `freebuff/lane-4-infra.md` — scoped ops checklist. |
 | 6 | BigEnergyCo lane | GPT | GPT-6 Luna | `freebuff/bigenergyco-lane.md` (bigenergyco branch) |
-| 7 | CivicScope lane | Freebuff tokens | 6.1 Sol (Luna fallback) | `freebuff/civicscope-lane.md` (civicscope branch) |
+| 7 | CivicScope lane | Freebuff tokens | GPT-6 Luna | `freebuff/civicscope-lane.md` (civicscope branch) |
 | — | Harness burndown | (already running — your existing tab) | — | `~/workspace/harness-burndown-lane-prompt-2026-10-20.md` |
 
-**Reviewers:** separate thread, **6.1 Sol or Astra**, backend per availability — a different model from the implementer on purpose. Reviewer prompt: `freebuff/rule8-reviewer-prompt.md`.
+**Reviewers:** separate thread, **6.1 Sol or Astra** (different model from the implementer on purpose), backend your call. Reviewer prompt: `freebuff/rule8-reviewer-prompt.md`.
 
 ## Sequence
 

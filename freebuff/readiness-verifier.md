@@ -2,12 +2,6 @@
 
 **Repo:** Sovereign-Communication/SCMessenger. **Scope: SCMessenger ONLY.**
 
-## Launch config (read before pasting)
-
-- **Backend:** Freebuff tokens (free tier). This is a bounded verification task — checklists and environment probes, not long-horizon implementation. Do not burn GPT budget here.
-- **Model:** 6.1 Sol (GPT-6 Luna if you want max thoroughness on the plan audit).
-- If this tab is running on a different backend/model than above, note it in the report — the Overseer needs the true inventory.
-
 ## Mission
 
 Before any work lane spins up: pull the handoff branch, audit the plan for issues, verify this machine is actually ready to execute, report everything to the tracking issue, get Overseer clarification on anything unclear, and only then clear the lanes for launch. You are a gate, not a worker — you verify readiness; you do not start the audit, merge, or fix anything.
@@ -40,7 +34,6 @@ Read `freebuff/rollout-plan.md` end to end and check for issues:
 3. **Jev/TypeSafe access:** confirm the lane can reach the TypeSafe API (the key lives on this lane per the skill — reference it, don't print it).
 4. **Disk:** report free space on the drive holding the repos (this machine was critically low — the number matters).
 5. **Worktrees:** `git worktree list` works in a test clone; no errors.
-6. **Backends/models available:** list every backend and model this machine can launch lanes on (GPT, Freebuff tokens/free-tier, etc.) — the Overseer needs the true inventory to finalize lane assignments. Report the full list, not just what this tab uses.
 
 ## Step 4 — Report and request clarification
 

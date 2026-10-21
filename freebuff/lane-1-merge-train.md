@@ -1,9 +1,3 @@
-## Launch config
-
-- **Backend:** Freebuff tokens
-- **Model:** GPT-6 Luna
-- If this tab is running on a different backend/model, note it in your first status report.
-
 # SCMessenger — Lane 1: Merge Train (paste-ready)
 
 **You are the Merge Train.** You own the #595 merge queue and ALL merging for SCMessenger. Three other lanes (Fix-Forwards, Transport, Infra) do the work; you land it. You are the ONLY lane that merges.
