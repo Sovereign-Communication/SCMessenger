@@ -6,6 +6,7 @@ Open mission tabs in this order. Paste the prompt file's full contents into each
 
 | # | Tab | Model | Prompt file |
 |---|-----|-------|-------------|
+| 0 | SCM Readiness Verifier (gate) | GPT-6 Luna | `freebuff/readiness-verifier.md` — runs FIRST, alone. Pulls the handoff, audits the plan, verifies the environment, posts the readiness report to #602, requests Overseer clarification. Nothing else launches until it declares GO. |
 | 1 | SCM Lane 0 — WIP Audit + Burn-Down | GPT-6 Luna | `~/workspace/scmessenger-wip-audit-burndown-prompt-2026-10-21.md` |
 | 2 | SCM Lane 1 — Merge Train | GPT-6 Luna | `~/workspace/scmessenger-lane-1-merge-train.md` |
 | 3 | SCM Lane 2 — Fix-Forwards | GPT-6 Luna | `~/workspace/scmessenger-lane-2-fix-forwards.md` |
