@@ -3631,13 +3631,18 @@ async fn cmd_start(
                                          let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
                                           if let Ok(prep) = core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                                let ble_ok = ble_mesh::send_ble_message(&target.to_string(), &prep.envelope_data).await.is_ok();
-                                               let swarm_ok = swarm_handle.send_message(target, prep.envelope_data, None, None).await.is_ok();
-                                               if swarm_ok {
-                                                   // True transport ACK (R2): release the outbox entry without a
-                                                   // Delivered receipt. BLE gatt is fire-and-forget, so only the
-                                                   // swarm path marks sent.
-                                                   core_rx.mark_message_sent(prep.message_id.clone());
-                                               }
+                                               // True transport ACK (R2): releases the outbox entry
+                                               // only on a direct-link ACK. BLE gatt is fire-and-forget.
+                                               let swarm_ok = crate::api::swarm_send_releasing_on_direct_ack(
+                                                   &swarm_handle,
+                                                   &core_rx,
+                                                   target,
+                                                   prep.envelope_data,
+                                                   None,
+                                                   prep.message_id.clone(),
+                                               )
+                                               .await
+                                               .is_ok();
                                                let sent = ble_ok || swarm_ok;
 
                                                if sent {
@@ -3818,13 +3823,20 @@ async fn cmd_start(
                                         let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
         match core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                             Ok(prep) => {
-                                                if swarm_handle
-                                                    .send_message(target, prep.envelope_data, None, None)
-                                                    .await
-                                                    .is_ok()
+                                                // True transport ACK (R2): the helper releases the
+                                                // outbox entry only for a direct link (relay Ok =
+                                                // custody only).
+                                                if crate::api::swarm_send_releasing_on_direct_ack(
+                                                    &swarm_handle,
+                                                    &core_rx,
+                                                    target,
+                                                    prep.envelope_data,
+                                                    None,
+                                                    prep.message_id.clone(),
+                                                )
+                                                .await
+                                                .is_ok()
                                                 {
-                                                    // True transport ACK (R2): release the outbox entry.
-                                                    core_rx.mark_message_sent(prep.message_id.clone());
                                                     let mid = msg_id.clone().unwrap_or_default();
                                                     let mut m = serde_json::Map::new();
                                                     m.insert("status".to_string(), "sent".into());
@@ -4838,15 +4850,20 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
 
     loop {
         attempts += 1;
-        match swarm_handle
-            .send_message(recipient_peer_id, envelope_bytes.clone(), None, None)
-            .await
+        // True transport ACK (R2): the helper releases the outbox entry only
+        // for a direct link; a relayed Ok is custody acceptance and the entry
+        // must await a receipt.
+        match crate::api::swarm_send_releasing_on_direct_ack(
+            &swarm_handle,
+            &core,
+            recipient_peer_id,
+            envelope_bytes.clone(),
+            None,
+            prepared_message_id.clone(),
+        )
+        .await
         {
             Ok(_) => {
-                // True transport ACK (R2): release the outbox entry without a
-                // Delivered receipt. send_message() awaits the actual delivery,
-                // not a buffer enqueue.
-                core.mark_message_sent(prepared_message_id.clone());
                 println!(
                     "{} Message sent successfully to {} (attempt {}/{})",
                     "[OK]".green(),
