@@ -10,28 +10,25 @@ ignore = [
     "RUSTSEC-2025-0141",
     # Transitive via sled — no safe upgrade available
     "RUSTSEC-2025-0057",
-    # Transitive via libp2p -> hickory-proto 0.25.x — no fix in 0.25 series
-    "RUSTSEC-2026-0118",
-    # Transitive via libp2p -> hickory-proto 0.25.x — no fix in 0.25 series
-    "RUSTSEC-2026-0119",
     # Transitive via sled -> parking_lot — no safe upgrade available
     "RUSTSEC-2024-0384",
     # Transitive via libp2p -> if-watch -> netlink-packet-core — no safe upgrade
     "RUSTSEC-2024-0436",
-    # Transitive via tokio-tungstenite -> rustls 0.22.x -> rustls-webpki 0.102.x
-    "RUSTSEC-2026-0049",
-    # Same as above
-    "RUSTSEC-2026-0098",
-    # Same as above
-    "RUSTSEC-2026-0099",
-    # Same as above
-    "RUSTSEC-2026-0104",
     # Transitive via proc-macro-error2 — unmaintained, transitive, no fix available
     "RUSTSEC-2026-0173",
     # Transitive via zbus 4.4.0; unmaintained as standalone crates, no safe upgrade available.
     "RUSTSEC-2026-0370",
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0372",
+    # RUSTSEC-2026-0381 also flags webpki-roots 0.26.11 (patched = >=1.0.10;
+    # no patched release exists in the 0.26 series). The 1.x line is bumped
+    # to 1.0.10 in Cargo.lock. The 0.26 line is pulled by tokio-tungstenite
+    # 0.24 (rustls 0.22) and ureq 2.x - upgrading those is a major dependency
+    # upgrade, tracked separately. Transitive, no safe upgrade available.
+    "RUSTSEC-2026-0381",
+    # Transitive via askama 0.14 -> uniffi - unmaintained (repo archived
+    # 2025-03-02), no safe upgrade available per the advisory itself.
+    "RUSTSEC-2026-0374",
 ]
 
 [licenses]
