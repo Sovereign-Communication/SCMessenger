@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.scmessenger.android.service.ManagedResource
 import com.scmessenger.android.service.MeshForegroundService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +26,20 @@ class MeshApplication : Application() {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Process-scoped network re-ensure registration; see [registerNetworkReensure]. */
+    private var networkReensure: com.scmessenger.android.service.ManagedResource? = null
+
+    /** The planted file tree, kept so memory-pressure and terminate can release it. */
+    private var fileLoggingTree: com.scmessenger.android.utils.FileLoggingTree? = null
+
+    private fun newFileLoggingTree(): com.scmessenger.android.utils.FileLoggingTree =
+        com.scmessenger.android.utils.FileLoggingTree(this).also { fileLoggingTree = it }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        fileLoggingTree?.trimMemory()
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -33,6 +48,9 @@ class MeshApplication : Application() {
         // what actually terminates the process and shows the system
         // "process crashed" dialog. Without chaining, the process would
         // keep running with corrupted state.
+        // Seed the user-stop latch from disk before anything can ensure the mesh.
+        com.scmessenger.android.service.UserStopStore.install(this)
+
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         installGlobalCrashHandler(previousHandler)
 
@@ -42,12 +60,12 @@ class MeshApplication : Application() {
         // developer can inspect logs without logcat.
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
-            Timber.plant(com.scmessenger.android.utils.FileLoggingTree(this))
+            Timber.plant(newFileLoggingTree())
         } else {
             Timber.plant(ReleaseTree())
             // FileLoggingTree is also planted in release for diagnostics
             // export, but writes only WARN+ (it is gated by priority).
-            Timber.plant(com.scmessenger.android.utils.FileLoggingTree(this))
+            Timber.plant(newFileLoggingTree())
         }
 
         // Storage health and maintenance - run on background thread to avoid blocking
@@ -66,7 +84,25 @@ class MeshApplication : Application() {
         com.scmessenger.android.utils.NotificationHelper.createNotificationChannels(this)
         Timber.i("Notification channels created")
 
-        schedulePeriodicMaintenance()
+        // Revival work is not enqueued after a user Stop; the latch was seeded above.
+        if (com.scmessenger.android.service.MeshForegroundService.userStoppedForSession) {
+            Timber.i("Periodic maintenance not scheduled: user stopped the mesh")
+        } else {
+            schedulePeriodicMaintenance()
+        }
+
+        // Unexplained process deaths must be visible in the file log, and the
+        // mesh must come back whenever this process is alive and the user has
+        // not stopped it (the 2026-10-08 outage went ~4h47m with nothing
+        // re-ensuring it).
+        applicationScope.launch {
+            com.scmessenger.android.service.ProcessExitLog.logRecent(this@MeshApplication)
+        }
+        com.scmessenger.android.service.MeshAutoRestart.ensure(
+            this,
+            com.scmessenger.android.service.MeshStartTrigger.PROCESS_START
+        )
+        registerNetworkReensure()
 
         Timber.i(
             "SCMessenger application started: version=%s (%d), git=%s, ref=%s, build_time=%s",
@@ -90,8 +126,36 @@ class MeshApplication : Application() {
         Timber.i("Periodic background maintenance worker scheduled")
     }
 
+    private fun registerNetworkReensure() {
+        kotlin.runCatching {
+            val cm = getSystemService(android.net.ConnectivityManager::class.java)
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    com.scmessenger.android.service.MeshAutoRestart.ensure(
+                        this@MeshApplication,
+                        com.scmessenger.android.service.MeshStartTrigger.NETWORK
+                    )
+                }
+            }
+            // Kept so onTerminate can unregister it; open() is a no-op if already registered.
+            networkReensure = ManagedResource(
+                onOpen = { cm.registerDefaultNetworkCallback(callback) },
+                onClose = {
+                    kotlin.runCatching { cm.unregisterNetworkCallback(callback) }
+                        .onFailure { Timber.w(it, "Network re-ensure callback not unregistered") }
+                }
+            ).also { it.open() }
+        }.onFailure { Timber.w(it, "Network re-ensure callback not registered") }
+    }
+
     override fun onTerminate() {
         super.onTerminate()
+        // Emulator/test teardown only: production processes are killed without
+        // onTerminate, and the process-scoped callback dies with them.
+        networkReensure?.close()
+        networkReensure = null
+        fileLoggingTree?.release()
+        fileLoggingTree = null
         applicationScope.cancel()
     }
 

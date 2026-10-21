@@ -99,12 +99,6 @@ pub enum UiCommand {
         key: String,
         value: String,
     },
-    ConfigBootstrapAdd {
-        multiaddr: String,
-    },
-    ConfigBootstrapRemove {
-        multiaddr: String,
-    },
     FactoryReset,
     Restart,
     DaemonRpc {
