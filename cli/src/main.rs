@@ -10,11 +10,14 @@ pub mod ble_ids;
 mod ble_mesh;
 mod bootstrap;
 mod config;
+mod invite;
 mod ledger;
+mod platform_signals;
 mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
+mod transport_status;
 mod watchdog;
 
 #[cfg(target_os = "windows")]
@@ -336,6 +339,11 @@ enum Commands {
     Swarm {
         #[command(subcommand)]
         action: SwarmAction,
+    },
+    /// Create or redeem a signed SCI1 invite (the only bootstrap source)
+    Invite {
+        #[command(subcommand)]
+        action: invite::InviteAction,
     },
     /// Manage local network discovery (BLE, mDNS, WiFi-Aware)
     Discovery {
@@ -1250,6 +1258,7 @@ async fn main() -> Result<()> {
         Commands::Test => cmd_test().await,
         Commands::Audit { action } => cmd_audit(action).await,
         Commands::Swarm { action } => cmd_swarm(action).await,
+        Commands::Invite { action } => invite::run(action).await,
         Commands::Discovery { action } => cmd_discovery(action).await,
         Commands::ShareApk {
             apk_path,
@@ -2076,6 +2085,46 @@ async fn cmd_contact(action: ContactAction) -> Result<()> {
     Ok(())
 }
 
+/// One-time #469 migration. Any legacy `bootstrap_nodes` found in the config
+/// are imported into the ledger as unproven seed entries (so existing
+/// deployments keep their connectivity). Addresses the ledger refuses are
+/// logged and kept in `legacy_bootstrap_nodes_rejected`; the original key is
+/// dropped only by a successful save of the config holding both lists. If the
+/// save fails the in-memory list is already drained but the file keeps the key,
+/// so the next start retries; the ledger import is idempotent (duplicates
+/// collapse) and the rejected list is deduplicated.
+fn migrate_legacy_bootstrap_config(
+    config: &mut config::Config,
+    ledger_manager: &scmessenger_core::store::LedgerManager,
+) {
+    if config.legacy_bootstrap_nodes.is_empty() {
+        return;
+    }
+    let outcome = bootstrap::migrate_legacy_bootstrap_nodes(
+        &mut config.legacy_bootstrap_nodes,
+        &mut config.legacy_bootstrap_nodes_rejected,
+        ledger_manager,
+    );
+    tracing::info!(
+        "[MIGRATION] legacy config bootstrap_nodes: found={} imported_as_unproven_seeds={} rejected_and_recorded={}",
+        outcome.found,
+        outcome.imported,
+        outcome.rejected
+    );
+    if outcome.rejected > 0 {
+        tracing::warn!(
+            "[MIGRATION] {} legacy address(es) were not imported; preserved in config key legacy_bootstrap_nodes_rejected",
+            outcome.rejected
+        );
+    }
+    if let Err(e) = config.save() {
+        tracing::warn!(
+            "[MIGRATION] failed to drop legacy bootstrap_nodes from config: {}",
+            e
+        );
+    }
+}
+
 async fn cmd_config(action: ConfigAction) -> Result<()> {
     let mut config = config::Config::load()?;
 
@@ -2381,7 +2430,7 @@ async fn cmd_start(
         );
         println!("  body: {}", body);
     }
-    let config = config::Config::load()?;
+    let mut config = config::Config::load()?;
     let ws_port = port.unwrap_or({
         if config.listen_port == 0 {
             9000 // Default to 9000 if config has random port
@@ -2471,6 +2520,10 @@ async fn cmd_start(
         scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
     );
 
+    // One-time #469 migration: pre-existing config `bootstrap_nodes` become
+    // unproven ledger seeds, then the key is dropped from the config file.
+    migrate_legacy_bootstrap_config(&mut config, &core.ledger_manager);
+
     // Subscribe to any topics discovered in the ledger from past sessions
     let known_topics = connection_ledger.all_known_topics();
 
@@ -2523,8 +2576,11 @@ async fn cmd_start(
         transport_bridge::TransportBridge::new(),
     ));
 
-    // Merge config bootstrap nodes with environment / default bootstrap nodes
-    let merged_bootstrap = bootstrap::merge_bootstrap_nodes(config.bootstrap_nodes.clone());
+    // Dial candidates come from the peer ledger only (no static seeds, #469).
+    let merged_bootstrap = bootstrap::ledger_candidate_addrs(&core.ledger_manager);
+    if merged_bootstrap.is_empty() {
+        tracing::info!("[DISCOVERY] cold: awaiting invite or LAN/BLE");
+    }
 
     // Build web context for landing page + public APIs
     let web_ctx = Arc::new(server::WebContext {
@@ -2553,7 +2609,7 @@ async fn cmd_start(
             scmessenger_core::transport::DiscoveryMode::Manual
         });
 
-    // Parse bootstrap node multiaddrs from merged list (relay also uses bootstrap nodes)
+    // Parse ledger-derived candidate multiaddrs (relay also uses these)
     let relay_bootstrap: Vec<libp2p::Multiaddr> = merged_bootstrap
         .iter()
         .filter_map(|addr| addr.parse().ok())
@@ -2625,11 +2681,14 @@ async fn cmd_start(
     // concurrent diagnostic probe can trigger a btleplug completion panic.
     // Keep the probe on Windows/Linux, where the existing startup behavior is
     // safe and remains useful for adapter diagnostics.
-    if config.enable_ble && !cfg!(target_os = "macos") {
-        tokio::spawn(async move {
-            ble_daemon::probe_and_log().await;
-        });
-    }
+    // Per-transport availability markers (`[TRANSPORT] kind=...`), BLE probe
+    // included, plus the periodic connected-peer counts.
+    transport_status::spawn(
+        config.enable_mdns,
+        config.enable_ble,
+        peers.clone(),
+        ledger.clone(),
+    );
 
     // Subscribe to any topics from the ledger
     for topic in known_topics {
@@ -2668,24 +2727,28 @@ async fn cmd_start(
         });
     }
 
-    // ── V040-T1 HALF 2: boot-time seed dial (automatic rejoin) ───────────
+    // ── V040-T1 HALF 2 / #469 T6: boot-time seed dial (automatic rejoin) ──
     // A node whose address changed can never rejoin: nobody can dial it at
-    // its old address, and it never dials out. Fire `ConnectToSeedPeers` on
-    // boot and keep sweeping with bounded exponential backoff (5s, 15s, 45s,
-    // then every 120s) until at least one peer is connected; re-arm when the
-    // peer count drops back to zero. The candidate list comes from the core
-    // ledger (proven + seed tiers), which the T2 unification populated from
-    // peers.json. One long-lived task -- never one task per attempt.
-    let seed_dial_swarm = swarm_handle.clone();
-    let seed_dial_core = core.clone();
-    tokio::spawn(async move {
-        let mut sweep: u32 = 0;
-        loop {
-            sweep += 1;
-            let delay_secs = seed_dial::sweep_once(&seed_dial_swarm, &seed_dial_core, sweep).await;
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-        }
-    });
+    // its old address, and it never dials out. Sweep the ledger candidates
+    // forever on the shared event-driven DiscoveryScheduler: a network event
+    // (interface change, peer lost, ...) resets the schedule to aggressive and
+    // wakes the loop immediately; with no events the interval decays with
+    // jitter toward a ceiling derived from peer density. No fixed ladder, no
+    // give-up. A lightweight interface-set monitor feeds LanInterfaceChanged
+    // events. One long-lived task each -- never one task per attempt.
+    let seed_dial_client = seed_dial::SeedDialClient::new();
+    {
+        let swarm = swarm_handle.clone();
+        let core_for_dial = core.clone();
+        let client = Arc::clone(&seed_dial_client);
+        tokio::spawn(async move {
+            seed_dial::run(swarm, core_for_dial, client).await;
+        });
+        let client = Arc::clone(&seed_dial_client);
+        tokio::spawn(async move {
+            seed_dial::run_interface_monitor(client).await;
+        });
+    }
 
     // ── Dial known peers from persistent ledger ──────────────────────────
     // Dial any peers from the persistent ledger that pass backoff.
@@ -3114,7 +3177,10 @@ async fn cmd_start(
                             // LEDGER EXCHANGE: Received peer list from a connected peer
                             SwarmEvent::LedgerReceived { from_peer, entries } => {
                                 let mut l = ledger_rx.lock().await;
-                                let new_count = l.merge_shared_entries(&entries);
+                                let new_count = l.merge_shared_entries_via(
+                                    &entries,
+                                    &format!("ledger_exchange:{}", scmessenger_core::message_events::short_peer(&from_peer.to_string())),
+                                );
 
                                 if new_count > 0 {
                                     println!(
@@ -3465,6 +3531,10 @@ async fn cmd_start(
                             }
                             SwarmEvent::ListeningOn(addr) => {
                                 println!("{} Listening on {}", "[OK]".green(), addr);
+                                transport_status::on_listening(&addr.to_string());
+                            }
+                            SwarmEvent::ListenerFailed { error, .. } => {
+                                transport_status::on_listener_failed(&error);
                             }
                             _ => {}
                         }
@@ -3561,13 +3631,18 @@ async fn cmd_start(
                                          let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
                                           if let Ok(prep) = core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                                let ble_ok = ble_mesh::send_ble_message(&target.to_string(), &prep.envelope_data).await.is_ok();
-                                               let swarm_ok = swarm_handle.send_message(target, prep.envelope_data, None, None).await.is_ok();
-                                               if swarm_ok {
-                                                   // True transport ACK (R2): release the outbox entry without a
-                                                   // Delivered receipt. BLE gatt is fire-and-forget, so only the
-                                                   // swarm path marks sent.
-                                                   core_rx.mark_message_sent(prep.message_id.clone());
-                                               }
+                                               // True transport ACK (R2): releases the outbox entry
+                                               // only on a direct-link ACK. BLE gatt is fire-and-forget.
+                                               let swarm_ok = crate::api::swarm_send_releasing_on_direct_ack(
+                                                   &swarm_handle,
+                                                   &core_rx,
+                                                   target,
+                                                   prep.envelope_data,
+                                                   None,
+                                                   prep.message_id.clone(),
+                                               )
+                                               .await
+                                               .is_ok();
                                                let sent = ble_ok || swarm_ok;
 
                                                if sent {
@@ -3639,16 +3714,6 @@ async fn cmd_start(
                                     if cfg.set(&key, &value).is_ok() {
                                         // Config updated
                                     }
-                                }
-                            }
-                            server::UiCommand::ConfigBootstrapAdd { multiaddr } => {
-                                if let Ok(mut cfg) = config::Config::load() {
-                                    let _ = cfg.add_bootstrap_node(multiaddr.clone());
-                                }
-                            }
-                            server::UiCommand::ConfigBootstrapRemove { multiaddr } => {
-                                if let Ok(mut cfg) = config::Config::load() {
-                                    let _ = cfg.remove_bootstrap_node(&multiaddr);
                                 }
                             }
                             server::UiCommand::FactoryReset => {
@@ -3758,13 +3823,20 @@ async fn cmd_start(
                                         let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
         match core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                             Ok(prep) => {
-                                                if swarm_handle
-                                                    .send_message(target, prep.envelope_data, None, None)
-                                                    .await
-                                                    .is_ok()
+                                                // True transport ACK (R2): the helper releases the
+                                                // outbox entry only for a direct link (relay Ok =
+                                                // custody only).
+                                                if crate::api::swarm_send_releasing_on_direct_ack(
+                                                    &swarm_handle,
+                                                    &core_rx,
+                                                    target,
+                                                    prep.envelope_data,
+                                                    None,
+                                                    prep.message_id.clone(),
+                                                )
+                                                .await
+                                                .is_ok()
                                                 {
-                                                    // True transport ACK (R2): release the outbox entry.
-                                                    core_rx.mark_message_sent(prep.message_id.clone());
                                                     let mid = msg_id.clone().unwrap_or_default();
                                                     let mut m = serde_json::Map::new();
                                                     m.insert("status".to_string(), "sent".into());
@@ -4088,11 +4160,13 @@ async fn cmd_relay(
     );
     println!();
 
-    // Load config for bootstrap nodes
-    let config = config::Config::load()?;
-    let all_bootstrap = bootstrap::merge_bootstrap_nodes(config.bootstrap_nodes.clone());
+    // Load config, run the one-time #469 legacy-seed migration, then derive
+    // dial candidates from the ledger only (no static seeds).
+    let mut config = config::Config::load()?;
+    migrate_legacy_bootstrap_config(&mut config, &core.ledger_manager);
+    let all_bootstrap = bootstrap::ledger_candidate_addrs(&core.ledger_manager);
     println!(
-        "  Bootstrap:    {} node(s)",
+        "  Ledger seeds: {} candidate(s)",
         all_bootstrap.len().to_string().bright_cyan()
     );
     for (i, node) in all_bootstrap.iter().enumerate() {
@@ -4101,13 +4175,10 @@ async fn cmd_relay(
     println!();
 
     // Connection ledger — dial state over the single core store
-    let mut connection_ledger = ledger::ConnectionLedger::new(
+    let connection_ledger = ledger::ConnectionLedger::new(
         scmessenger_core::store::LedgerManager::new(path_to_string(&storage_path)?),
     );
     let known_topics = connection_ledger.all_known_topics();
-    for node in &all_bootstrap {
-        connection_ledger.add_bootstrap(node, Some(&local_peer_id.to_string()));
-    }
     let ledger = Arc::new(tokio::sync::Mutex::new(connection_ledger));
 
     // Peers map
@@ -4152,14 +4223,14 @@ async fn cmd_relay(
             scmessenger_core::transport::DiscoveryMode::Manual
         });
 
-    // Parse bootstrap node multiaddrs from config
+    // Parse ledger-derived candidate multiaddrs
     let bootstrap_multiaddrs: Vec<libp2p::Multiaddr> = all_bootstrap
         .iter()
         .filter_map(|addr| addr.parse().ok())
         .collect();
     if !bootstrap_multiaddrs.is_empty() {
         println!(
-            " Auto-dialing {} bootstrap node(s)",
+            " Auto-dialing {} ledger candidate(s)",
             bootstrap_multiaddrs.len()
         );
     }
@@ -4250,10 +4321,13 @@ async fn cmd_relay(
 
     // The BLE central task is the sole CoreBluetooth manager owner on macOS;
     // do not start a second probe worker in the headless startup path.
+    transport_status::spawn(
+        config.enable_mdns,
+        config.enable_ble,
+        peers.clone(),
+        ledger.clone(),
+    );
     if config.enable_ble && !cfg!(target_os = "macos") {
-        tokio::spawn(async move {
-            ble_daemon::probe_and_log().await;
-        });
         let core_ble = Arc::clone(&core_arc);
         let ui_ble = ui_broadcast.clone();
         tokio::spawn(async move {
@@ -4435,7 +4509,10 @@ async fn cmd_relay(
                     }
                     SwarmEvent::LedgerReceived { from_peer, entries } => {
                         let mut l = ledger_rx.lock().await;
-                        let new_count = l.merge_shared_entries(&entries);
+                        let new_count = l.merge_shared_entries_via(
+                                    &entries,
+                                    &format!("ledger_exchange:{}", scmessenger_core::message_events::short_peer(&from_peer.to_string())),
+                                );
                         if new_count > 0 {
                             tracing::info!("Learned {} new peers from {}", new_count, from_peer);
                             // The core store persists its own updates.
@@ -4626,6 +4703,10 @@ async fn cmd_relay(
                     }
                     SwarmEvent::ListeningOn(addr) => {
                         tracing::info!("Listening on {}", addr);
+                        transport_status::on_listening(&addr.to_string());
+                    }
+                    SwarmEvent::ListenerFailed { error, .. } => {
+                        transport_status::on_listener_failed(&error);
                     }
                     _ => {}
                 }
@@ -4775,15 +4856,20 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
 
     loop {
         attempts += 1;
-        match swarm_handle
-            .send_message(recipient_peer_id, envelope_bytes.clone(), None, None)
-            .await
+        // True transport ACK (R2): the helper releases the outbox entry only
+        // for a direct link; a relayed Ok is custody acceptance and the entry
+        // must await a receipt.
+        match crate::api::swarm_send_releasing_on_direct_ack(
+            &swarm_handle,
+            &core,
+            recipient_peer_id,
+            envelope_bytes.clone(),
+            None,
+            prepared_message_id.clone(),
+        )
+        .await
         {
             Ok(_) => {
-                // True transport ACK (R2): release the outbox entry without a
-                // Delivered receipt. send_message() awaits the actual delivery,
-                // not a buffer enqueue.
-                core.mark_message_sent(prepared_message_id.clone());
                 println!(
                     "{} Message sent successfully to {} (attempt {}/{})",
                     "[OK]".green(),
@@ -4942,9 +5028,8 @@ async fn cmd_discovery(action: DiscoveryAction) -> Result<()> {
         DiscoveryAction::Peers => {
             let peers = api::get_discovery_peers().await?;
             println!("{}", "Locally Discovered Peers".bold());
-            if peers.is_empty() {
-                println!("  {}", "No peers discovered via local transports.".dimmed());
-            } else {
+            // #469 T9: no absence message; an empty list prints only the header.
+            if !peers.is_empty() {
                 for peer in peers {
                     println!(
                         "  • {} ({})",
