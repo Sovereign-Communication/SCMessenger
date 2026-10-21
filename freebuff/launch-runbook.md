@@ -40,4 +40,6 @@ Open mission tabs in this order. Paste the prompt file's full contents into each
 
 ## Files to have on the laptop
 
-This runbook + the 7 prompt files + `~/workspace/jev-gate-policy-v1.md` (prompts carry an inline summary fallback if the file isn't there). Unified plan for reference: `~/workspace/scmessenger-rollout-2026-10-21.md`.
+Everything is on GitHub — no workspace access needed. On the laptop, in each repo clone:
+`git fetch origin freebuff/handoff-2026-10-21 && git checkout freebuff/handoff-2026-10-21 -- freebuff/`
+(or `git checkout freebuff/handoff-2026-10-21` to see the whole branch). SCMessenger's branch carries: this runbook, the unified rollout plan (§10 = smart launch + MCP routing), all 5 lane prompts, the Rule-8 reviewer prompt, the v1-corrected sovereign-harness skill, and `jev-gate-policy-v1.md`. BigEnergyCo's and civicscope's branches carry their lane prompt + the Jev policy.
