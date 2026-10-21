@@ -9,39 +9,74 @@ boundary: No foreign-repository findings, evidence, status, or remediation are i
 <!-- HANDOFF-SCOPE-END -->
 
 Status: Active
-Last updated: 2026-09-30T01:21Z (verified PR checkpoint; no live node or device verification)
+Last updated: 2026-10-01T01:30Z (GitHub status refreshed; AWS unverified; Pixel disconnected)
 Entry point: `/ceo` (Codebuff/Freebuff: `/skill:ceo`)
 Read `AGENTS.md`, then `HANDOFF/CODEX_HANDOFF_2026-09-29.md` section 0 before its older sections, then this state file and the applicable canonical plans.
 
-# ===== RESUME HERE (2026-09-30, Codex takeover audit) =====
+# ===== RESUME HERE (2026-10-01, GitHub refresh 01:24Z–01:30Z) =====
 
-The September 29 Codex handoff is a record, not authorization. Its section 0
-wins over older sections. Audit each claimed PR, CI, review, fleet, and release
-status against fresh evidence before accepting a CTO verdict. The September 21
-Freebuff and earlier resume points below are historical snapshots.
+This checkpoint records only the observations listed here. It grants no merge,
+release, deployment, or architecture authority. Historical sections below remain
+records and do not override this checkpoint.
 
-- At checkout creation, the isolated takeover worktree was at
-  `10f5642ea94cb6398f72ee60d3703aed26e9428d` (#420); the orchestrator
-  then verified live `main` at that SHA. This is a historical takeover-start
-  snapshot. The September 29 handoff records the operator's v0.4.0/v0.5.0
-  unification and section 6
-  merge train; preserve its order and recheck the remote before each action.
-- PR #422 merged into `main` at 2026-09-30T01:17:49Z; the resulting `main`
-  commit is `064deb2d72cef8b293e182927ffa5119b6f2ae6f`.
-- PR #421's user-requested cap-16 head is
-  `7a6c271924a4625e24ff80a30cc89ee9adede356`. At approximately
-  2026-09-30T01:21Z it remained OPEN, with no reviews and new CI queued or
-  in progress. The physical cell test and independent Rule-8/A2 review of
-  that exact head remain pending; do not accept a merge or DONE without
-  fresh exact-head scope, check, and review evidence.
-- The operator's September 29 direction is CI-only verification; no local
-  builds. No release, live three-node parity, or BLE PASS follows from this
-  state update. Re-derive Windows, AWS cloud node, and Pixel state and inspect
-  the recorded phone evidence before any operational conclusion.
-- Claude has stood down according to the September 29 handoff. The primary
-  checkout has unowned WIP; audit and takeover work must preserve it.
+- At 2026-10-01T00:43Z, `curl.exe --max-time 5 -sS -i http://127.0.0.1:9876/health`
+  -> HTTP 200, `{"status":"healthy"}`; `curl.exe --max-time 5 -sS -i
+  http://127.0.0.1:9876/version` -> version `0.4.0`, git hash `bceacb9`,
+  build time `2026-09-26T20:38:26.767320800+00:00`; `curl.exe --max-time 5
+  -sS -i http://127.0.0.1:9876/api/identity` -> identity ID
+  `985a25f9505372de3eeea4fe6220784a956da88cf6681f57f9e5ffd92bf65826`, peer ID
+  `12D3KooWD6vZQrUqpyGaCqY3tNSK8p44BS78TvxpGpwhdPJ1T9mw`, nickname
+  `Claude-Windows-Driver`. These are recorded command outputs, not a
+  claim of current API status.
+- At 00:43Z, `adb devices -l` listed Pixel 6a serial
+  `adb-26261JEGR01896-6pHTac._adb-tls-connect._tcp` as `device`. At 01:02Z,
+  `adb devices -l` returned no device entries. Current availability is UNVERIFIED.
+- CI artifact for PR #421 run
+  [36654635755](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/36654635755), head
+  `7a6c271924a4625e24ff80a30cc89ee9adede356`, was verified: APK SHA256
+  `8da295b760e50e44e174b11a1049505ec9b593f54de5ec73ce3db021373a6308`, signer
+  SHA256 `067d312c1470d9b36c39b54943e3d8c434243821c9874c03241e8668801fd672`;
+  CI reported `SCMESSENGER_DEBUG_KEYSTORE_BASE64` unset. `adb install -r` returned
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; the recorded checkpoint says no uninstall,
+  wipe, UI, or onboarding occurred, installed-app full signer is unknown, and ADB
+  later disconnected (recorded `adb install -r` output above).
+- AWS check: `aws ec2 describe-instances ...` -> NOT RUN (`aws` CLI not
+  installed). Cloud-node status is UNVERIFIED; this does not establish that
+  the node is down.
+- GitHub `main` is
+  [`e76e05933d49f5f764539960bf9768e409ea9fa4`](https://github.com/Sovereign-Communication/SCMessenger/commit/e76e05933d49f5f764539960bf9768e409ea9fa4).
+  PRs [#422](https://github.com/Sovereign-Communication/SCMessenger/pull/422)
+  and [#424](https://github.com/Sovereign-Communication/SCMessenger/pull/424)
+  are merged.
+- PR [#416](https://github.com/Sovereign-Communication/SCMessenger/pull/416)
+  is open at head `d4138a07b4ff508e40f16d1f72987244e8b09e19`. Compared with
+  `main`, it is 23 commits ahead and 15 behind, with 23 commits, 31 files,
+  +4263/-15 ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...d4138a07b4ff508e40f16d1f72987244e8b09e19)).
+- PR [#403](https://github.com/Sovereign-Communication/SCMessenger/pull/403)
+  is open at head `1a3cb2744a53ee135ceada23b982a737116644ee`; versus `main`,
+  it is 10 commits ahead and 34 behind, with 10 commits and 8 files. The actual
+  compare includes `scripts/backup_purge.sh`; use the compare contents rather
+  than the PR-body scope ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...1a3cb2744a53ee135ceada23b982a737116644ee)).
+  The latest of its 35 comments is #5893444868 and the freeze remains on the
+  named Freebuff branches ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/403#issuecomment-5893444868)).
+- PR [#421](https://github.com/Sovereign-Communication/SCMessenger/pull/421)
+  is open at head `7a6c271924a4625e24ff80a30cc89ee9adede356`, 3 commits ahead
+  and 12 behind `main`, with 3 commits and 2 files
+  ([compare](https://github.com/Sovereign-Communication/SCMessenger/compare/e76e05933d49f5f764539960bf9768e409ea9fa4...7a6c271924a4625e24ff80a30cc89ee9adede356)).
+  Its exact-head check-runs API returned `total_count=36`, all successful
+  ([check-runs API](https://api.github.com/repos/Sovereign-Communication/SCMessenger/commits/7a6c271924a4625e24ff80a30cc89ee9adede356/check-runs)). The latest and only
+  #421 comment, #5902649210, records Rule-8 `REQUEST_CHANGES`, with high global
+  inbound starvation and medium repeated-handover findings
+  ([comment](https://github.com/Sovereign-Communication/SCMessenger/pull/421#issuecomment-5902649210)).
+  That comment is not itself a GitHub review-submission object. Checks pass, but
+  the merge/security gate does not.
+- The #421 cap policy remains unresolved; this checkpoint makes no cap or
+  architecture choice.
+- Cellular test, deployment, release, and three-node-pass status are UNVERIFIED
+  for any time after the observations above. No merge or architecture choice is
+  authorized by these observations.
 
-# ===== END RESUME 2026-09-30 =====
+# ===== END RESUME 2026-10-01 =====
 
 ## Harness-side audit note (2026-09-22, append-only)
 
