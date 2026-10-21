@@ -377,6 +377,8 @@ pub struct TotalLimits {
 impl TotalLimits {
     /// Bounds whose ceilings are `HARD_CEILING_FACTOR` times the bound, with no
     /// physical cap. For callers without a resource snapshot (tests).
+    /// Production code uses `with_caps`.
+    #[cfg(test)]
     pub fn new(total: usize, fd: usize) -> Self {
         Self::with_caps(total, fd, usize::MAX, usize::MAX)
     }
