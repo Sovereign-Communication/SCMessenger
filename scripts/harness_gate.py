@@ -10,51 +10,43 @@ Policy (operator 2026-09-11):
     required additional evidence, not a replacement.
 
 Exit codes follow harness: 0 ok, 1 fatal, 2 verify fail, 3 deferred.
-Also exits 4 if policy arguments are invalid.
+Also exits 4 if policy arguments or source resolution are invalid.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-HARNESS_ROOT = Path(os.environ.get("HARNESS_REPO") or (Path(__file__).resolve().parents[1] / "vendor" / "sovereign-harness"))
-if not (HARNESS_ROOT / "harness" / "jev.py").is_file():
-    # Fall back to in-repo Harness/handoff-only tree only if vendor missing
-    _alt = Path(__file__).resolve().parents[1] / "Harness"
-    if (_alt / "harness" / "jev.py").is_file():
-        HARNESS_ROOT = _alt
+from harness_source import (
+    REPORT_FIELDS,
+    HarnessSource,
+    HarnessSourceError,
+    resolve_source,
+)
+
 REPO = Path(__file__).resolve().parents[1]
-# Out-of-tree by default so we never drop harness debris in the live product tree.
 DEFAULT_OUT_ROOT = REPO / "tmp" / "harness-runs" / "seat-gates"
-PAID_MAX_DEFAULT = 0.10  # operator ceiling per escalation/use
+PAID_MAX_DEFAULT = 0.10
 
 
-def _py() -> str:
-    return os.environ.get("MIMO_PYTHON") or sys.executable
-
-
-def _harness_env() -> dict:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(HARNESS_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    return env
-
-
-def run_harness(args: list[str], timeout: int = 300) -> int:
-    cmd = [_py(), "-m", "harness.cli", *args]
+def run_harness(args: list[str], source: HarnessSource, timeout: int = 300) -> int:
+    cmd = [os.environ.get("MIMO_PYTHON") or sys.executable, "-m", "harness.cli", *args]
     print(f"[HARNESS] {' '.join(cmd)}")
-    print(f"[HARNESS] PYTHONPATH={HARNESS_ROOT}")
-    proc = subprocess.run(
-        cmd,
-        cwd=str(HARNESS_ROOT),
-        env=_harness_env(),
-        timeout=timeout,
-    )
+    print(f"[HARNESS] PYTHONPATH={source.root}")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(source.root) + os.pathsep + env.get("PYTHONPATH", "")
+    try:
+        proc = subprocess.run(cmd, cwd=str(source.root), env=env, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[FAIL] harness invocation failed: {exc}", file=sys.stderr)
+        return 1
     return proc.returncode
 
 
@@ -71,7 +63,7 @@ def main() -> int:
     p.add_argument(
         "--out",
         default="",
-        help="absolute result path (default under Harness/audits/scmessenger/_runs/seat-gates)",
+        help="absolute result path (default under tmp/harness-runs/seat-gates)",
     )
     p.add_argument(
         "--allow-paid",
@@ -87,10 +79,15 @@ def main() -> int:
     p.add_argument("--converge", action="store_true")
     args = p.parse_args()
 
-    if not HARNESS_ROOT.is_dir():
-        print(f"[BLOCK] harness checkout missing: {HARNESS_ROOT}")
+    try:
+        source = resolve_source()
+    except HarnessSourceError as exc:
+        print(f"[BLOCK] {exc}", file=sys.stderr)
         return 4
 
+    if not math.isfinite(args.max_cost):
+        print("[BLOCK] --max-cost must be finite")
+        return 4
     if args.max_cost > PAID_MAX_DEFAULT:
         print(
             f"[BLOCK] --max-cost {args.max_cost} exceeds operator paid ceiling "
@@ -101,20 +98,20 @@ def main() -> int:
         print("[BLOCK] --max-cost must be >= 0")
         return 4
 
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    DEFAULT_OUT_ROOT.mkdir(parents=True, exist_ok=True)
-
     if args.kind in ("spend", "ledger", "trust"):
         extra = ["ledger", "verify"] if args.kind == "ledger" else [args.kind]
-        if args.kind == "trust":
-            extra = ["trust"]
-        return run_harness(extra)
+        return run_harness(extra, source=source)
 
     if args.kind == "lint-claims":
         if not args.claims_file or not args.source_file:
             print("[BLOCK] lint-claims requires --claims-file and --source-file")
             return 4
-        out = args.out or str(DEFAULT_OUT_ROOT / f"lint_{stamp}.json")
+        if args.out:
+            out = args.out
+        else:
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            out = str(DEFAULT_OUT_ROOT / f"lint_{stamp}.json")
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
         return run_harness(
             [
                 "lint-claims",
@@ -124,7 +121,8 @@ def main() -> int:
                 str(Path(args.source_file).resolve()),
                 "--out",
                 out,
-            ]
+            ],
+            source=source,
         )
 
     if args.kind == "verify":
@@ -137,11 +135,24 @@ def main() -> int:
         if not prompt.is_file():
             print(f"[BLOCK] prompt file missing: {prompt}")
             return 4
-        out = Path(args.out) if args.out else DEFAULT_OUT_ROOT / f"verify_{stamp}.json"
+        if args.out:
+            out = Path(args.out)
+        else:
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            out = DEFAULT_OUT_ROOT / f"verify_{stamp}.json"
         if not out.is_absolute():
             print(f"[BLOCK] --out must be absolute (policy): {out}")
             return 4
-        out.parent.mkdir(parents=True, exist_ok=True)
+        out = out.resolve()
+        if out == prompt:
+            print("[BLOCK] --out must differ from --prompt-file")
+            return 4
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"[BLOCK] cannot prepare Harness report path {out}: {exc}")
+            return 4
         v_args = [
             "verify",
             "--prompt-file",
@@ -154,7 +165,6 @@ def main() -> int:
         if args.converge:
             v_args.append("--converge")
         if args.allow_paid:
-            # apply has --allow-escalation; verify escalates via config/allow
             os.environ["HARNESS_ALLOW_ESCALATION"] = "1"
             print(
                 f"[POLICY] paid escalation permitted up to ${args.max_cost:.2f} "
@@ -162,28 +172,47 @@ def main() -> int:
             )
         else:
             print("[POLICY] free tier only (no --allow-paid)")
-        rc = run_harness(v_args)
+        rc = run_harness(v_args, source=source)
         print(f"[RESULT] harness verify rc={rc} out={out}")
-        if out.is_file():
-            try:
-                data = json.loads(out.read_text(encoding="utf-8"))
+        if rc:
+            return rc
+        if not out.is_file():
+            print(f"[FAIL] Harness report missing: {out}", file=sys.stderr)
+            return 2
+        try:
+            data = json.loads(out.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise TypeError("report root must be an object")
+            missing = [field for field in REPORT_FIELDS if field not in data]
+            if missing:
+                fields = ", ".join(missing)
                 print(
-                    f"[RESULT] verdict={data.get('verdict')} "
-                    f"agreement={data.get('consensus', {}).get('agreement')} "
-                    f"cost=${data.get('actual_cost', 0)}"
+                    f"[FAIL] Harness report missing contract fields: {fields}",
+                    file=sys.stderr,
                 )
-            except Exception:  # noqa: BLE001
-                pass
-        return rc
+                return 2
+            consensus = data.get("consensus")
+            agreement = (
+                consensus.get("agreement") if isinstance(consensus, dict) else None
+            )
+            print(
+                f"[RESULT] verdict={data.get('verdict')} "
+                f"agreement={agreement} "
+                f"cost=${data.get('actual_cost', 0)}"
+            )
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            print(
+                f"[FAIL] could not parse Harness report {out}: {exc}", file=sys.stderr
+            )
+            return 2
+        return 0
 
     if args.kind == "smoke":
         # spend + ledger integrity; proves the lane is usable without spend
-        rc1 = run_harness(["spend"])
-        rc2 = run_harness(["ledger", "verify"])
+        rc1 = run_harness(["spend"], source=source)
+        rc2 = run_harness(["ledger", "verify"], source=source)
         print(f"[RESULT] smoke spend={rc1} ledger={rc2}")
         return 0 if rc1 == 0 and rc2 == 0 else 1
-
-    return 4
 
 
 if __name__ == "__main__":

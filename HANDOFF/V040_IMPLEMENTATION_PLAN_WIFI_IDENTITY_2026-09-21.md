@@ -2,7 +2,7 @@
 
 Status: Active â€” **authoritative for implementing models** (no guesswork)
 Date: 2026-09-21
-Last updated: 2026-09-24 (Harness immutable-tag admission and staged rollout)
+Last updated: 2026-09-23 (Harness immutable-tag admission and staged rollout)
 Owner: CTO/orchestrator
 Authority stack:
 1. THIS file (implementation truth + WP gates)
@@ -148,17 +148,16 @@ Implementing models **must** run this before marking any WP "DONE" or opening a 
 ### 3.1 Toolchain
 
 ```
-# Prefer harness origin/main (local clone may lag)
-cd C:\Users\SCM\Documents\GitHub\Harness
-git fetch origin
-# Use a clean worktree if main is dirty:
-git worktree add <repo>/vendor/sovereign-harness (scripts/update_local_harness.py) origin/main
+# Production source: admit the immutable tag into the SCMessenger consumer copy
+python scripts/update_local_harness.py --mode admit-tag
+# Canary source: resolve and validate one exact main SHA; do not promote it
+python scripts/update_local_harness.py --mode canary-main
 
 # Key (if live JEV): ~/.config/harness/jev.env  (JEV_API_KEY / jev_api_key)
 # Without a key: local structural fallback only â€” record is_fallback=true
 ```
 
-JEV API (harness `origin/main` `harness/jev.py`):
+JEV API (admitted Harness source `harness/jev.py`):
 - `JevEvaluator(state, questions).evaluate(...)` â†’ `JevEvaluationResult`
 - `result.is_passing(min_confidence=0.70)` â€” **canonical completion** requires `True` **and** command evidence
 - Cost: `jev_cost(input_tokens)` = input_tokens * 42 / 1e6 (do not invent usage.cost)
@@ -219,9 +218,10 @@ When the implementing model is <99% confident:
 
 ### 3.5 Helper script
 
-`scripts/jev_canonical_check.py` on SCMessenger main (lands with this plan)
-loads `harness.jev` from `HARNESS_REPO` (default `C:\Users\SCM\Documents\GitHub\Harness`
-or a `Harness-jev-use` worktree of origin/main) and evaluates the Â§3.3 pack.
+`scripts/jev_canonical_check.py` loads the declared Harness surface through
+`scripts/harness_source.py`. The tracked manifest is the only production
+source; canary admission is separate and never release evidence. The helper
+evaluates the §3.3 pack from that source.
 
 ```text
 python scripts/jev_canonical_check.py --wp WP2 --state-file tmp/wp2_state.json
@@ -232,7 +232,7 @@ Exit 0 = JEV `is_passing`. Without a key or with `--allow-fallback`, may print
 
 ---
 
-## 3A. Harness source-of-truth and staged rollout (2026-09-24)
+## 3A. Harness source-of-truth and staged rollout (2026-09-23)
 
 This section is the release-facing summary. The operational commands and
 consumer ownership rules live in
@@ -243,27 +243,28 @@ consumer ownership rules live in
 
 | Source | Verified state | Role |
 |---|---|---|
-| Harness `v0.4.1` | latest immutable release; peeled commit `ad4a3005…` | production source of truth |
-| Harness `origin/main` | `6d5a2f8…`; untagged; 55 commits beyond `v0.4.1` | bounded canary only |
-| Local Harness checkout | `ff5dc8aa…`; 30 commits behind; dirty | diagnostic context only |
+| Harness `v0.4.1` | immutable release; peeled commit `ad4a3005…` | production source of truth |
+| Harness `origin/main` | moving; re-resolve one SHA per canary run | bounded canary only |
+| External Harness checkout | not a consumer source | diagnostic context only |
 | SCMessenger `origin/main` | `56d66f71…`; inspected CI green | implementation baseline |
 
-The SCMessenger checkout used for this plan is a clean isolated worktree based
-on the freshly fetched `origin/main`. The shared WIP checkout and all Harness
+The SCMessenger checkout used for this plan is an isolated worktree based on
+the freshly fetched `origin/main`. The shared WIP checkout and all Harness
 worktrees remain out of scope.
 
 ### Production and canary rules
 
 1. Production consumers admit only an immutable Harness release tag and its
-   peeled commit. The tag, commit, package version, API probe, and CI run are
-   recorded together.
+   peeled commit. The manifest records the tag, commit, package version, and
+   root; release evidence records the external CI runs separately.
 2. `origin/main` may be tested only as a one-SHA canary in a separate
    `tmp/harness-admission/` staging path. If `origin/main` advances, the old
    canary is invalid; no moving branch is release evidence.
 3. The local Harness checkout may be inspected for diagnosis, but it is never
    copied into a release candidate and never overrides the tag.
 4. A dirty source, unknown version, wrong remote, wrong SHA, missing imported
-   symbol, report-schema mismatch, or unavailable required key is `[BLOCKED]`.
+   symbol, or report-schema mismatch is `[BLOCKED]`; live JEV without its
+   required key is `[UNVERIFIED-JEV]`.
 5. Structural JEV fallback is `[UNVERIFIED-JEV]`, never canonical DONE.
 6. During the 0.4.0 freeze, no Harness update is admitted after the release
    candidate is cut. A new tag starts a new candidate and repeats every gate.
@@ -273,43 +274,44 @@ worktrees remain out of scope.
 1. Detect tags and `main` with `git ls-remote`; record the exact remote URLs.
 2. Resolve the expected tag to its peeled commit; reject a missing or moving
    ref.
-3. Bootstrap or update only in `tmp/harness-admission/<tag>-<sha>`; never use
-   the system temp directory or edit an external Harness worktree.
+3. Stage only in `tmp/harness-admission/<tag>-<sha>`; never use the system
+   temp directory or edit an external Harness worktree.
 4. Read `pyproject.toml` before importing package code; do not trust installed
    package metadata as checkout identity.
 5. Probe every SCMessenger import, including the private JEV validation
-   functions, the CLI commands used by `harness_gate.py`, exit-code behavior,
-   and the verify report schema.
+   functions, the CLI commands used by `harness_gate.py`, and the verify report
+   schema.
 6. Run hermetic no-key/no-network import and fallback-classification checks.
 7. Require green Harness CI for the exact SHA and green SCMessenger CI for
-   the consumer update PR.
-8. Promote the verified copy atomically and retain the previous admitted
-   source for rollback.
-9. Record the result as `PRODUCTION`, `CANARY`, or `BLOCKED`; never collapse
-   those states into a green status.
+   the consumer update PR as separate release evidence.
+8. Promote only after validation and retain the previous admitted source for
+   rollback.
+9. Emit `PRODUCTION` or `CANARY` only on success; report every refusal as a
+   failure rather than a green status.
 
 ### Ownership and overlapping pull requests
 
 - The Harness maintainer owns upstream tags, API/CLI compatibility, and
   Harness CI.
-- The SCMessenger consumer owner owns `local_harness.py`, the updater, the
-  admission manifest, wrapper tests, and the runbook.
+- The SCMessenger consumer owner owns the source resolver, admission
+  lifecycle, manifest, JEV adapter, tests, and runbook.
 - The orchestrator owns the 0.4.0 freeze, CI sequencing, and merge order.
 - Platform owners own Android, Windows CLI, cloud node, and native behavior.
 - A security reviewer independently reviews gated core changes.
 
 | Pull request | Disposition | Reason |
 |---|---|---|
-| #360 `freebuff/harness-version-floor` | Superseded for implementation; port the version-floor intent | It is conflicting, based on an older wrapper, and overlaps the root/version contract. Recreate the guard on fresh `main`; do not merge the old implementation. |
+| #360 `freebuff/harness-version-floor` | Superseded; intent ported here | The old implementation conflicts with the current wrapper and root/version contract. This branch implements the guard on the isolated fresh-main baseline; do not merge the old implementation. |
 | #362 `claude/harness-lane-state-2026-09-22` | Adopted as documentation evidence; keep separate | Its append-only CTO/CEO update records the Claude lane and upstream behavior. This plan incorporates the facts without duplicating or absorbing that PR. |
-| #347/#344 and later merged consumer work | Adopted as current baseline | Fresh SCMessenger `origin/main` is the implementation baseline; this change is policy and runbook documentation only. |
+| #347/#344 and later merged consumer work | Adopted as current baseline | Fresh SCMessenger `origin/main` is the implementation baseline; this branch adds the source/admission reconstruction on top. |
 
 ### Staged delivery sequence
 
 1. Land the documentation and admission policy on this isolated branch.
-2. Recreate the #360 guard on fresh `main` with immutable-tag checks,
-   exact-SHA output, and fail-closed refusal.
-3. Add the bounded-main canary and rollback tests without changing production
+2. The consumer architecture pass now provides the #360 intent on fresh
+   `main`: immutable-tag checks, exact-SHA output, and fail-closed refusal.
+3. The bounded-main canary and rollback lifecycle is implemented and covered
+   by `scripts/test_harness_admission.py` without changing production
    defaults.
 4. Independently review/merge the append-only #362 documentation if it remains
    clean and scoped.

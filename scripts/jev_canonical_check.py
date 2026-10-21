@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """JEV canonical completion helper for SCMessenger WP tickets (orchestrator tool).
 
-Usage (Windows host):
-  $env:HARNESS_REPO = "C:\\Users\\SCM\\Documents\\GitHub\\Harness-jev-use"
-  # Prefer a clean origin/main worktree of harness (or HARNESS_REPO).
+Usage:
   python scripts/jev_canonical_check.py --wp WP1 --state-file path/to/state.json
+
+The source is the pinned admission in scripts/harness_admission.json.
+There is no consumer-side source override; canary admission is a separate
+lifecycle mode and is never production evidence.
 
 State JSON should include: wp, instruction, files, acceptance, evidence
 (commands/outputs), canon rows claimed.
@@ -16,14 +18,12 @@ Exit 0 only if keyed JEV `result.is_passing(min_confidence)` is true.
 This script does not replace mechanical gates (rules_check, tests, pr_scope).
 It implements HANDOFF/V040_IMPLEMENTATION_PLAN_WIFI_IDENTITY_2026-09-21.md section 3.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 from pathlib import Path
-
 
 CANON_QUESTIONS = {
     "canon_identity": {
@@ -60,22 +60,6 @@ CANON_QUESTIONS = {
 }
 
 
-def load_harness():
-    """Import JEV from SCMessenger-local harness (vendor/sovereign-harness)."""
-    try:
-        from local_harness import import_harness  # type: ignore
-    except ImportError:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from local_harness import import_harness  # type: ignore
-    mod = import_harness()
-    return (
-        mod["JevEvaluator"],
-        None,
-        mod["root"],
-        mod["key"],
-    )
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--wp", required=True)
@@ -93,19 +77,18 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from local_harness import (  # type: ignore
         evaluate_jev_with_openrouter_fallback,
-        import_harness,
         make_policy,
     )
 
     state = json.loads(Path(args.state_file).read_text(encoding="utf-8"))
     state.setdefault("wp", args.wp)
-    mod = import_harness()
-    print(f"[INFO] harness: {mod['root']} typesafe_key={bool(mod['key'])} "
-          f"openrouter_key={bool(mod.get('openrouter_key'))}")
-    _policy, _ = make_policy()
+    _policy, mod = make_policy()
+    print(
+        f"[INFO] harness: {mod['root']} typesafe_key={bool(mod['key'])} "
+        f"openrouter_key={bool(mod.get('openrouter_key'))}"
+    )
     evaluator = _policy.evaluator
     if args.no_openrouter:
         result = evaluator.evaluate(state, questions=CANON_QUESTIONS)
@@ -114,11 +97,17 @@ def main() -> int:
         result, meta = evaluate_jev_with_openrouter_fallback(
             evaluator, state, CANON_QUESTIONS
         )
-    print(f"[INFO] endpoint={meta.get('endpoint')} fallback_used={meta.get('fallback_used')}")
+    print(
+        f"[INFO] endpoint={meta.get('endpoint')} fallback_used={meta.get('fallback_used')}"
+    )
     if meta.get("openrouter_model"):
         print(f"[INFO] openrouter_model={meta['openrouter_model']}")
-    print(f"[INFO] verdict={result.verdict} supported={result.supported} confidence={result.confidence}")
-    print(f"[INFO] is_fallback={result.is_fallback} cost={result.cost} tokens_in={result.input_tokens} model={result.model}")
+    print(
+        f"[INFO] verdict={result.verdict} supported={result.supported} confidence={result.confidence}"
+    )
+    print(
+        f"[INFO] is_fallback={result.is_fallback} cost={result.cost} tokens_in={result.input_tokens} model={result.model}"
+    )
     print(f"[INFO] answers={json.dumps(result.answers, ensure_ascii=False)}")
     for reason in result.reasons:
         print(f"[INFO] reason: {reason}")
@@ -129,7 +118,9 @@ def main() -> int:
         print("[FAIL] UNVERIFIED-JEV — fallback result is not canonical DONE")
         return 0 if args.allow_fallback else 1
     if result.is_passing(args.min_confidence):
-        print(f"[OK] JEV canonical pass (min_confidence={args.min_confidence}) via {meta.get('endpoint')}")
+        print(
+            f"[OK] JEV canonical pass (min_confidence={args.min_confidence}) via {meta.get('endpoint')}"
+        )
         return 0
     print("[FAIL] JEV canonical check did not pass")
     return 1
