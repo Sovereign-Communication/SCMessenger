@@ -26,6 +26,9 @@ ignore = [
     # 0.24 (rustls 0.22) and ureq 2.x - upgrading those is a major dependency
     # upgrade, tracked separately. Transitive, no safe upgrade available.
     "RUSTSEC-2026-0381",
+    # Transitive via askama 0.14 -> uniffi - unmaintained (repo archived
+    # 2025-03-02), no safe upgrade available per the advisory itself.
+    "RUSTSEC-2026-0374",
 ]
 
 [licenses]
