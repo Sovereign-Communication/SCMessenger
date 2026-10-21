@@ -441,7 +441,10 @@ mod contact_envelope_gate_tests {
     fn recent_ids_are_pruned_when_their_earlier_ttl_expires() {
         let mut recent = RecentEnvelopeIds::default();
         assert!(recent.first_seen(id(1), SIGNER, NOW, NOW + 2, NOW));
-        assert_eq!(recent.until.get(&id(1)), Some(&(NOW + 1)));
+        assert_eq!(
+            recent.until.get(&id(1)).map(|(until, _)| *until),
+            Some(NOW + 1)
+        );
 
         // TTL is exclusive, so the envelope is no longer fresh at NOW + 2.
         recent.prune(NOW + 2);
