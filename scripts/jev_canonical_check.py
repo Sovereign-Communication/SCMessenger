@@ -661,6 +661,382 @@ def score_gate(
     }
 
 
+# --------------------------------------------------------------------------- scoped evaluation
+#
+# PR #501 sent a 188 KB state (178,782-char diff) in ONE TypeSafe call; TypeSafe
+# answered HTTP 400 max_tokens_exceeded, the pinned harness only hard-fails on
+# 401/422, so the 400 silently became a local structural fallback. Large states
+# are therefore split: one evaluate call per bucket, carrying only the hunks of
+# the files that selected that bucket, and chunked by file when still too big.
+
+# Per-call budget for the JSON-serialised state, in characters. Justification:
+# the largest state TypeSafe is known to have judged live was 80,162 chars
+# (jev482d, 24,093 input tokens); the smallest known failure was 188,197 chars.
+# 48,000 sits at 60% of the largest proven-good size, so there is wide margin
+# below the (unmeasured) true limit. States at or under it are sent in a single
+# call exactly as before.
+JEV_MAX_STATE_CHARS = 48_000
+# Floor for the diff share of a call, so a very large evidence block cannot
+# shrink chunks to nothing.
+JEV_MIN_DIFF_CHARS = 8_000
+SUMMARY_MAX_FILES = 300
+
+
+class FileDiff:
+    """One file's slice of a unified diff: shared header lines plus whole hunks."""
+
+    def __init__(self, path: str, header: List[str], hunks: List[str], deleted: bool = False):
+        self.path = path
+        self.header = header
+        self.hunks = hunks
+        self.deleted = deleted
+
+    def render(self, hunks: Optional[List[str]] = None) -> str:
+        return "".join(self.header) + "".join(self.hunks if hunks is None else hunks)
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        add = rem = 0
+        for h in self.hunks:
+            for line in h.splitlines()[1:]:
+                if line.startswith("+"):
+                    add += 1
+                elif line.startswith("-"):
+                    rem += 1
+        return {"added": add, "removed": rem, "hunks": len(self.hunks)}
+
+
+_DIFF_GIT_RE = re.compile(r"^diff --git a/(.*) b/(.*)$")
+
+
+def _strip_ab(target: str) -> str:
+    return (target[2:] if target[:2] in ("a/", "b/") else target).replace("\\", "/")
+
+
+def _file_path_from_header(header: List[str]) -> "tuple[str, bool]":
+    old = new = ""
+    for line in header:
+        if line.startswith("--- "):
+            old = line[4:].strip()
+        elif line.startswith("+++ "):
+            new = line[4:].strip()
+    if new and new != "/dev/null":
+        return _strip_ab(new), False
+    if old and old != "/dev/null":
+        return _strip_ab(old), new == "/dev/null"
+    for line in header:
+        m = _DIFF_GIT_RE.match(line.rstrip("\r\n"))
+        if m:
+            return m.group(2).replace("\\", "/"), False
+    return "", False
+
+
+def parse_file_diffs(diff: str) -> List[FileDiff]:
+    """Split a unified diff into per-file headers and whole hunks.
+
+    A hunk starts at an `@@` line and runs to the next `@@` or file boundary, so
+    callers can regroup hunks without ever cutting one. Files start at
+    `diff --git`; for plain `---`/`+++` diffs a file starts at a `--- ` line
+    followed by `+++ ` while not inside a hunk.
+    """
+    lines = diff.splitlines(keepends=True)
+    git_mode = any(l.startswith("diff --git ") for l in lines)
+    blocks: List[List[str]] = []
+    cur: Optional[List[str]] = None
+    in_hunk = False
+    for i, line in enumerate(lines):
+        if git_mode:
+            boundary = line.startswith("diff --git ")
+        else:
+            boundary = (not in_hunk and line.startswith("--- ")
+                        and i + 1 < len(lines) and lines[i + 1].startswith("+++ "))
+        if boundary:
+            cur = [line]
+            blocks.append(cur)
+            in_hunk = False
+            continue
+        if cur is None:
+            continue
+        if line.startswith("@@"):
+            in_hunk = True
+        cur.append(line)
+    out: List[FileDiff] = []
+    for block in blocks:
+        header: List[str] = []
+        hunks: List[str] = []
+        for line in block:
+            if line.startswith("@@"):
+                hunks.append(line)
+            elif hunks:
+                hunks[-1] += line
+            else:
+                header.append(line)
+        path, deleted = _file_path_from_header(header)
+        if path:
+            out.append(FileDiff(path, header, hunks, deleted))
+    return out
+
+
+def chunk_file_diffs(files: List[FileDiff], budget: int) -> List[str]:
+    """Pack file diffs into chunks of at most `budget` chars, never cutting a hunk.
+
+    Whole files are packed in order. A file larger than the budget is split
+    between hunks, each part repeating the file header. A single hunk larger
+    than the budget becomes its own (over-budget) chunk: it is never truncated,
+    because a half hunk would be judged as if it were the whole change.
+    """
+    chunks: List[str] = []
+    current: List[str] = []
+    size = 0
+
+    def flush() -> None:
+        nonlocal current, size
+        if current:
+            chunks.append("".join(current))
+        current, size = [], 0
+
+    for fd in files:
+        whole = fd.render()
+        if len(whole) <= budget:
+            if size + len(whole) > budget:
+                flush()
+            current.append(whole)
+            size += len(whole)
+            continue
+        flush()
+        head = "".join(fd.header)
+        part: List[str] = []
+        psize = len(head)
+        for h in fd.hunks:
+            if part and psize + len(h) > budget:
+                chunks.append(head + "".join(part))
+                part, psize = [], len(head)
+            part.append(h)
+            psize += len(h)
+        if part:
+            chunks.append(head + "".join(part))
+    flush()
+    return chunks
+
+
+def files_for_buckets(selected: Iterable[str], file_diffs: List[FileDiff],
+                      state_deleted: Iterable[str] = ()) -> Dict[str, List[FileDiff]]:
+    """Map each selected bucket to the file diffs that selected it."""
+    sd = set(state_deleted)
+    out: Dict[str, List[FileDiff]] = {b: [] for b in selected if b != INSTRUCTION_BUCKET}
+    for fd in file_diffs:
+        parsed = parse_unified_diff(fd.render())
+        gone = fd.deleted or fd.path in sd
+        hit = select_buckets(
+            [fd.path],
+            deleted=[fd.path] if gone else [],
+            removed_symbols=parsed["removed_symbols"],
+            added_by_path={fd.path: parsed["added_by_path"].get(fd.path, "")},
+        )
+        for b in hit:
+            if b in out:
+                out[b].append(fd)
+    return out
+
+
+def diff_summary(file_diffs: List[FileDiff]) -> str:
+    """Compact change summary for the instruction bucket (no hunk bodies)."""
+    tot = {"added": 0, "removed": 0, "hunks": 0}
+    rows = []
+    for fd in file_diffs:
+        s = fd.stats
+        for k in tot:
+            tot[k] += s[k]
+        rows.append(f"{fd.path} (+{s['added']} -{s['removed']}, {s['hunks']} hunks"
+                    + (", deleted)" if fd.deleted else ")"))
+    head = f"{len(file_diffs)} files changed, +{tot['added']} -{tot['removed']}, {tot['hunks']} hunks"
+    if len(rows) > SUMMARY_MAX_FILES:
+        rows = rows[:SUMMARY_MAX_FILES] + [f"... {len(file_diffs) - SUMMARY_MAX_FILES} more files"]
+    return "\n".join([head, *rows])
+
+
+class ScopedCall:
+    def __init__(self, bucket: str, chunk: int, chunks: int, state: Dict[str, Any], questions: Dict[str, Any]):
+        self.bucket, self.chunk, self.chunks = bucket, chunk, chunks
+        self.state, self.questions = state, questions
+        self.state_chars = len(json.dumps(state, ensure_ascii=False))
+
+
+def plan_calls(state: Dict[str, Any], selected: List[str], info: Dict[str, Any],
+               max_state_chars: int = JEV_MAX_STATE_CHARS) -> List[ScopedCall]:
+    """One call when the state fits the budget, else one call per bucket (and chunk)."""
+    whole = len(json.dumps(state, ensure_ascii=False))
+    diff = state.get("diff")
+    if whole <= max_state_chars or not (isinstance(diff, str) and diff.strip()):
+        return [ScopedCall("*", 1, 1, state, build_questions(selected))]
+    file_diffs = parse_file_diffs(diff)
+    base = {k: v for k, v in state.items() if k != "diff"}
+    budget = max(JEV_MIN_DIFF_CHARS, max_state_chars - len(json.dumps(base, ensure_ascii=False)))
+    by_bucket = files_for_buckets(selected, file_diffs, info.get("deleted") or ())
+    calls: List[ScopedCall] = []
+    for name in selected:
+        questions = build_questions([name])
+        gate = dict(base.get("jev_gate") or {}, buckets_selected=[name], scoped_to_bucket=name)
+        if name == INSTRUCTION_BUCKET:
+            st = dict(base, jev_gate=gate, diff_summary=diff_summary(file_diffs))
+            calls.append(ScopedCall(name, 1, 1, st, questions))
+            continue
+        chunks = chunk_file_diffs(by_bucket.get(name, []), budget) or [""]
+        for i, text in enumerate(chunks, start=1):
+            g = dict(gate, chunk=f"{i}/{len(chunks)}")
+            st = dict(base, jev_gate=g, diff=text or "(no diff hunks attributable to this bucket)")
+            calls.append(ScopedCall(name, i, len(chunks), st, questions))
+    return calls
+
+
+# ----------------------------------------------------------------- failure diagnostics
+
+
+def describe_http_error(status: Any, resp: Any) -> Dict[str, Any]:
+    """HTTP status plus error type/message from a TypeSafe/OpenRouter error body."""
+    err = resp.get("error", resp) if isinstance(resp, dict) else resp
+    etype = message = None
+    if isinstance(err, dict):
+        etype = err.get("type") or err.get("code") or err.get("error_type")
+        message = err.get("message") or err.get("detail")
+    elif isinstance(err, str):
+        message = err
+    if message is None and err is not None:
+        message = json.dumps(err, ensure_ascii=False, default=str)
+    return {"http": status, "error_type": etype, "message": (str(message)[:300] if message else None)}
+
+
+class RecordingTransport:
+    """Wraps the harness transport (without modifying it) to keep each reply.
+
+    The pinned evaluator swallows every non-401/422 failure into a local
+    fallback; this is the only place the real HTTP status survives.
+    """
+
+    def __init__(self, inner: Any):
+        self.inner = inner
+        self.records: List[Dict[str, Any]] = []
+
+    def post(self, *args: Any, **kwargs: Any):
+        try:
+            status, resp = self.inner.post(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            self.records.append({"http": None, "error_type": type(exc).__name__, "message": str(exc)[:300]})
+            raise
+        self.records.append(
+            {"http": status, "error_type": None, "message": None} if status == 200
+            else describe_http_error(status, resp)
+        )
+        return status, resp
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+def fallback_reason(result: Any, meta: Dict[str, Any], typesafe: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Human-readable cause of a fallback result; None when the result is live."""
+    if not getattr(result, "is_fallback", False):
+        return None
+    parts = []
+    if typesafe is None:
+        parts.append("TypeSafe: no reply recorded (no key or transport failure)")
+    else:
+        parts.append(f"TypeSafe HTTP {typesafe.get('http')} error_type={typesafe.get('error_type')}"
+                     + (f": {typesafe['message']}" if typesafe.get("message") else ""))
+    if meta.get("openrouter_http") is not None:
+        parts.append(f"OpenRouter HTTP {meta.get('openrouter_http')}")
+    if meta.get("openrouter_error"):
+        parts.append("OpenRouter error: " + json.dumps(meta["openrouter_error"], ensure_ascii=False, default=str)[:300])
+    if meta.get("openrouter_parse_error"):
+        parts.append("OpenRouter parse error: " + str(meta["openrouter_parse_error"])[:200])
+    if meta.get("fallback_skipped"):
+        parts.append("OpenRouter skipped: " + str(meta["fallback_skipped"]))
+    parts.append("result is the local structural fallback")
+    return "; ".join(parts)
+
+
+# ----------------------------------------------------------------- aggregation
+
+
+def _yes_ratio(ans: Dict[str, Any]) -> float:
+    if ans.get("type") == "choice":
+        probs = ans.get("probabilities") or {}
+        y, n = float(probs.get("yes", 0.0)), float(probs.get("no", 0.0))
+        return (y / (y + n)) if (y + n) > 0 else 0.0
+    return float(ans.get("noul", 0.0))
+
+
+def merge_chunk_answers(per_chunk: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Combine one question's answers over chunks: the worst applicable one wins.
+
+    `na` chunks (question does not apply to those files) are ignored unless
+    every chunk is `na`. A chunk answering `no` therefore always dominates.
+    """
+    live = [a for a in per_chunk if not (a.get("type") == "choice" and a.get("choice") == "na")]
+    if not live:
+        return per_chunk[0] if per_chunk else None
+    return min(live, key=lambda a: (a.get("choice") != "no", _yes_ratio(a)))
+
+
+class AggregateResult:
+    """Harness-result-shaped union of per-call results (all calls must pass)."""
+
+    def __init__(self, results: List[Any], answers: Dict[str, Any]):
+        live = [r for r in results if not r.is_fallback]
+        self.answers = answers
+        self.is_fallback = any(r.is_fallback for r in results)
+        self.verdict = "pass" if results and all(r.verdict == "pass" for r in results) else "fail"
+        self.supported = min((r.supported for r in results), default=0.0)
+        self.confidence = min((r.confidence for r in live), default=0.0)
+        self.cost = sum(float(r.cost or 0.0) for r in results)
+        self.input_tokens = sum(int(r.input_tokens or 0) for r in results)
+        self.output_tokens = sum(int(getattr(r, "output_tokens", 0) or 0) for r in results)
+        models = sorted({str(r.model) for r in results})
+        self.model = models[0] if len(models) == 1 else ",".join(models)
+        self.reasons = [x for r in results for x in (r.reasons or [])]
+
+
+def run_calls(calls: List[ScopedCall], call_fn: Any) -> "tuple[Any, Dict[str, Any], List[Dict[str, Any]]]":
+    """Run every planned call; return (result, aggregate meta, call records).
+
+    `call_fn(state, questions) -> (result, meta, typesafe_record_or_None)`.
+    With one call the harness result is returned untouched (verdict semantics
+    unchanged). With several, answers of a fallback call are dropped (their keys
+    are not question ids), so those questions score as missing: fail closed.
+    """
+    results: List[Any] = []
+    records: List[Dict[str, Any]] = []
+    metas: List[Dict[str, Any]] = []
+    per_q: Dict[str, List[Dict[str, Any]]] = {}
+    for call in calls:
+        result, meta, typesafe = call_fn(call.state, call.questions)
+        results.append(result)
+        metas.append(meta)
+        records.append({
+            "bucket": call.bucket, "chunk": f"{call.chunk}/{call.chunks}",
+            "state_chars": call.state_chars, "endpoint": meta.get("endpoint"),
+            "is_fallback": bool(result.is_fallback),
+            "fallback_reason": fallback_reason(result, meta, typesafe),
+            "typesafe_http": (typesafe or {}).get("http"),
+            "typesafe_error_type": (typesafe or {}).get("error_type"),
+            "input_tokens": result.input_tokens,
+        })
+        if not result.is_fallback:
+            for qid, ans in (result.answers or {}).items():
+                if isinstance(ans, dict):
+                    per_q.setdefault(qid, []).append(ans)
+    endpoints = sorted({str(m.get("endpoint")) for m in metas})
+    meta_out = {
+        "endpoint": "+".join(endpoints),
+        "fallback_used": any(m.get("fallback_used") for m in metas),
+        "openrouter_model": next((m["openrouter_model"] for m in metas if m.get("openrouter_model")), None),
+    }
+    if len(results) == 1:
+        return results[0], meta_out, records
+    merged = {q: m for q, lst in per_q.items() if (m := merge_chunk_answers(lst)) is not None}
+    return AggregateResult(results, merged), meta_out, records
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -734,6 +1110,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Disable OpenRouter ~typesafe/jev-latest fallback",
     )
     ap.add_argument(
+        "--max-state-chars", type=int, default=JEV_MAX_STATE_CHARS,
+        help="Largest JSON state sent in one evaluate call; above it the diff is scoped per bucket "
+             f"and chunked by file (default {JEV_MAX_STATE_CHARS})",
+    )
+    ap.add_argument(
         "--result-file",
         help="Write structured JEV result JSON for a controller-owned evidence gate",
     )
@@ -781,14 +1162,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"typesafe_key={bool(mod['key'])} "
         f"openrouter_key={bool(mod.get('openrouter_key'))}"
     )
-    print(f"[INFO] buckets_selected={selected} questions={len(questions)}")
     _policy, _ = make_policy()
     evaluator = _policy.evaluator
-    if args.no_openrouter:
-        result = evaluator.evaluate(state, questions=questions)
-        meta = {"endpoint": "typesafe", "fallback_used": False}
-    else:
-        result, meta = evaluate_jev_with_openrouter_fallback(evaluator, state, questions)
+    recorder: Optional[RecordingTransport] = None
+    if hasattr(evaluator, "transport"):
+        recorder = RecordingTransport(evaluator.transport)
+        evaluator.transport = recorder
+
+    def call_fn(call_state: Dict[str, Any], call_questions: Dict[str, Any]):
+        if recorder is not None:
+            recorder.records.clear()
+        if args.no_openrouter:
+            res = evaluator.evaluate(call_state, questions=call_questions)
+            m = {"endpoint": "typesafe", "fallback_used": False}
+        else:
+            res, m = evaluate_jev_with_openrouter_fallback(evaluator, call_state, call_questions)
+        return res, m, (recorder.records[-1] if recorder is not None and recorder.records else None)
+
+    calls = plan_calls(state, selected, info, args.max_state_chars)
+    scoped = not (len(calls) == 1 and calls[0].bucket == "*")
+    print(f"[INFO] buckets_selected={selected} questions={len(questions)} calls={len(calls)} scoped={scoped}")
+    if scoped:
+        for c in calls:
+            print(f"[INFO] call bucket={c.bucket} chunk={c.chunk}/{c.chunks} state_chars={c.state_chars}")
+    result, meta, call_records = run_calls(calls, call_fn)
+    for rec in call_records:
+        if rec["fallback_reason"]:
+            print(f"[WARNING] fallback bucket={rec['bucket']} chunk={rec['chunk']}: {rec['fallback_reason']}")
+    fb_reasons = sorted({r["fallback_reason"] for r in call_records if r["fallback_reason"]})
     print(f"[INFO] endpoint={meta.get('endpoint')} fallback_used={meta.get('fallback_used')}")
     if meta.get("openrouter_model"):
         print(f"[INFO] openrouter_model={meta['openrouter_model']}")
@@ -829,6 +1230,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         "is_fallback": bool(result.is_fallback),
         "fallback_used": bool(meta.get("fallback_used")),
         "keyed": bool(mod["key"]),
+        "scoped": scoped,
+        "max_state_chars": args.max_state_chars,
+        "fallback_reason": "; ".join(fb_reasons) if fb_reasons else None,
+        "calls": call_records,
         "endpoint": meta.get("endpoint"),
         "model": result.model,
         "confidence": result.confidence,
@@ -862,7 +1267,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Canonical DONE requires a live keyed answer (TypeSafe or OpenRouter),
     # never pure structural fallback / UNVERIFIED-JEV.
     if result.is_fallback:
-        print("[FAIL] UNVERIFIED-JEV - fallback result is not canonical DONE")
+        print("[FAIL] UNVERIFIED-JEV - fallback result is not canonical DONE"
+              + (f" (reason: {'; '.join(fb_reasons)})" if fb_reasons else ""))
         return 0 if args.allow_fallback else 1
     if canonical_pass:
         print(f"[OK] JEV bucketed pass (min_confidence={args.min_confidence}, "

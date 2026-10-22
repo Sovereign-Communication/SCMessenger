@@ -48,13 +48,23 @@ class ConversationsViewModelTest {
         Dispatchers.resetMain()
     }
 
+    /** Poll in real time; runTest's virtual clock cannot order Dispatchers.IO work. */
+    private fun awaitCondition(what: String, timeoutMs: Long = 5_000, check: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (!check()) {
+            if (System.nanoTime() > deadline) fail("Timed out waiting for: $what")
+            Thread.sleep(10)
+        }
+    }
+
     @Test
     fun `viewModel loads messages on initialization`() = runTest {
         // Run any pending coroutines (init block)
         testDispatcher.scheduler.advanceUntilIdle()
 
         // Verify loadMessages was called with any args
-        verify { mockMeshRepository.getRecentMessages(any(), any()) }
+        // Init load runs on Dispatchers.IO; wait for it to land.
+        verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
     }
 
     @Test
@@ -82,14 +92,23 @@ class ConversationsViewModelTest {
         )
         every { mockMeshRepository.getRecentMessages(any(), any()) } returns listOf(testMessage)
 
+        // The update collector is launched on Dispatchers.IO; the flow has
+        // replay = 0, so an emit before it subscribes is silently dropped.
+        // Wait (real time) for the subscriber before emitting.
+        awaitCondition("update collector subscribed") { messageUpdatesFlow.subscriptionCount.value >= 1 }
+
         // When a message update is emitted
         messageUpdatesFlow.emit(testMessage)
         testDispatcher.scheduler.advanceUntilIdle()
 
-        // Then verify getRecentMessages is called again (reloading list)
-        verify(exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
+        // Then verify getRecentMessages is called again (reloading list).
+        // The reload runs on Dispatchers.IO, so wait for it to land. Counts were
+        // cleared after the init load, so atLeast = 1 proves the update caused a
+        // reload without being sensitive to extra IO-side reloads.
+        verify(timeout = 5_000, atLeast = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
 
-        // And verify state is updated
+        // And verify state is updated (StateFlow is written on IO after the call returns)
+        awaitCondition("messages state updated") { viewModel.messages.value.size == 1 }
         assertEquals(1, viewModel.messages.value.size)
         assertEquals("Hello", viewModel.messages.value[0].content)
     }
@@ -114,7 +133,7 @@ class ConversationsViewModelTest {
         // so the exact-count assertions below stay deterministic AND strict.
         verify(timeout = 5_000) { mockMeshRepository.getRecentMessages(any(), any()) }
         verify(exactly = 1) { mockMeshRepository.clearConversation("peer-delete") }
-        verify(exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
+        verify(timeout = 5_000, exactly = 1) { mockMeshRepository.getRecentMessages(any(), any()) }
     }
 
     @Test

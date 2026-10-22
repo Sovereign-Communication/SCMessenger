@@ -5,7 +5,8 @@ description: >-
   made. On the self-hosted OCI ARM runner the step runs in verify-only mode:
   it checks that every required package and toolchain component is present
   (pkg-config, libdbus-1-dev, protoc, rustc/clippy/rustfmt 1.99.0) and fails
-  naming anything missing. It never runs sudo or apt on self-hosted.
+  naming anything missing. It never runs sudo or apt on the OCI self-hosted
+  runner.
 
 inputs:
   ripgrep:
@@ -23,10 +24,10 @@ runs:
       run: |
         set -euo pipefail
         if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
-          sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config protobuf-compiler
           exit 0
         fi
-        # Self-hosted: verify only. No sudo, no apt. Missing items fail the job.
+        # OCI self-hosted: verify only. No sudo, no apt. Missing items fail the job.
         missing=()
         pkg-config --exists dbus-1 || missing+=(libdbus-1-dev)
         command -v pkg-config >/dev/null 2>&1 || missing+=(pkg-config)

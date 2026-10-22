@@ -17,6 +17,7 @@ mod seed_dial;
 mod server;
 mod transport_api;
 mod transport_bridge;
+mod transport_status;
 mod watchdog;
 
 #[cfg(target_os = "windows")]
@@ -2680,11 +2681,14 @@ async fn cmd_start(
     // concurrent diagnostic probe can trigger a btleplug completion panic.
     // Keep the probe on Windows/Linux, where the existing startup behavior is
     // safe and remains useful for adapter diagnostics.
-    if config.enable_ble && !cfg!(target_os = "macos") {
-        tokio::spawn(async move {
-            ble_daemon::probe_and_log().await;
-        });
-    }
+    // Per-transport availability markers (`[TRANSPORT] kind=...`), BLE probe
+    // included, plus the periodic connected-peer counts.
+    transport_status::spawn(
+        config.enable_mdns,
+        config.enable_ble,
+        peers.clone(),
+        ledger.clone(),
+    );
 
     // Subscribe to any topics from the ledger
     for topic in known_topics {
@@ -3173,7 +3177,10 @@ async fn cmd_start(
                             // LEDGER EXCHANGE: Received peer list from a connected peer
                             SwarmEvent::LedgerReceived { from_peer, entries } => {
                                 let mut l = ledger_rx.lock().await;
-                                let new_count = l.merge_shared_entries(&entries);
+                                let new_count = l.merge_shared_entries_via(
+                                    &entries,
+                                    &format!("ledger_exchange:{}", scmessenger_core::message_events::short_peer(&from_peer.to_string())),
+                                );
 
                                 if new_count > 0 {
                                     println!(
@@ -3524,6 +3531,10 @@ async fn cmd_start(
                             }
                             SwarmEvent::ListeningOn(addr) => {
                                 println!("{} Listening on {}", "[OK]".green(), addr);
+                                transport_status::on_listening(&addr.to_string());
+                            }
+                            SwarmEvent::ListenerFailed { error, .. } => {
+                                transport_status::on_listener_failed(&error);
                             }
                             _ => {}
                         }
@@ -3620,13 +3631,18 @@ async fn cmd_start(
                                          let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
                                           if let Ok(prep) = core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                                let ble_ok = ble_mesh::send_ble_message(&target.to_string(), &prep.envelope_data).await.is_ok();
-                                               let swarm_ok = swarm_handle.send_message(target, prep.envelope_data, None, None).await.is_ok();
-                                               if swarm_ok {
-                                                   // True transport ACK (R2): release the outbox entry without a
-                                                   // Delivered receipt. BLE gatt is fire-and-forget, so only the
-                                                   // swarm path marks sent.
-                                                   core_rx.mark_message_sent(prep.message_id.clone());
-                                               }
+                                               // True transport ACK (R2): releases the outbox entry
+                                               // only on a direct-link ACK. BLE gatt is fire-and-forget.
+                                               let swarm_ok = crate::api::swarm_send_releasing_on_direct_ack(
+                                                   &swarm_handle,
+                                                   &core_rx,
+                                                   target,
+                                                   prep.envelope_data,
+                                                   None,
+                                                   prep.message_id.clone(),
+                                               )
+                                               .await
+                                               .is_ok();
                                                let sent = ble_ok || swarm_ok;
 
                                                if sent {
@@ -3807,13 +3823,20 @@ async fn cmd_start(
                                         let wire_message = crate::api::build_identity_wrapped_text(&core_rx, &swarm_handle, &message).await;
         match core_rx.prepare_message_with_id(pk.clone(), wire_message, scmessenger_core::MessageType::Text, None) {
                                             Ok(prep) => {
-                                                if swarm_handle
-                                                    .send_message(target, prep.envelope_data, None, None)
-                                                    .await
-                                                    .is_ok()
+                                                // True transport ACK (R2): the helper releases the
+                                                // outbox entry only for a direct link (relay Ok =
+                                                // custody only).
+                                                if crate::api::swarm_send_releasing_on_direct_ack(
+                                                    &swarm_handle,
+                                                    &core_rx,
+                                                    target,
+                                                    prep.envelope_data,
+                                                    None,
+                                                    prep.message_id.clone(),
+                                                )
+                                                .await
+                                                .is_ok()
                                                 {
-                                                    // True transport ACK (R2): release the outbox entry.
-                                                    core_rx.mark_message_sent(prep.message_id.clone());
                                                     let mid = msg_id.clone().unwrap_or_default();
                                                     let mut m = serde_json::Map::new();
                                                     m.insert("status".to_string(), "sent".into());
@@ -4298,10 +4321,13 @@ async fn cmd_relay(
 
     // The BLE central task is the sole CoreBluetooth manager owner on macOS;
     // do not start a second probe worker in the headless startup path.
+    transport_status::spawn(
+        config.enable_mdns,
+        config.enable_ble,
+        peers.clone(),
+        ledger.clone(),
+    );
     if config.enable_ble && !cfg!(target_os = "macos") {
-        tokio::spawn(async move {
-            ble_daemon::probe_and_log().await;
-        });
         let core_ble = Arc::clone(&core_arc);
         let ui_ble = ui_broadcast.clone();
         tokio::spawn(async move {
@@ -4483,7 +4509,10 @@ async fn cmd_relay(
                     }
                     SwarmEvent::LedgerReceived { from_peer, entries } => {
                         let mut l = ledger_rx.lock().await;
-                        let new_count = l.merge_shared_entries(&entries);
+                        let new_count = l.merge_shared_entries_via(
+                                    &entries,
+                                    &format!("ledger_exchange:{}", scmessenger_core::message_events::short_peer(&from_peer.to_string())),
+                                );
                         if new_count > 0 {
                             tracing::info!("Learned {} new peers from {}", new_count, from_peer);
                             // The core store persists its own updates.
@@ -4674,6 +4703,10 @@ async fn cmd_relay(
                     }
                     SwarmEvent::ListeningOn(addr) => {
                         tracing::info!("Listening on {}", addr);
+                        transport_status::on_listening(&addr.to_string());
+                    }
+                    SwarmEvent::ListenerFailed { error, .. } => {
+                        transport_status::on_listener_failed(&error);
                     }
                     _ => {}
                 }
@@ -4823,15 +4856,20 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
 
     loop {
         attempts += 1;
-        match swarm_handle
-            .send_message(recipient_peer_id, envelope_bytes.clone(), None, None)
-            .await
+        // True transport ACK (R2): the helper releases the outbox entry only
+        // for a direct link; a relayed Ok is custody acceptance and the entry
+        // must await a receipt.
+        match crate::api::swarm_send_releasing_on_direct_ack(
+            &swarm_handle,
+            &core,
+            recipient_peer_id,
+            envelope_bytes.clone(),
+            None,
+            prepared_message_id.clone(),
+        )
+        .await
         {
             Ok(_) => {
-                // True transport ACK (R2): release the outbox entry without a
-                // Delivered receipt. send_message() awaits the actual delivery,
-                // not a buffer enqueue.
-                core.mark_message_sent(prepared_message_id.clone());
                 println!(
                     "{} Message sent successfully to {} (attempt {}/{})",
                     "[OK]".green(),

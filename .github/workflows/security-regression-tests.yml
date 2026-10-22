@@ -69,14 +69,28 @@ on:
 permissions:
   contents: read
 
+# One active run per pull request; main pushes are keyed on the SHA and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.USE_OCI_RUNNER != 'false' && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
-    timeout-minutes: 45
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # 90, not 45: the full `forg` suite takes ~41-50 min on the OCI runner
+    # (passing run on PR #611: 41 min; runs on #612-#615 and on main were
+    # cancelled at the 45-minute cap with zero test failures -- the timeout
+    # WAS the failure). 90 restores ~2x headroom over the worst observed
+    # runtime. This job deliberately stays on the primary runners (OCI via
+    # CI_RUNNER, GitHub-hosted otherwise): the Ubicloud trial tier
+    # (ubicloud-standard-2, see ci.yml / USE_UBICLOUD) is queue-clearing
+    # backup for short jobs -- a cold-cache 2-vCPU runner would make this
+    # suite slower, not faster.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
