@@ -1595,34 +1595,24 @@ mod tests {
     // ---- total bound ------------------------------------------------------
 
     #[test]
-    fn over_total_evicts_across_peers_and_never_the_new_connection() {
+    fn over_total_never_disconnects_a_sole_path_across_peers() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
-        let peers: Vec<PeerId> = (0..6).map(|_| PeerId::random()).collect();
+        let peers: Vec<PeerId> = (0..8).map(|_| PeerId::random()).collect();
         for (n, peer) in peers.iter().enumerate() {
-            // The first four settle inside one quantum and stay protected by
-            // their grace windows; the last two arrive after those windows
-            // have closed, so the bound can shed the excess.
-            let when = if n < 4 {
-                at(base, n as u64 * 10)
-            } else {
-                at(base, 60_000 + n as u64 * 10)
-            };
-            b.path_established(*peer, cid(n), &wan(), true, when);
+            // One path each: every peer sits at its last path, so #573 forbids
+            // the total bound from shedding any of them, whatever its grace,
+            // trust or traffic state.
+            b.path_established(*peer, cid(n), &wan(), true, at(base, n as u64 * 10));
         }
-        assert_eq!(b.ledger.occupancy().0, 4, "bound = half the descriptors");
-        let closes = drain(&mut b);
-        assert_eq!(closes.len(), 2);
-        assert!(
-            !closes.iter().any(|(_, id)| *id == cid(5)),
-            "the connection that triggered the check is never its own victim"
-        );
+        assert!(drain(&mut b).is_empty(), "no peer may be disconnected");
+        assert_eq!(b.ledger.occupancy().0, 8, "the bound stays soft");
         let derived = b.total_budget().expect("derived");
-        assert_eq!(derived.limits.total, 4);
+        assert_eq!(derived.limits.total, 4, "bound = half the descriptors");
     }
 
     #[test]
-    fn traffic_bearing_peers_outlive_idle_sybils() {
+    fn sole_paths_survive_the_soft_bound_whatever_their_traffic() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         let honest = PeerId::random();
@@ -1639,11 +1629,11 @@ mod tests {
             );
         }
         let closes = drain(&mut b);
-        assert!(
-            !closes.iter().any(|(peer, _)| *peer == honest),
-            "the honest, active peer keeps its connection"
-        );
-        assert_eq!(b.ledger.occupancy().0, 4);
+        // #573: every peer here holds its last path, so traffic ranking has no
+        // victim left to choose and nobody is disconnected.
+        assert!(closes.is_empty(), "the soft bound disconnects nobody");
+        assert_eq!(b.ledger.live_paths(&honest), 1);
+        assert_eq!(b.ledger.occupancy().0, 20);
     }
 
     #[test]
@@ -1688,7 +1678,9 @@ mod tests {
         ));
         assert_eq!(b.pressure_events, 1);
         b.tick_with(at(base, 60_000), Some(fd_limit_1000()), false);
-        assert_eq!(b.ledger.occupancy().0, 4);
+        // #573: the episode cannot shed a sole path, so the count is unchanged;
+        // the pressure itself was still recorded and acted on.
+        assert_eq!(b.ledger.occupancy().0, 5, "sole paths survive pressure");
     }
 
     #[test]
@@ -1858,7 +1850,7 @@ mod tests {
     }
 
     #[test]
-    fn pressure_sheds_unauthenticated_idle_peers_before_authenticated_ones() {
+    fn pressure_never_disconnects_a_sole_path() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_1000);
         let honest = PeerId::random();
@@ -1872,11 +1864,13 @@ mod tests {
             b.tick_with(at(base, 1_500 * tick), Some(fd_limit_1000()), false);
         }
         let closes = drain(&mut b);
-        // A stalled close is re-issued by design (`due_reissue`), so count
-        // distinct connections, not request repeats.
-        let distinct: HashSet<ConnectionId> = closes.iter().map(|(_, id)| *id).collect();
-        assert_eq!(distinct.len(), 11, "every stranger shed, bound converged");
-        assert!(!closes.iter().any(|(peer, _)| *peer == honest));
+        // #573: repeated pressure episodes may not take any peer's last path,
+        // authenticated or not, so no close is ever requested.
+        assert!(
+            closes.is_empty(),
+            "pressure disconnected a peer: {closes:?}"
+        );
+        assert_eq!(b.ledger.occupancy().0, 12);
         assert_eq!(b.ledger.live_paths(&honest), 1);
     }
 
@@ -2036,7 +2030,9 @@ mod tests {
         b.tick_with(at(base, 60_000), Some(fd_limit_1000()), true);
         let after_first = b.ledger.occupancy().0;
         let cap = b.pending_cap;
-        assert!(after_first < 41, "the first episode shed some paths");
+        // #573: the episode cannot shed a sole path, so the ledger is unchanged
+        // even though the pressure event was recorded.
+        assert_eq!(after_first, 41, "no sole path is shed");
         // Many events, each followed by a poll, all inside the same quantum.
         for i in 1..=50u64 {
             b.note_os_exhaustion(PressureKind::Fd);
@@ -2287,7 +2283,7 @@ mod tests {
     // ---- finding 4: hot paths do not scan ----------------------------------
 
     #[test]
-    fn connect_flood_keeps_counters_exact_and_the_bound_enforced() {
+    fn connect_flood_keeps_counters_exact_with_a_soft_bound() {
         let base = Instant::now();
         let mut b = AdmissionBehaviour::new().with_sampler(fd_limit_8);
         for n in 0..3_000usize {
@@ -2299,7 +2295,9 @@ mod tests {
                 b.path_closed(&peer, &id, 0, t);
             }
         }
-        assert_eq!(b.ledger.occupancy().0, 4);
+        // #573: every arrival is a new peer at its last path, so the bound never
+        // sheds one and nothing is closed. The counters must still be exact.
+        assert_eq!(b.ledger.occupancy().0, 3_000);
         assert!(b.ledger.counters_consistent());
     }
 

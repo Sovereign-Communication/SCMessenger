@@ -2318,7 +2318,11 @@ mod tests {
             "{ev:?}"
         );
         assert!(!ev.iter().any(|e| e.id == 1), "the idle contact is kept");
-        assert_eq!(ledger.occupancy().0, 21, "soft bound: sole paths stay");
+        assert_eq!(
+            ledger.occupancy().0,
+            31,
+            "41 paths less one redundant path per Sybil"
+        );
         assert!(ledger.counters_consistent());
     }
 
@@ -2376,7 +2380,9 @@ mod tests {
         assert_eq!(ledger.pending_closes(), 50);
         assert!(ledger.counters_consistent());
         for e in &ev {
-            let _ = ledger.on_closed(&e.peer, &e.id, 0);
+            // One path per peer survives the eviction, so the swarm reports a
+            // single remaining established connection for each.
+            let _ = ledger.on_closed(&e.peer, &e.id, 1);
         }
         assert_eq!(ledger.pending_closes(), 0);
         assert_eq!(ledger.occupancy(), (50, 50));
