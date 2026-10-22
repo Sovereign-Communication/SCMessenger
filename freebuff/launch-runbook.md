@@ -6,6 +6,7 @@ Open mission tabs in this order. Paste the prompt file's full contents into each
 
 | # | Tab | Suggested backend | Model | Prompt file |
 |---|-----|-------------------|-------|-------------|
+| -1 | SCM Emergency Disk Reclaim (FIRST — 1.4GB free) | Freebuff tokens | GPT-6 Luna | `freebuff/emergency-disk-reclaim.md` — surgeon-mode purge of 100%-verified-safe worktrees/branches only. Runs before everything; 1.4GB could break git ops otherwise. |
 | 0 | SCM Readiness Verifier (gate) | Freebuff tokens | GPT-6 Luna | `freebuff/readiness-verifier.md` — runs FIRST, alone. Pulls the handoff, audits the plan, verifies the environment, posts the readiness report to #602, requests Overseer clarification. Nothing else launches until it declares GO. |
 | 1 | SCM Lane 0 — WIP Audit + Burn-Down | GPT | GPT-6 Luna | `freebuff/lane-0-wip-audit-burndown.md` — long phased mission, the foundation everything builds on. |
 | 2 | SCM Lane 1 — Merge Train | Freebuff tokens | GPT-6 Luna | `freebuff/lane-1-merge-train.md` — high-volume mechanical (rebases, CI checks, merges); rules are explicit, Overseer verifies every merge. |
