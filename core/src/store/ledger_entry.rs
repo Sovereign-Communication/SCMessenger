@@ -1535,44 +1535,6 @@ impl LedgerManager {
         self.export_seed_entries_for(limit, SeedExportAudience::Untrusted)
     }
 
-    /// Merge seed entries learned out-of-band (invite / QR) into the ledger.
-    /// Returns the number of entries that were newly added.
-    ///
-    /// MERGE POLICY (deliberate -- seed data is attacker-suppliable):
-    /// - Dedupe key is the `/p2p/`-stripped multiaddr, matching the CLI
-    ///   ledger's key convention (`cli/src/ledger.rs::strip_peer_id`).
-    /// - A seed carries no identity and no counters, so there is nothing to
-    ///   merge into an existing entry: a known address is left completely
-    ///   untouched. `success_count`, `failure_count`, `last_seen`, `peer_id`,
-    ///   `public_key` and `nickname` all keep their current values. An invite
-    ///   is not evidence that a peer was reachable at any particular time, and
-    ///   it is certainly not evidence about who is listening there.
-    /// - New entries are added with `success_count = 0` and no identity fields.
-    ///   That means they are deliberately NOT returned by
-    ///   [`Self::dialable_addresses`] (which requires `success_count > 0`) nor
-    ///   by [`Self::get_preferred_relays`]: an unproven address handed to us by
-    ///   whoever held the invite must not masquerade as an address we have
-    ///   actually reached. They surface through [`Self::seed_addresses`]
-    ///   instead -- see the reasoning on that method. The first successful
-    ///   connection promotes the entry via [`Self::record_connection`], and
-    ///   [`Self::annotate_identity`] attaches the identity learned from
-    ///   Identify at that point.
-    /// - Entries whose multiaddr does not parse, is empty, carries no transport
-    ///   component, or is not routable
-    ///   ([`crate::transport::addr_filter::is_dialable_multiaddr`]) are
-    ///   dropped, and the whole batch is capped at
-    ///   [`MAX_SEED_LEDGER_ENTRIES`].
-    ///
-    /// Uses [`NetworkMode::Local`], i.e. RFC1918 peers stay importable: an
-    /// invite is the LAN/mesh cold-start path and a node has no reliable way to
-    /// know its own network context from inside the store layer. Callers that
-    /// do know (a cellular-only node) should use
-    /// [`Self::import_seed_entries_with_mode`].
-    pub fn import_seed_entries(&self, entries: Vec<SeedLedgerEntry>) -> u32 {
-        let _save_guard = self.save_lock.lock();
-        self.import_seed_entries_locked(entries, NetworkMode::Local)
-    }
-
     // UNIFICATION_V2_TRANSPORT: same freshness+reliability ordering as
     // dialable_addresses — proven relays float by recency; deep deprioritize
     // (not prune) keeps ephemeral peers tail-ranked until failure threshold.
@@ -1617,6 +1579,48 @@ impl LedgerManager {
 /// [`NetworkMode`] or exist purely to keep the swarm event loop bounded, and
 /// neither concept belongs in the mobile binding.
 impl LedgerManager {
+    // Rust-only since #469 T3 (PR 501): the only callers are core
+    // (`IronCore::redeem_invite_qr`) and the CLI. Mobile shells redeem a signed
+    // SCI1 invite through `redeem_invite_qr`; no platform ever called this
+    // export once the unsigned JSON join-bundle path was removed.
+    /// Merge seed entries learned out-of-band (invite / QR) into the ledger.
+    /// Returns the number of entries that were newly added.
+    ///
+    /// MERGE POLICY (deliberate -- seed data is attacker-suppliable):
+    /// - Dedupe key is the `/p2p/`-stripped multiaddr, matching the CLI
+    ///   ledger's key convention (`cli/src/ledger.rs::strip_peer_id`).
+    /// - A seed carries no identity and no counters, so there is nothing to
+    ///   merge into an existing entry: a known address is left completely
+    ///   untouched. `success_count`, `failure_count`, `last_seen`, `peer_id`,
+    ///   `public_key` and `nickname` all keep their current values. An invite
+    ///   is not evidence that a peer was reachable at any particular time, and
+    ///   it is certainly not evidence about who is listening there.
+    /// - New entries are added with `success_count = 0` and no identity fields.
+    ///   That means they are deliberately NOT returned by
+    ///   [`Self::dialable_addresses`] (which requires `success_count > 0`) nor
+    ///   by [`Self::get_preferred_relays`]: an unproven address handed to us by
+    ///   whoever held the invite must not masquerade as an address we have
+    ///   actually reached. They surface through [`Self::seed_addresses`]
+    ///   instead -- see the reasoning on that method. The first successful
+    ///   connection promotes the entry via [`Self::record_connection`], and
+    ///   [`Self::annotate_identity`] attaches the identity learned from
+    ///   Identify at that point.
+    /// - Entries whose multiaddr does not parse, is empty, carries no transport
+    ///   component, or is not routable
+    ///   ([`crate::transport::addr_filter::is_dialable_multiaddr`]) are
+    ///   dropped, and the whole batch is capped at
+    ///   [`MAX_SEED_LEDGER_ENTRIES`].
+    ///
+    /// Uses [`NetworkMode::Local`], i.e. RFC1918 peers stay importable: an
+    /// invite is the LAN/mesh cold-start path and a node has no reliable way to
+    /// know its own network context from inside the store layer. Callers that
+    /// do know (a cellular-only node) should use
+    /// [`Self::import_seed_entries_with_mode`].
+    pub fn import_seed_entries(&self, entries: Vec<SeedLedgerEntry>) -> u32 {
+        let _save_guard = self.save_lock.lock();
+        self.import_seed_entries_locked(entries, NetworkMode::Local)
+    }
+
     /// Teach the ledger this node's own identity, so the runtime write paths can
     /// refuse to store the node as one of its own peers (tier_a A8 / issue I-06).
     ///
@@ -2179,6 +2183,14 @@ impl LedgerManager {
     /// dialable locally, never re-exported. Returns the number of entries
     /// that were newly added.
     pub fn merge_shared_entries(&self, entries: &[SharedPeerEntry]) -> usize {
+        self.merge_shared_entries_via(entries, "unknown")
+    }
+
+    /// Same as [`Self::merge_shared_entries`], but records `via` (the peer or
+    /// channel the rows arrived from, e.g. `ledger_exchange:<peer16>`) in the
+    /// `ledger_address_learned` marker so the learn path is verifiable from
+    /// logs. `via` is sanitized by the marker formatter.
+    pub fn merge_shared_entries_via(&self, entries: &[SharedPeerEntry], via: &str) -> usize {
         let mut added = 0usize;
         for shared in entries {
             let stripped = strip_peer_id_component(&shared.multiaddr);
@@ -2280,14 +2292,15 @@ impl LedgerManager {
                     });
                     added += 1;
                     // G1 (store part): proof this node learned an address from a
-                    // peer ledger. `via` is not plumbed into the store (it needs a
-                    // transport-side change), so it is "unknown" for now.
+                    // peer ledger. `via` is supplied by the caller of
+                    // `merge_shared_entries_via` ("unknown" for the legacy entry
+                    // point), so no transport-module edit is needed.
                     tracing::info!(
                         event = "ledger_address_learned",
                         "{}",
                         crate::message_events::fmt_ledger_address_learned(
                             shared.last_peer_id.as_deref().unwrap_or("unknown"),
-                            "unknown",
+                            via,
                             &stripped
                         )
                     );
@@ -2736,6 +2749,24 @@ mod tests {
     /// to parse, so the fixtures have to be real.
     fn peer() -> String {
         libp2p::PeerId::random().to_string()
+    }
+
+    #[test]
+    fn merge_shared_entries_via_adds_row_like_legacy_entry_point() {
+        let (_dir, mgr) = manager();
+        let addr = "/ip4/198.51.100.201/tcp/9001".to_string();
+        let merged = mgr.merge_shared_entries_via(
+            &[SharedPeerEntry {
+                multiaddr: addr.clone(),
+                last_peer_id: Some(peer()),
+                last_seen: 1,
+                known_topics: Vec::new(),
+            }],
+            "ledger_exchange:abcd
+rx_history",
+        );
+        assert_eq!(merged, 1);
+        assert!(mgr.entry_for_multiaddr(&addr).is_some());
     }
 
     /// V040-T13 F2 (revised per Rule-8 F-5): `last_seen` is a RANKING key --
