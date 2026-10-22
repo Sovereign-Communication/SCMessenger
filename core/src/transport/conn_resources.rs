@@ -8,17 +8,19 @@
 //! ```text
 //! B_fd    = share_fd  x RLIMIT_NOFILE (soft)              -- paths that own a descriptor
 //! pool    = available_memory + used x per_connection_RSS  -- what we could hold if we held none
-//! B_mem   = max(active, share_mem x pool / per_connection_RSS)
+//! B_mem   = max(protected, share_mem x pool / per_connection_RSS)
 //! total   = min(B_mem, B_fd + descriptor-free paths) x platform_scale
 //! ```
 //!
 //! * The memory pool adds our own connections' footprint back to the free
 //!   memory, so admitting a connection (which lowers free memory) does not
 //!   lower the bound by itself; the bound only falls when something ELSE takes
-//!   memory. The memory-derived bound never goes below the number of paths that
-//!   carry traffic (`active`): a predicted shortage idles the idle paths first
-//!   and never cuts a conversation. Actual allocation failures (pressure
-//!   feedback below) are the hard signal and are not floored.
+//!   memory. The memory-derived bound never goes below authenticated paths or
+//!   paths with recent validated traffic (`protected`). This useful-path floor
+//!   is recomputed from recent evidence: traffic protection expires according
+//!   to measured liveness, while authenticated contact standing persists.
+//!   Allocation failures (pressure feedback below) shrink the allowance
+//!   multiplicatively but also retain that useful-path floor.
 //! * `per_connection_RSS` is MEASURED: the process RSS delta observed while the
 //!   live connection count grew, smoothed by an EWMA. It starts from a
 //!   conservative prior so a cold node never over-admits.
@@ -27,15 +29,12 @@
 //! * The platform scale shrinks the bound on battery (see
 //!   [`set_platform_power`]): every kept-alive path costs radio wakeups.
 //! * Pressure feedback (EMFILE/ENFILE/ENOMEM/ENOBUFS from dial, accept or
-//!   listener errors) shrinks the bound at once, but per EPISODE (one tick),
-//!   not per error event: a raw-socket flood raises hundreds of errors per
-//!   poll and must not translate into hundreds of evictions. Each episode
-//!   retains [`PRESSURE_RETAIN_NUM`]/[`PRESSURE_RETAIN_DEN`] of the live paths
-//!   (multiplicative shrink) and never goes below the paths worth protecting
-//!   (authenticated peers and paths with validated traffic): established
-//!   authenticated peers are never evicted to make room for unauthenticated
-//!   sockets. The next periodic sample restores the derived figure. When the
-//!   probe fails under descriptor exhaustion the last good snapshot is kept.
+//!   listener errors) shrinks the soft allowance once per episode, not per
+//!   error event. Each episode retains [`PRESSURE_RETAIN_NUM`]/
+//!   [`PRESSURE_RETAIN_DEN`] of live paths, floored at authenticated peers and
+//!   recent validated traffic. The next periodic sample restores the derived
+//!   figure. When the probe fails under descriptor exhaustion, the last good
+//!   snapshot is kept.
 //!
 //! Above the bound the ledger EVICTS the lowest-value paths; it never refuses
 //! a connection. Where no input is available (a platform without a memory
@@ -258,11 +257,11 @@ impl ResourceModel {
 
     /// The OS refused allocations/accepts/dials during one tick (ONE episode,
     /// however many error events it held). Retain
-    /// [`PRESSURE_RETAIN_NUM`]/[`PRESSURE_RETAIN_DEN`] of the live paths, but
-    /// never fewer than the paths worth protecting (`occupancy.protected`):
-    /// pressure sheds unauthenticated, traffic-less paths first and never
-    /// authenticated peers. Repeated episodes compound; the cap lasts until the
-    /// next periodic sample ([`ResourceModel::clear_pressure`]).
+    /// [`PRESSURE_RETAIN_NUM`]/[`PRESSURE_RETAIN_DEN`] of live paths, but never
+    /// fewer than current protected paths. Authenticated contacts and recently
+    /// validated traffic remain serviceable; traffic protection expires based
+    /// on measured liveness. Repeated episodes compound as the useful-path floor
+    /// changes; the pressure allowance clears at the next periodic sample.
     pub fn note_pressure(&mut self, kind: PressureKind, occupancy: Occupancy) {
         let total = retain_share(occupancy.total)
             .max(occupancy.protected)
@@ -317,7 +316,9 @@ impl ResourceModel {
         let b_mem = snapshot.mem_available.map(|avail| {
             let per = self.per_connection_bytes();
             let pool = occupancy.total as f64 * per + avail as f64;
-            to_usize((pool * MEMORY_SHARE / per) as u64).max(occupancy.protected)
+            to_usize((pool * MEMORY_SHARE / per) as u64)
+                .max(occupancy.protected)
+                .max(1)
         });
 
         let mut derived = match (b_fd, b_mem) {
@@ -330,7 +331,10 @@ impl ResourceModel {
                 }
             }
             // No memory probe: the descriptor bound stands in for every path.
-            (Some(fd), None) => Some((fd, fd, BudgetSource::Fd)),
+            (Some(fd), None) => {
+                let fd = fd.max(occupancy.protected_fd);
+                Some((fd, fd, BudgetSource::Fd))
+            }
             (None, Some(mem)) => Some((mem, usize::MAX, BudgetSource::Mem)),
             (None, None) => None,
         };
@@ -372,8 +376,8 @@ impl ResourceModel {
 
         derived.map(|(total, fd, source)| Derived {
             limits: TotalLimits {
-                total: total.max(1),
-                fd: fd.max(1),
+                total: total.max(occupancy.protected).max(1),
+                fd: fd.max(occupancy.protected_fd).max(1),
             },
             source,
         })
@@ -731,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_taken_by_something_else_lowers_the_bound_but_never_cuts_active_paths() {
+    fn memory_bound_preserves_currently_protected_paths() {
         let model = ResourceModel::new();
         let snap = ResourceSnapshot {
             fd_soft_limit: None,
@@ -742,7 +746,8 @@ mod tests {
         let idle = model.derive(&snap, occ(100, 100), 1000).expect("derived");
         assert_eq!(idle.limits.total, 50);
         assert_eq!(idle.source, BudgetSource::Mem);
-        // 80 of the 100 paths carry traffic: they are the floor.
+        // Currently useful paths are the floor when a predicted shortage
+        // would otherwise cut an established conversation.
         let busy = Occupancy {
             total: 100,
             fd: 100,
@@ -891,7 +896,7 @@ mod tests {
                 .total
                 .min(live);
         }
-        assert_eq!(live, 40, "authenticated paths are never cut");
+        assert_eq!(live, 40, "authenticated useful paths remain protected");
         model.clear_pressure();
         let back = model.derive(&snap, occ(40, 40), 1000).expect("derived");
         assert_eq!(back.limits.total, 5_000, "the periodic sample restores it");
