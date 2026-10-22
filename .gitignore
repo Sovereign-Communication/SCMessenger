@@ -365,6 +365,9 @@ docker/test-results/
 # Hermes shared-worktree agent scratch
 .hermes/
 
+# Claude Code agent-tool worktree isolation scratch (per-agent git worktrees)
+.claude/worktrees/
+
 # Inbox bridge output -- contains operator device identity, public/LAN IPs, and
 # routable IPv6 from the message envelope. This repository is PUBLIC; these
 # files must never be committed. See scripts/inbox_bridge.py.
