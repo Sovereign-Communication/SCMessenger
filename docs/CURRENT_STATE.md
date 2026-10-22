@@ -7,7 +7,7 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-10-16 (rustls dependency security patch candidate; CI verification pending)
+Last updated: 2026-10-18 (PR #604 check results at head 7e5993cc)
 Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 host-gate result is historical and must be rerun.
 
 ---
@@ -17,8 +17,14 @@ Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 ho
 `Cargo.lock` selects rustls 0.23.46 as the patch candidate for
 RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, and
 RUSTSEC-2026-0349. Full `cargo metadata --locked --format-version 1
---all-features` completed without changing the lockfile. CI `cargo deny check`
-and workspace build/test gates are pending.
+--all-features` completed without changing the lockfile. At PR #604 head
+`7e5993cc3248beef515263119a50f618e415e52c`, GitHub Actions Lint run
+[39179788169](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/39179788169)
+completed with `cargo deny check` failing on RUSTSEC-2026-0370,
+RUSTSEC-2026-0371, and RUSTSEC-2026-0372 through transitive dependencies
+of `zbus` 4.4.0. The Ubuntu, macOS, and Windows workspace Test jobs passed.
+Security Regression Tests run [39179788173](https://github.com/Sovereign-Communication/SCMessenger/actions/runs/39179788173)
+was cancelled.
 
 ## 1. Executive Summary & Release Roadmap
 
