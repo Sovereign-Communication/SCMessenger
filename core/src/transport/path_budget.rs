@@ -1015,19 +1015,18 @@ where
     /// 5. lowest local reputation (unknown peers are lowest)
     /// 6. youngest first, so Sybil churn evicts itself
     ///
-    /// Ranking is a hint. The gate is live: the last remaining path of a peer
-    /// is evicted only if it is unauthenticated, carries no traffic, is past
-    /// grace, and the peer did not start this call with several paths. Victim
-    /// selection tracks each peer's remaining live paths as it evicts, so one
-    /// call can never take an authenticated peer's last path, nor drop a peer
-    /// that had several paths to zero.
+    /// Ranking is a hint. The gate is live and ABSOLUTE: no peer is ever
+    /// evicted to zero live paths, whatever its authentication, traffic or
+    /// grace state (#573, operator decision 2026-10-17). Victim selection
+    /// tracks each peer's remaining live paths as it evicts, so one call can
+    /// neither take a peer's last path nor drop a peer from several paths to
+    /// zero. Only redundant paths are shed.
     ///
-    /// The total bound is soft for paths inside their grace window, but only up
-    /// to the hard ceiling (`TotalLimits::ceiling_total`, at most
-    /// [`HARD_CEILING_FACTOR`] times the bound and always below the physical
-    /// limit): past that ceiling the
-    /// unauthenticated, trafficless paths in grace are evictable too (youngest
-    /// first) until the counts are back at the ceiling.
+    /// The total bound is therefore soft: when the excess sits on peers that
+    /// would be left at zero, nothing is evicted and the count stays above the
+    /// bound. `enforce_total` reports that state as `over-bound-soft` from the
+    /// occupancy side; this function never closes a peer's last connection to
+    /// reach the bound.
     ///
     /// `keep` (the connection that triggered the check) is never chosen.
     ///
@@ -1046,12 +1045,6 @@ where
         if excess_total == 0 && excess_fd == 0 {
             return Vec::new();
         }
-        // Live counts as victims are chosen. Grace-window paths are released
-        // only while these remain past the hard ceiling, so the release target
-        // is recomputed from the remaining occupancy after every eviction
-        // (unprotected victims included) and stops once back at the ceiling.
-        let mut left_total = live_total;
-        let mut left_fd = live_fd;
         #[derive(Clone, Copy)]
         struct Candidate<C, I> {
             peer: C,
@@ -1060,8 +1053,6 @@ where
             traffic: bool,
             protected: bool,
             sole: bool,
-            /// Live paths the peer held when this call started.
-            peer_live: usize,
             reputation: f64,
             established_at: Instant,
             uses_fd: bool,
@@ -1093,7 +1084,6 @@ where
                     traffic: path.traffic,
                     protected: now < path.established_at + path.grace,
                     sole: live <= 1,
-                    peer_live: live,
                     reputation: trust.reputation,
                     established_at: path.established_at,
                     uses_fd: path.meta.uses_fd,
@@ -1124,15 +1114,14 @@ where
                 // an earlier victim in this call may have been this peer's
                 // other path.
                 let left = remaining.get(&c.peer).copied().unwrap_or(0);
-                // A grace-window path is released only when it is neither
-                // authenticated nor carrying traffic and a count is past the
-                // hard ceiling (a descriptor-free path cannot relieve fd).
-                let grace_release_total = left_total.saturating_sub(limits.ceiling_total);
-                let grace_release_fd = left_fd.saturating_sub(limits.ceiling_fd);
-                let grace_pinned = c.protected
-                    && !(grace_release_total > 0 || (c.uses_fd && grace_release_fd > 0));
-                let pinned = c.authenticated || c.traffic || grace_pinned || c.peer_live > 1;
-                if left <= 1 && pinned {
+                // Absolute drop-to-zero skip (#573, operator decision
+                // 2026-10-17): a peer's last live path is never evicted to
+                // zero, whatever its trust, traffic or grace state. There is no
+                // qualifier on this gate. The total bound is therefore SOFT:
+                // `enforce_total` reports `over-bound-soft` when the count
+                // cannot be brought back down, and a peer that was connected
+                // before the call is still connected after it.
+                if left <= 1 {
                     continue;
                 }
                 let Some(path) = self
@@ -1144,10 +1133,6 @@ where
                 };
                 let due = mark_closing(&mut self.counts, path, now);
                 let class = path.class;
-                left_total = left_total.saturating_sub(1);
-                if c.uses_fd {
-                    left_fd = left_fd.saturating_sub(1);
-                }
                 if let Some(n) = remaining.get_mut(&c.peer) {
                     *n = n.saturating_sub(1);
                 }
@@ -2095,32 +2080,42 @@ mod tests {
     // ---- finding 2: total bound evicts, never denies ----------------------
 
     #[test]
-    fn over_total_evicts_no_traffic_young_sybils_before_traffic_bearing_peers() {
+    fn over_total_sheds_redundant_sybil_paths_before_traffic_bearing_paths() {
         let base = Instant::now();
         let mut ledger = Ledger::new();
-        // Honest peer 1: has exchanged protocol traffic, high reputation.
+        // Honest peer 1: has exchanged protocol traffic, high reputation. A sole
+        // path, so the absolute drop-to-zero skip protects it outright.
         ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
         ledger.stamp_traffic(&1, &1, at(base, 100));
         ledger.note_reputation(1, 90.0);
-        // 30 Sybil identities, one path each, no traffic, unknown reputation.
+        // 30 Sybil identities, two paths each, no traffic, unknown reputation.
+        // The redundant path is the only thing the total bound may take.
         for n in 0..30u32 {
             ledger.on_established(
                 100 + n,
-                100 + n,
+                1000 + n,
                 PathClass::WanV4,
+                rtt(),
+                at(base, 10_000 + u64::from(n)),
+            );
+            ledger.on_established(
+                100 + n,
+                2000 + n,
+                PathClass::Lan,
                 rtt(),
                 at(base, 10_000 + u64::from(n)),
             );
         }
         let limits = TotalLimits::new(10, 10);
         let ev = ledger.evict_over_total(limits, at(base, 20_000), None);
-        assert_eq!(ev.len(), 21);
+        // One redundant path per Sybil: 30 victims, never a last path.
+        assert_eq!(ev.len(), 30, "{ev:?}");
         assert!(ev.iter().all(|e| e.reason == EvictReason::OverTotal));
         assert!(!ev.iter().any(|e| e.id == 1), "the honest peer is kept");
-        assert_eq!(ledger.occupancy().0, 10);
-        // Youngest Sybils are the ones evicted.
-        assert!(ev.iter().any(|e| e.id == 129));
-        assert!(!ev.iter().any(|e| e.id == 100));
+        for n in 0..30u32 {
+            assert_eq!(ledger.live_paths(&(100 + n)), 1, "sybil {n} keeps one path");
+        }
+        assert_eq!(ledger.occupancy().0, 31, "soft bound: sole paths stay");
     }
 
     #[test]
@@ -2140,27 +2135,34 @@ mod tests {
         let ev = ledger.evict_over_total(limits, now, None);
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].peer, 1, "a redundant path goes before any sole path");
+        // Past that, every remaining peer holds a sole path: nothing more may be
+        // taken, so the bound stays soft rather than disconnecting a peer.
         let limits = TotalLimits::new(2, 2);
         let ev = ledger.evict_over_total(limits, now, None);
-        assert_eq!(ev.len(), 1);
-        assert_eq!(ev[0].peer, 2, "then the lowest reputation");
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(ledger.live_paths(&1), 1);
+        assert_eq!(ledger.live_paths(&2), 1);
+        assert_eq!(ledger.live_paths(&3), 1);
     }
 
     #[test]
     fn over_total_never_evicts_the_triggering_connection() {
         let base = Instant::now();
         let mut ledger = Ledger::new();
+        // Two paths per peer, so each peer has one redundant path to give.
         for n in 0..5u32 {
-            ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, u64::from(n)));
+            let first = n * 10;
+            ledger.on_established(n, first, PathClass::WanV4, rtt(), at(base, u64::from(n)));
+            ledger.on_established(n, first + 1, PathClass::Lan, rtt(), at(base, u64::from(n)));
         }
         let limits = TotalLimits::new(0, 0);
-        let ev = ledger.evict_over_total(limits, at(base, 50_000), Some(4));
-        assert_eq!(ev.len(), 4);
-        assert!(!ev.iter().any(|e| e.id == 4));
+        let ev = ledger.evict_over_total(limits, at(base, 50_000), Some(41));
+        assert_eq!(ev.len(), 5, "{ev:?}");
+        assert!(!ev.iter().any(|e| e.id == 41));
     }
 
     #[test]
-    fn hard_ceiling_releases_only_unauthenticated_trafficless_grace_paths() {
+    fn hard_ceiling_never_releases_a_sole_grace_path() {
         let base = Instant::now();
         let mut ledger = Ledger::new();
         // Peer 1 is authenticated, peer 2 carries traffic; both are in grace.
@@ -2168,7 +2170,7 @@ mod tests {
         ledger.note_authenticated(1);
         ledger.on_established(2, 2, PathClass::WanV4, rtt(), at(base, 0));
         ledger.stamp_traffic(&2, &2, at(base, 1));
-        // 20 more peers, all inside their grace windows.
+        // 20 more peers, all inside their grace windows with a sole path each.
         for n in 0..20u32 {
             ledger.on_established(
                 100 + n,
@@ -2179,19 +2181,11 @@ mod tests {
             );
         }
         let limits = TotalLimits::new(4, 4);
-        let ceiling = limits.ceiling_total;
-        let now = at(base, 100);
-        let ev = ledger.evict_over_total(limits, now, None);
-        assert_eq!(
-            ledger.occupancy().0,
-            ceiling,
-            "shed back to the ceiling only"
-        );
-        assert_eq!(ev.len(), 22 - ceiling);
-        assert!(!ev.iter().any(|e| e.id == 1 || e.id == 2), "{ev:?}");
-        // Youngest first: the oldest grace-window peers survive.
-        assert!(!ev.iter().any(|e| e.id == 100));
-        assert!(ev.iter().any(|e| e.id == 119));
+        let ev = ledger.evict_over_total(limits, at(base, 100), None);
+        // #573 removed the hard-ceiling grace release: a sole path is kept even
+        // inside its grace window and even when the ceiling is far exceeded.
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(ledger.occupancy().0, 22, "soft bound: sole paths stay");
         assert!(ledger.counters_consistent());
     }
 
@@ -2211,28 +2205,24 @@ mod tests {
     }
 
     #[test]
-    fn grace_release_target_shrinks_with_unprotected_evictions() {
+    fn over_total_never_evicts_a_sole_path_whatever_its_state() {
+        // Regression test for #573 / F1. Every peer here is unauthenticated,
+        // trafficless and past grace: exactly the state the revoked "by design"
+        // rule allowed the total bound to evict to zero. The operator decision of
+        // 2026-10-17 rejects that rule, so a bound of zero must evict nothing.
         let base = Instant::now();
         let mut ledger = Ledger::new();
-        // 6 peers past grace (unprotected) and 6 inside grace: 12 live, bound 4,
-        // ceiling 8. Evicting the 6 unprotected paths already brings the count
-        // to 6, below the ceiling, so no grace path may be released.
-        for n in 0..6u32 {
-            ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, 0));
+        for n in 0..4u32 {
+            ledger.on_established(100 + n, 100 + n, PathClass::WanV4, rtt(), at(base, 0));
         }
-        for n in 0..6u32 {
-            ledger.on_established(
-                100 + n,
-                100 + n,
-                PathClass::WanV4,
-                rtt(),
-                at(base, 59_500 + u64::from(n)),
-            );
-        }
-        let ev = ledger.evict_over_total(TotalLimits::new(4, 4), at(base, 60_000), None);
-        assert_eq!(ev.len(), 6, "{ev:?}");
-        assert!(ev.iter().all(|e| e.id < 100), "{ev:?}");
-        assert_eq!(ledger.occupancy().0, 6);
+        let ev = ledger.evict_over_total(TotalLimits::new(0, 0), at(base, 600_000), None);
+        assert!(ev.is_empty(), "no sole path may be evicted: {ev:?}");
+        assert_eq!(
+            ledger.occupancy().0,
+            4,
+            "the bound is soft, never a disconnect"
+        );
+        assert!(ledger.counters_consistent());
     }
 
     #[test]
@@ -2244,22 +2234,31 @@ mod tests {
             authority: true,
             uses_fd: false,
         };
-        // 6 QUIC (no fd) and 4 TCP paths on distinct peers.
+        // 6 QUIC (no fd) and 4 TCP peers, two paths each: one redundant path per
+        // peer, which is the only thing the total bound may take.
         for n in 0..6u32 {
             ledger.on_established_with(n, n, PathClass::WanV4, rtt(), quic, at(base, 0));
+            ledger.on_established_with(n, 1000 + n, PathClass::Lan, rtt(), quic, at(base, 0));
         }
         for n in 6..10u32 {
             ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, 0));
+            ledger.on_established(n, 1000 + n, PathClass::Lan, rtt(), at(base, 0));
         }
-        assert_eq!(ledger.occupancy(), (10, 4));
+        assert_eq!(ledger.occupancy(), (20, 8));
         // fd bound 2: only fd-owning paths can relieve it; total is satisfied.
-        let ev = ledger.evict_over_total(TotalLimits::new(10, 2), at(base, 30_000), None);
-        assert_eq!(ev.len(), 2);
-        assert!(ev.iter().all(|e| e.id >= 6), "only TCP paths: {ev:?}");
-        // Total bound 5 now evicts across both kinds.
+        let ev = ledger.evict_over_total(TotalLimits::new(20, 2), at(base, 30_000), None);
+        assert_eq!(ev.len(), 4, "{ev:?}");
+        assert!(
+            ev.iter().all(|e| (6..10).contains(&e.peer)),
+            "only TCP peers: {ev:?}"
+        );
+        assert_eq!(ledger.occupancy(), (16, 4));
+        // Total bound 5 now evicts the redundant QUIC paths; the TCP peers are
+        // down to their last path and are kept.
         let ev = ledger.evict_over_total(TotalLimits::new(5, 2), at(base, 30_000), None);
-        assert_eq!(ev.len(), 3);
-        assert_eq!(ledger.occupancy().0, 5);
+        assert_eq!(ev.len(), 6, "{ev:?}");
+        assert!(ev.iter().all(|e| e.peer < 6), "only QUIC peers: {ev:?}");
+        assert_eq!(ledger.occupancy().0, 10);
     }
 
     #[test]
@@ -2292,7 +2291,8 @@ mod tests {
             );
             ledger.stamp_traffic(&id, &id, at(base, 2_000));
         }
-        // Trafficless, unauthenticated Sybils remain evictable.
+        // Trafficless, unauthenticated Sybils: their redundant path is what the
+        // total bound may take, never their last one.
         for n in 0..10u32 {
             let id = 200 + n;
             ledger.on_established(
@@ -2302,12 +2302,23 @@ mod tests {
                 rtt(),
                 at(base, 1_000 + u64::from(n)),
             );
+            ledger.on_established(
+                id,
+                300 + n,
+                PathClass::Lan,
+                rtt(),
+                at(base, 1_000 + u64::from(n)),
+            );
         }
         let ev = ledger.evict_over_total(TotalLimits::new(5, 5), at(base, 60_000), None);
-        assert_eq!(ev.len(), 10);
-        assert!(ev.iter().all(|e| (200..210).contains(&e.id)), "{ev:?}");
+        assert_eq!(ev.len(), 10, "{ev:?}");
+        assert!(
+            ev.iter()
+                .all(|e| (200..210).contains(&e.id) || (300..310).contains(&e.id)),
+            "{ev:?}"
+        );
         assert!(!ev.iter().any(|e| e.id == 1), "the idle contact is kept");
-        assert_eq!(ledger.occupancy().0, 21, "soft bound: pinned paths stay");
+        assert_eq!(ledger.occupancy().0, 21, "soft bound: sole paths stay");
         assert!(ledger.counters_consistent());
     }
 
@@ -2320,19 +2331,25 @@ mod tests {
         ledger.on_established(1, 11, PathClass::WanV4, rtt(), at(base, 0));
         ledger.on_established(2, 20, PathClass::WanV4, rtt(), at(base, 0));
         let ev = ledger.evict_over_total(TotalLimits::new(1, 1), at(base, 60_000), None);
-        assert_eq!(ev.len(), 2, "{ev:?}");
+        // Peer 1 gives its redundant path; peer 2's sole path is untouchable.
+        assert_eq!(ev.len(), 1, "{ev:?}");
         assert_eq!(ledger.live_paths(&1), 1, "one path of peer 1 survives");
+        assert_eq!(ledger.live_paths(&2), 1, "peer 2's sole path survives");
         assert_eq!(ev.iter().filter(|e| e.peer == 1).count(), 1);
+        assert_eq!(ledger.occupancy().0, 2, "soft bound: the excess stays");
     }
 
     #[test]
     fn unknown_peers_rank_below_known_low_reputation_peers() {
         let base = Instant::now();
         let mut ledger = Ledger::new();
-        ledger.on_established(1, 1, PathClass::WanV4, rtt(), at(base, 0));
-        ledger.on_established(2, 2, PathClass::WanV4, rtt(), at(base, 0));
+        // Two paths each, so the ranking decides which redundant path goes.
+        ledger.on_established(1, 10, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.on_established(1, 11, PathClass::Lan, rtt(), at(base, 0));
+        ledger.on_established(2, 20, PathClass::WanV4, rtt(), at(base, 0));
+        ledger.on_established(2, 21, PathClass::Lan, rtt(), at(base, 0));
         ledger.note_reputation(1, 5.0);
-        let ev = ledger.evict_over_total(TotalLimits::new(1, 1), at(base, 60_000), None);
+        let ev = ledger.evict_over_total(TotalLimits::new(3, 3), at(base, 60_000), None);
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].peer, 2, "no data at all ranks lowest");
     }
@@ -2341,26 +2358,28 @@ mod tests {
     fn counters_track_establish_evict_traffic_and_close() {
         let base = Instant::now();
         let mut ledger = Ledger::new();
+        // Two paths per peer: the redundant one is the only evictable path.
         for n in 0..50u32 {
             ledger.on_established(n, n, PathClass::WanV4, rtt(), at(base, u64::from(n)));
+            ledger.on_established(n, 1000 + n, PathClass::Lan, rtt(), at(base, u64::from(n)));
             if n < 20 {
                 ledger.stamp_traffic(&n, &n, at(base, 100));
             }
         }
-        assert_eq!(ledger.occupancy(), (50, 50));
+        assert_eq!(ledger.occupancy(), (100, 100));
         // Only the twenty paths that carried traffic count as active.
         assert_eq!(ledger.active_paths(), 20);
         assert!(ledger.counters_consistent());
         let ev = ledger.evict_over_total(TotalLimits::new(20, 20), at(base, 60_000), None);
-        assert_eq!(ev.len(), 30);
-        assert_eq!(ledger.occupancy(), (20, 20));
-        assert_eq!(ledger.pending_closes(), 30);
+        assert_eq!(ev.len(), 50, "one redundant path per peer: {ev:?}");
+        assert_eq!(ledger.occupancy(), (50, 50));
+        assert_eq!(ledger.pending_closes(), 50);
         assert!(ledger.counters_consistent());
         for e in &ev {
             let _ = ledger.on_closed(&e.peer, &e.id, 0);
         }
         assert_eq!(ledger.pending_closes(), 0);
-        assert_eq!(ledger.occupancy(), (20, 20));
+        assert_eq!(ledger.occupancy(), (50, 50));
         assert!(ledger.counters_consistent());
     }
 
@@ -2464,14 +2483,12 @@ mod tests {
             let mut now = base;
             let mut ledger = Ledger::new();
             let mut next_id = 0u32;
-            let mut authenticated = false;
             let mut ids: Vec<u32> = Vec::new();
             for op in ops {
                 let live_before = ledger.live_paths(&PEER);
                 let is_close = matches!(op, Op::Close(_));
                 let mut evictions = Vec::new();
                 let mut established: Option<u32> = None;
-                let mut over_total = false;
                 match op {
                     Op::Establish(c, delta, canonical) => {
                         now += Duration::from_millis(u64::from(delta));
@@ -2523,10 +2540,8 @@ mod tests {
                     }
                     Op::Authenticate => {
                         ledger.note_authenticated(PEER);
-                        authenticated = true;
                     }
                     Op::OverTotal(limit) => {
-                        over_total = true;
                         let limit = usize::from(limit);
                         let before = ledger.occupancy().0;
                         let peer_before = ledger.live_paths(&PEER);
@@ -2542,29 +2557,23 @@ mod tests {
                         } else {
                             prop_assert!(after >= limit && after <= before);
                         }
-                        // The total bound never takes a multi-path peer to zero,
-                        // and never takes an authenticated peer's last path.
+                        // #573: the total bound never takes ANY peer from
+                        // connected to zero paths, whatever its trust, traffic
+                        // or grace state. No exemption.
                         let peer_after = ledger.live_paths(&PEER);
-                        if peer_before >= 2 {
-                            prop_assert!(peer_after >= 1, "multi-path peer emptied");
-                        }
-                        if authenticated && peer_before >= 1 {
-                            prop_assert!(peer_after >= 1, "authenticated peer lost its last path");
+                        if peer_before >= 1 {
+                            prop_assert!(peer_after >= 1, "total bound emptied the peer");
                         }
                     }
                 }
                 let live_after = ledger.live_paths(&PEER);
-                // An authenticated peer never loses its last path to eviction,
-                // under any bound. Its own close is not an eviction. Unauthenticated,
-                // trafficless sole paths past grace may still be evicted by the
-                // total bound, by design.
-                if authenticated && live_before >= 1 && !is_close {
-                    prop_assert!(live_after >= 1, "authenticated peer left with no live path");
-                }
-                // Per-peer evictions alone never take a peer from connected to
-                // zero paths (the total bound may: it evicts, by value).
-                if !evictions.is_empty() && !over_total {
+                // #573, absolute: no eviction of any kind takes a connected
+                // peer to zero live paths. The peer's own close is not an
+                // eviction. There is no trust, traffic or grace exemption.
+                if live_before >= 1 && !is_close {
                     prop_assert!(live_after >= 1, "peer left with no live path");
+                }
+                if !evictions.is_empty() {
                     prop_assert!(live_before >= 1);
                 }
                 // The triggering connection is never its own victim.
