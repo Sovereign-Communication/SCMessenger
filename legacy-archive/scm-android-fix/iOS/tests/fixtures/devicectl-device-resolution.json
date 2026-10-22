@@ -1,0 +1,91 @@
+{
+  "result": {
+    "devices": [
+      {
+        "identifier": "CORE-WIFI-1",
+        "visibilityClass": "default",
+        "connectionProperties": {
+          "pairingState": "paired",
+          "transportType": "localNetwork",
+          "tunnelState": "disconnected"
+        },
+        "deviceProperties": {
+          "name": "Shared iPhone Name"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "physical",
+          "udid": "XCODE-WIFI-1"
+        }
+      },
+      {
+        "identifier": "CORE-WIFI-2",
+        "visibilityClass": "default",
+        "connectionProperties": {
+          "pairingState": "paired",
+          "transportType": "localNetwork",
+          "tunnelState": "connected"
+        },
+        "deviceProperties": {
+          "name": "Shared iPhone Name"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "physical",
+          "udid": "XCODE-WIFI-2"
+        }
+      },
+      {
+        "identifier": "CORE-UNPAIRED",
+        "visibilityClass": "default",
+        "connectionProperties": {
+          "pairingState": "unpaired",
+          "transportType": "localNetwork",
+          "tunnelState": "disconnected"
+        },
+        "deviceProperties": {
+          "name": "Unpaired iPhone"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "physical",
+          "udid": "XCODE-UNPAIRED"
+        }
+      },
+      {
+        "identifier": "CORE-SIMULATOR",
+        "visibilityClass": "default",
+        "connectionProperties": {
+          "pairingState": "paired",
+          "transportType": "local",
+          "tunnelState": "connected"
+        },
+        "deviceProperties": {
+          "name": "Simulator"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "virtual",
+          "udid": "XCODE-SIMULATOR"
+        }
+      },
+      {
+        "identifier": "CORE-MAC",
+        "visibilityClass": "default",
+        "connectionProperties": {
+          "pairingState": "paired",
+          "transportType": "local",
+          "tunnelState": "connected"
+        },
+        "deviceProperties": {
+          "name": "Mac"
+        },
+        "hardwareProperties": {
+          "platform": "macOS",
+          "reality": "physical",
+          "udid": "MAC-UDID"
+        }
+      }
+    ]
+  }
+}

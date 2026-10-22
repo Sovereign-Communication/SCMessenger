@@ -1,0 +1,17 @@
+﻿{
+  "file": "UniffiIntegrationTest.kt",
+  "chunk": 1,
+  "summary": "Integration tests for UniFFI boundary.",
+  "structs_or_classes": [],
+  "imports": [
+    "org.junit.Test",
+    "org.junit.Assert.*"
+  ],
+  "funcs": [
+    {
+      "name": "setupLibraryPath",
+      "line": 28,
+      "calls_out_to": []
+    }
+  ]
+}
