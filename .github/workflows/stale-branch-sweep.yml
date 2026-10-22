@@ -1,0 +1,52 @@
+# Stale-branch sweep — REPORT ONLY. Lists branches with no PR and no commits
+# in STALE_DAYS, opens a report issue. Deletes nothing; deletions stay manual
+# per the 100%-import-before-purge rule.
+name: Stale Branch Sweep
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    name: List stale branches
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Find stale branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STALE_DAYS: "30"
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "$STALE_DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
+          echo "# Stale branches (no PR, no commits in $STALE_DAYS days)" > report.md
+          echo "" >> report.md
+          gh api "repos/${{ github.repository }}/branches?per_page=100" --paginate \
+            --jq ".[].name" | while read -r branch; do
+            # skip branches with an open PR
+            if gh api "repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$branch&state=open" \
+                 --jq 'length' | grep -q '^0$'; then
+              last=$(gh api "repos/${{ github.repository }}/branches/$branch" \
+                --jq '.commit.commit.committer.date')
+              if [[ "$last" < "$cutoff" ]]; then
+                echo "- \`$branch\` (last commit $last)" >> report.md
+              fi
+            fi
+          done
+          cat report.md
+      - name: Open report issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          count=$(grep -c '^- `' report.md || true)
+          if [ "$count" -gt 0 ]; then
+            gh issue create \
+              --title "[sweep] $count stale branches ($(date -u +%Y-%m-%d))" \
+              --body-file report.md \
+              --label "branch-hygiene"
+          else
+            echo "No stale branches found."
+          fi
