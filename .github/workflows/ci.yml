@@ -214,6 +214,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest' || needs.changes.outputs.rust_relevant == 'true'
       - uses: dtolnay/rust-toolchain@1.99.0
         if: needs.changes.outputs.rust_relevant == 'true'
+      - uses: mozilla-actions/sccache-action@v0.0.9
+        if: needs.changes.outputs.rust_relevant == 'true'
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust_relevant == 'true'
         with:
@@ -231,6 +233,11 @@ jobs:
       # ports. Windows runners expose the resulting parallel-test collision
       # more readily, so keep only this platform's workspace test process
       # serialized while retaining normal parallelism on Unix runners.
+      - name: Enable sccache
+        if: needs.changes.outputs.rust_relevant == 'true'
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
       - name: Run workspace tests (Windows serialized)
         if: matrix.os == 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
         run: cargo test --workspace --features test-utils -- --test-threads=1
