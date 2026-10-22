@@ -1,7 +1,7 @@
 # SCMessenger Orchestration Control Plane
 
 Status: Active
-Last updated: 2026-08-10
+Last updated: 2026-10-18
 Protocol version: 2.0.0
 
 This is SCMessenger's canonical human-readable orchestration authority. Its
@@ -143,6 +143,12 @@ An IMPLEMENTER or PLATFORM_IMPLEMENTER must also supply its packet's exact
 
 All active adapters load the same manifest and invoke the same kernel. Their
 native subagent support changes isolation transport only, not semantic authority.
+
+The manifest names `SHIP_PLAN.md` as the execution-pointer document. With no
+`--queue` override, `orchestrate_strict.py --dry-run` resolves its authoritative
+pointer and previews every car in that release-train document. The release-train
+Markdown is a coordination plan, not a worker packet queue; dispatch therefore
+requires an explicit JSONL worker queue via `--queue`.
 
 | Frontend / entrypoint | Current behavior | Canonical protocol used | Native isolation/subagents | Role/model mapping | Source-edit escape hatch | Migration |
 | --- | --- | --- | --- | --- | --- | --- |

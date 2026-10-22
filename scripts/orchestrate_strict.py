@@ -10,6 +10,7 @@ in-scope worker output. The controller never authors an application fix.
 import argparse
 import hashlib
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from orchestration_contract import (
     ContractError, load_manifest, protected_paths, requires_delivery_review,
+    resolve_execution_queue,
     valid_transition,
 )
 from orchestration_completion_gate import CompletionGateError, run_completion_gate
@@ -60,6 +62,42 @@ def read_next_task(queue_file, done_dir="HANDOFF/done", already_seen=None):
         if all(list(Path(done_dir).glob(f"{dep}_*.md")) or list(Path(done_dir).glob(f"{dep}.md")) for dep in depends):
             return task
     return None
+
+
+def release_train_preview_items(queue_file):
+    """Return every car row from the active Markdown release-train queue."""
+    try:
+        lines = Path(queue_file).read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise RuntimeError(f"cannot read active execution queue {queue_file}: {exc}") from exc
+
+    section = None
+    items = []
+    for line in lines:
+        if line.startswith("## 3."):
+            section = "carry-over"
+            continue
+        if line.startswith("## 4."):
+            section = "residual"
+            continue
+        if line.startswith("## 5."):
+            section = "final"
+            continue
+        if line.startswith("## "):
+            section = None
+            continue
+
+        if section in ("carry-over", "residual") and line.strip().startswith("|"):
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if not cells:
+                continue
+            if section == "carry-over" and re.match(r"^(?:MT-\d{2}(?:\.\.MT-\d{2})?|P0-\d+)\b", cells[0]):
+                items.append(line.strip())
+            elif section == "residual" and re.fullmatch(r"R-\d{2}[a-z]?", cells[0]):
+                items.append(line.strip())
+        elif section == "final" and re.match(r"^- \*\*F-\d+\b", line):
+            items.append(line.strip())
+    return items
 
 
 OPERATOR_BANNED_PROVIDERS = {"qwenpaid", "dashscope"}
@@ -735,7 +773,7 @@ def load_review_assignment(value):
 
 def main():
     parser = argparse.ArgumentParser(description="Fail-closed orchestration kernel")
-    parser.add_argument("--queue", default="scm_v1_farm_queue.jsonl")
+    parser.add_argument("--queue", help="Explicit JSONL worker queue; default dry-run previews the active SHIP_PLAN queue")
     parser.add_argument("--max-tasks", type=int, default=5)
     parser.add_argument("--provider", help="Force a configured provider; provenance still records it")
     parser.add_argument("--lake-route-script", default="scripts/lake_route.py")
@@ -777,6 +815,34 @@ def main():
         return 2
 
     if args.record_review_assignment or args.record_review_evidence or args.complete_integration:
+        return 0
+
+    if args.queue is None:
+        try:
+            active_queue = resolve_execution_queue(manifest)
+        except ContractError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            return 2
+        if not args.dry_run:
+            print(
+                "[ERROR] the active SHIP_PLAN queue is a release-train document, not a worker JSONL queue; "
+                "pass --queue with an explicit worker task queue to dispatch",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            items = release_train_preview_items(active_queue)
+        except RuntimeError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            return 2
+        if not items:
+            print(f"[ERROR] no release-train cars found in {active_queue}", file=sys.stderr)
+            return 2
+        queue_label = active_queue.relative_to(SCRIPT_DIR.parent).as_posix()
+        print(f"[QUEUE] active execution queue: {queue_label}")
+        print("[INFO] read-only release-train preview; no worker dispatch")
+        for item in items:
+            print(f"[PLAN] {item}")
         return 0
 
     seen = set()

@@ -7,12 +7,14 @@ of maintaining their own copies of authority, lifecycle, or result rules.
 """
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MANIFEST = ROOT / "orchestration" / "manifest.yaml"
 REQUIRED_TOP_LEVEL = {
     "schema_version", "protocol_version", "canonical_document", "kernel",
+    "execution_pointer_document",
     "state_schema_version", "semantic_roles", "lifecycle", "protected_prefixes",
     "worker_result", "adapters", "codex_profiles", "model_capabilities",
 }
@@ -20,6 +22,47 @@ REQUIRED_TOP_LEVEL = {
 
 class ContractError(ValueError):
     """Raised when the canonical contract is absent or unsafe to use."""
+
+
+def resolve_execution_queue(manifest):
+    """Resolve the queue named by SHIP_PLAN's authoritative execution pointer."""
+    document_name = manifest.get("execution_pointer_document")
+    if not isinstance(document_name, str) or not document_name.strip():
+        raise ContractError("manifest execution_pointer_document must be a non-empty path")
+    document_rel = Path(document_name)
+    if document_rel.is_absolute() or ".." in document_rel.parts:
+        raise ContractError("manifest execution_pointer_document must stay inside the repository")
+    document_path = (ROOT / document_rel).resolve()
+    try:
+        document_path.relative_to(ROOT)
+    except ValueError as exc:
+        raise ContractError("manifest execution_pointer_document must stay inside the repository") from exc
+    if not document_path.is_file():
+        raise ContractError(f"execution pointer document is missing: {document_name}")
+
+    lines = document_path.read_text(encoding="utf-8").splitlines()
+    marker = next((i for i, line in enumerate(lines) if "EXECUTION POINTER (authoritative):" in line), None)
+    if marker is None:
+        raise ContractError(f"execution pointer document has no authoritative execution pointer: {document_name}")
+    queue_match = None
+    for line in lines[marker:marker + 8]:
+        queue_match = re.search(r"\*\*`([^`]+)`\*\*", line)
+        if queue_match:
+            break
+    if not queue_match:
+        raise ContractError(f"authoritative execution pointer has no queue path: {document_name}")
+
+    queue_rel = Path(queue_match.group(1).strip())
+    if queue_rel.is_absolute() or ".." in queue_rel.parts:
+        raise ContractError("authoritative execution queue must stay inside the repository")
+    queue_path = (ROOT / queue_rel).resolve()
+    try:
+        queue_path.relative_to(ROOT)
+    except ValueError as exc:
+        raise ContractError("authoritative execution queue must stay inside the repository") from exc
+    if not queue_path.is_file():
+        raise ContractError(f"authoritative execution queue is missing: {queue_rel.as_posix()}")
+    return queue_path
 
 
 def load_manifest(path=DEFAULT_MANIFEST):
@@ -62,6 +105,7 @@ def validate_manifest(manifest):
     required = {"RESULT", "ROLE", "TASK", "FILES", "VERIFICATION", "SPEC_STATUS", "ESCALATION", "NOTES"}
     if not required.issubset(result.get("required", [])):
         raise ContractError("worker result contract is incomplete")
+    resolve_execution_queue(manifest)
     return manifest
 
 
