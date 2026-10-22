@@ -971,6 +971,229 @@ mod dial_scheduler_tests {
         assert_eq!(stored.public_key.to_lowercase(), key_hex);
         assert_ne!(stored.public_key.to_lowercase(), peer_id);
     }
+
+    // ===== OC AUDIT PROBE (LOCAL, NOT SHIPPED) =========================
+    // Discriminates: are the two failing tests stale, or is the code
+    // misbinding identities from inbound envelopes?
+    // ================================================================
+    fn oc_libp2p_kp(tag: &[u8; 10]) -> (String, String) {
+        let mut seed = [0u8; 32];
+        seed[..10].copy_from_slice(tag);
+        let sk = libp2p::identity::ed25519::SecretKey::try_from_bytes(&mut seed).unwrap();
+        let kp = libp2p::identity::ed25519::Keypair::from(sk);
+        let key_hex = hex::encode(kp.public().to_bytes());
+        let peer = libp2p::identity::PublicKey::from(kp.public())
+            .to_peer_id()
+            .to_string();
+        (key_hex, peer)
+    }
+
+    #[test]
+    fn oc_disc_A_stale_lookup_record_exists_under_canonical_hex() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = IronCore::with_storage(path_to_string(&dir.path().join("storage")).unwrap());
+        let contacts = core.contacts_store_manager();
+
+        let (key_hex, peer) = oc_libp2p_kp(b"ocdiscAAAA");
+        // Same shape as the failing shipped test: no usable key in the envelope.
+        let decoded = scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope {
+            nickname: Some("Alice".to_string()),
+            public_key: Some("zz-not-hex".to_string()),
+            ..Default::default()
+        };
+        learn_sender_identity_from_envelope(&contacts, &peer, &decoded);
+
+        // (1) The shipped test's lookup key genuinely no longer resolves.
+        assert!(
+            contacts.get(peer.clone()).unwrap().is_none(),
+            "STALE-ARM: get(libp2p peer string) must miss -- this is why the \
+             shipped test panics at expect(contact)"
+        );
+        // (2) The record IS stored, under a derived canonical hex key.
+        let all = contacts.list().unwrap();
+        let rec = all
+            .iter()
+            .find(|c| c.nickname.as_deref() == Some("Alice"))
+            .unwrap_or_else(|| panic!("record must exist under SOME key: {:?}", all));
+        assert_ne!(rec.peer_id, peer, "peer_id was canonicalized away from libp2p form");
+        // (3) The invariant the shipped test NAME claims still holds.
+        assert_ne!(
+            rec.public_key, peer,
+            "INVARIANT HELD: public_key is not peer_id-as-public_key"
+        );
+        // (4) ...but the shipped test's literal is_empty() assertion is stale:
+        //     the write path FILLS the key from the peer id's ed25519 key.
+        assert_eq!(
+            rec.public_key.to_lowercase(),
+            key_hex.to_lowercase(),
+            "the write path backfills the DERIVED ed25519 key, so the shipped \
+             test's is_empty() assertion can no longer hold"
+        );
+        assert!(
+            rec.notes.as_deref().unwrap_or_default().contains("awaiting verified key"),
+            "the placeholder note is still written"
+        );
+    }
+
+    #[test]
+    fn oc_disc_B_wellformed_but_wrong_envelope_key_rekeys_the_contact() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = IronCore::with_storage(path_to_string(&dir.path().join("storage")).unwrap());
+        let contacts = core.contacts_store_manager();
+
+        let (key_a, peer_a) = oc_libp2p_kp(b"ocnodeAAAA");
+        let (key_b, _peer_b) = oc_libp2p_kp(b"ocnodeBBBB");
+        assert_ne!(key_a, key_b, "the two identities must differ for this probe");
+
+        // Transport peer is peer_a. The inbound envelope -- parsed text, never
+        // signature-checked -- claims the sender's key is key_b.
+        let decoded = scmessenger_core::message::identity_envelope::DecodedIdentityEnvelope {
+            nickname: Some("Mallory".to_string()),
+            public_key: Some(key_b.clone()),
+            ..Default::default()
+        };
+        learn_sender_identity_from_envelope(&contacts, &peer_a, &decoded);
+
+        let by_b = contacts.get(key_b.clone()).unwrap();
+        assert!(
+            by_b.is_some(),
+            "MISBIND-ARM: a contact keyed by the ATTACKER-SUPPLIED key_b now \
+             exists -- the envelope re-keyed the record"
+        );
+        let rec = by_b.unwrap();
+        assert_eq!(
+            rec.public_key.to_lowercase(),
+            key_b.to_lowercase(),
+            "and its stored public key is the envelope's claim, not peer_a's"
+        );
+        assert_ne!(
+            rec.public_key.to_lowercase(),
+            key_a.to_lowercase(),
+            "the REAL identity of the transport peer was displaced"
+        );
+        assert!(
+            contacts.get(peer_a.clone()).unwrap().is_none(),
+            "and the record is no longer retrievable by the real peer id"
+        );
+    }
+
+    // ===== OC AUDIT PROBE (LOCAL, NOT SHIPPED) =========================
+    // Drives the REAL transport ingress: attacker signs a message with its
+    // OWN key (so the self-signed envelope check passes) and puts a FOREIGN
+    // key + attacker route hints in the inner identity envelope. Then runs the
+    // exact post-receive logic the CLI uses at main.rs:3055 / :4332.
+    // ================================================================
+    #[test]
+    fn oc_e2e_third_party_can_plant_a_contact_and_route_hints_for_a_foreign_key() {
+        // Victim (the node being attacked) and the foreign target key.
+        let dir_v = tempfile::tempdir().unwrap();
+        let victim = IronCore::with_storage(
+            path_to_string(&dir_v.path().join("storage")).unwrap(),
+        );
+        victim.grant_consent();
+        victim.initialize_identity().expect("victim identity");
+        let victim_hex = victim
+            .get_identity_info()
+            .public_key_hex
+            .expect("victim hex");
+
+        // The TARGET of the poisoning: an unrelated third party's real key.
+        let (target_hex, target_peer) = oc_libp2p_kp(b"ocvictimXX");
+
+        // The ATTACKER: a real node with a real key, so its envelope verifies.
+        let dir_a = tempfile::tempdir().unwrap();
+        let attacker = IronCore::with_storage(
+            path_to_string(&dir_a.path().join("storage")).unwrap(),
+        );
+        attacker.grant_consent();
+        attacker.initialize_identity().expect("attacker identity");
+        let attacker_hex = attacker
+            .get_identity_info()
+            .public_key_hex
+            .expect("attacker hex");
+        assert_ne!(attacker_hex, target_hex);
+
+        // BEFORE: the victim has no contact for the target, and no route hint.
+        assert!(
+            victim.contacts_store_manager().get(target_hex.clone()).unwrap().is_none(),
+            "precondition: victim does not know the target"
+        );
+
+        // The attacker composes an identity envelope that claims to BE the
+        // target, with a nickname and a route hint under the attacker's control.
+        let evil = format!(
+            r#"{{"schema":"scm.message.identity.v1","text":"hi","sender":{{"public_key":"{}","nickname":"TotallyTheTarget","libp2p_peer_id":"{}","listeners":["/ip4/127.0.0.1/tcp/9999"],"connection_hints":["/ip4/127.0.0.1/udp/9999/quic-v1"],"external_addresses":[]}}}}"#,
+            target_hex, target_peer
+        );
+
+        // The attacker sends it as an ordinary signed text message.
+        let prepared = attacker
+            .prepare_message(victim_hex.clone(), evil.clone(), MessageType::Text, None)
+            .expect("attacker can send");
+
+        // THE REAL INGRESS. If the transport gate rejects this, the finding is
+        // not reachable and this test must FAIL.
+        let received = victim
+            .receive_message(prepared.envelope_data.clone())
+            .expect("message must pass the transport signature gate");
+
+        // Now run the CLI's exact post-receive logic (main.rs:3055 / :4332).
+        let raw_text = received.text_content().unwrap_or_default();
+        let decoded = scmessenger_core::message::identity_envelope::parse_identity_envelope(&raw_text)
+            .expect("the inner envelope parsed -- it is the attack payload");
+        // Exactly as production does it (main.rs:3230 / :4512): read the sender
+        // key out of the SAME envelope bytes that receive_message just verified.
+        let sender_pubkey_hex = decode_envelope(&prepared.envelope_data)
+            .ok()
+            .map(|env| hex::encode(&env.sender_public_key))
+            .expect("sender key from the verified envelope");
+        assert_eq!(
+            sender_pubkey_hex.to_lowercase(),
+            attacker_hex.to_lowercase(),
+            "the transport gate authenticated the ATTACKER's own key -- which is              exactly what makes the inner envelope's foreign key the only lie"
+        );
+        let transport_peer: libp2p::PeerId = attacker_hex
+            .parse::<libp2p::PeerId>()
+            .ok()
+            .or_else(|| {
+                scmessenger_core::store::ledger_entry::peer_id_from_public_key_hex(&attacker_hex)
+                    .and_then(|s| s.parse().ok())
+            })
+            .expect("attacker peer id");
+        let resolved = resolve_sender_peer_id(
+            transport_peer,
+            Some(sender_pubkey_hex.as_str()),
+            Some(&decoded),
+        );
+        learn_sender_identity_from_envelope(
+            &victim.contacts_store_manager(),
+            &resolved.to_string(),
+            &decoded,
+        );
+
+        // CONSEQUENCE 1: a contact for the FOREIGN key now exists, carrying
+        // the attacker's chosen nickname.
+        let planted = victim
+            .contacts_store_manager()
+            .get(target_hex.clone())
+            .unwrap()
+            .expect("REACHABLE: a contact for the third-party key was planted");
+        assert_eq!(
+            planted.nickname.as_deref(),
+            Some("TotallyTheTarget"),
+            "the attacker-chosen nickname is now bound to the third party's key"
+        );
+        assert_eq!(
+            planted.public_key.to_lowercase(),
+            target_hex.to_lowercase(),
+            "and the record is keyed by the third party's REAL key"
+        );
+        assert_ne!(
+            planted.public_key.to_lowercase(),
+            attacker_hex.to_lowercase(),
+            "the binding did not have to use the attacker's own key"
+        );
+    }
 }
 
 #[tokio::main]

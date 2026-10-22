@@ -1436,4 +1436,62 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].attempts, u32::MAX);
     }
+
+    // -----------------------------------------------------------------------
+    // OC audit execution verification (#395) — LOCALLY WRITTEN, NOT SHIPPED.
+    // Appended inside the clone to settle the verdict by execution rather than
+    // by reading. Not part of the SCMessenger repository.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn oc_s395_lookup_is_not_canonical_only() {
+        // A real peer id from the rig fixtures already in this module.
+        let candidates = queue_key_candidates(HEX_PEER);
+
+        // MEASURED: a lookup for one peer resolves through MORE than the
+        // canonical key, so `resolve_queue_key` cannot be a single probe and
+        // the one-pass drain issue #395 asks for is not implemented.
+        assert!(
+            candidates.len() > 1,
+            "expected multiple key spellings, got {:?}",
+            candidates
+        );
+
+        // The canonical spelling is still probed first, so the common case is
+        // cheap — which is the property the code comments claim.
+        assert_eq!(
+            candidates[0],
+            canonical_peer_key(HEX_PEER),
+            "canonical must remain the first probe"
+        );
+
+        // And the uppercase spelling of the same key is one of the alternates.
+        assert!(
+            candidates.iter().any(|c| c == &HEX_PEER.to_uppercase()),
+            "uppercase spelling should be among the candidates: {:?}",
+            candidates
+        );
+    }
+
+    #[test]
+    fn oc_s395_enqueue_writes_only_the_canonical_key() {
+        // Enqueue canonicalizes on write, so entries are not duplicated today.
+        // The gap in #395 is the absence of a MIGRATION that consolidates keys
+        // written by older builds, not duplicate writes by the current one.
+        let mut outbox = Outbox::new();
+        let msg = make_msg("msg-395", HEX_PEER);
+        outbox.enqueue(msg).unwrap();
+
+        let canonical = canonical_peer_key(HEX_PEER);
+        let resolved = outbox.resolve_queue_key(HEX_PEER);
+        assert_eq!(
+            resolved, canonical,
+            "a message enqueued under the canonical key must resolve to it"
+        );
+        assert_eq!(
+            outbox.peek_for_peer(HEX_PEER).len(),
+            1,
+            "exactly one message is stored for this peer"
+        );
+    }
 }
