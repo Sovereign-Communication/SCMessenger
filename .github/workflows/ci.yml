@@ -199,7 +199,11 @@ jobs:
     if: ${{ !cancelled() }}
     # Matrix value stays 'ubuntu-latest' so the required check name
     # 'Test (ubuntu-latest)' is unchanged.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
+    # Pool allocation: the two 2-vCPU ARM OCI runners exist to shorten the one
+    # leg a merge actually waits on. They are therefore reserved for car and
+    # main waves; a dependabot re-head runs the identical job on the on-demand
+    # hosted pool instead of queueing 30+ minutes behind a car's required leg.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -252,7 +256,11 @@ jobs:
     name: Docs
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Small, architecture-agnostic job: keep it off the two ARM OCI slots so a
+    # required leg is never queued behind it. CI_SMALL_RUNNER optionally points
+    # this at a trial pool (e.g. ubicloud-standard-2); unset, it is hosted and
+    # can never strand a required context on a runner label nobody registered.
+    runs-on: ${{ vars.CI_SMALL_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
@@ -273,7 +281,11 @@ jobs:
     name: FFI Surface Contract
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Small, architecture-agnostic job: keep it off the two ARM OCI slots so a
+    # required leg is never queued behind it. CI_SMALL_RUNNER optionally points
+    # this at a trial pool (e.g. ubicloud-standard-2); unset, it is hosted and
+    # can never strand a required context on a runner label nobody registered.
+    runs-on: ${{ vars.CI_SMALL_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
