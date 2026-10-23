@@ -299,6 +299,17 @@ fn source_prefix(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// Normalize an IP for identity keying: an IPv4-mapped IPv6 address
+/// (`::ffff:a.b.c.d`) becomes its IPv4 form, so one source cannot hold two
+/// map entries by presenting both spellings of the same address.
+/// (NF-1: same bug class as F3, applied to `known_sources`/`pending_by_ip`.)
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    }
+}
+
 /// Why a pending inbound connection was dropped at accept time.
 #[derive(Debug)]
 struct PendingShed;
@@ -493,7 +504,7 @@ impl AdmissionBehaviour {
         src: Option<IpAddr>,
     ) {
         if let std::collections::hash_map::Entry::Vacant(slot) = self.pending.entry(id) {
-            let known = inbound && src.is_some_and(|ip| self.known_sources.contains_key(&ip));
+            let known = inbound && src.is_some_and(|ip| self.known_sources.contains_key(&normalize_ip(ip)));
             let conn = PendingConn {
                 start: now,
                 inbound,
@@ -520,7 +531,7 @@ impl AdmissionBehaviour {
         conn: &PendingConn,
     ) {
         if let Some(ip) = conn.src {
-            *by_ip.entry(ip).or_insert(0) += 1;
+            *by_ip.entry(normalize_ip(ip)).or_insert(0) += 1;
             *by_prefix.entry(source_prefix(ip)).or_insert(0) += 1;
         }
         if conn.known {
@@ -530,7 +541,7 @@ impl AdmissionBehaviour {
 
     fn count_out(&mut self, conn: &PendingConn) {
         if let Some(ip) = conn.src {
-            Self::dec(&mut self.pending_by_ip, ip);
+            Self::dec(&mut self.pending_by_ip, normalize_ip(ip));
             Self::dec(&mut self.pending_by_prefix, source_prefix(ip));
         }
         if conn.known {
@@ -562,7 +573,7 @@ impl AdmissionBehaviour {
     /// from it keeps a reserved allowance when pressure caps the rest.
     pub fn note_known_source(&mut self, addr: &Multiaddr) {
         if let Some(ip) = source_ip(addr) {
-            self.known_sources.insert(ip, Instant::now());
+            self.known_sources.insert(normalize_ip(ip), Instant::now());
         }
     }
 
@@ -1010,9 +1021,11 @@ impl AdmissionBehaviour {
     /// 2026-10-17): one pending inbound per distinct /24 that has none, with no
     /// global ceiling on how many of those may be open.
     fn pending_refusal(&self, cap: usize, src: Option<IpAddr>) -> Option<&'static str> {
-        if let Some(ip) = src.filter(|ip| self.known_sources.contains_key(ip)) {
+        if let Some(raw) = src.filter(|ip| self.known_sources.contains_key(&normalize_ip(*ip))) {
             // One concurrent handshake per known address: a shared address
             // (carrier NAT) cannot take an allowance that belongs to every contact.
+            // (NF-1: normalize — the map is keyed by normalized IP.)
+            let ip = normalize_ip(raw);
             let open = self.pending_by_ip.get(&ip).copied().unwrap_or(0);
             return (open >= 1).then_some("known-pool");
         }
@@ -1028,7 +1041,7 @@ impl AdmissionBehaviour {
         if general >= cap && !zero_headroom_slot {
             return Some("cap");
         }
-        let ip = src?;
+        let ip = normalize_ip(src?);
         let ip_limit = (cap / (self.pending_by_ip.len() + 1)).max(1);
         if self.pending_by_ip.get(&ip).copied().unwrap_or(0) >= ip_limit {
             return Some("per-ip");
@@ -2415,5 +2428,29 @@ mod tests {
         // must not earn a second zero-headroom slot.
         let mapped: IpAddr = "::ffff:10.0.1.2".parse().unwrap();
         assert_eq!(b.pending_refusal(0, Some(mapped)), Some("cap"));
+    }
+
+    #[test]
+    fn nf1_known_source_and_per_ip_limits_treat_ipv4_mapped_v6_as_the_same_address() {
+        // NF-1: known_sources and pending_by_ip must key on the normalized IP,
+        // so a source cannot bypass per-address limits by presenting both
+        // spellings (::ffff:a.b.c.d and a.b.c.d) of the same address.
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        // Register 10.0.1.2 as a known source via its IPv4 form.
+        let v4: IpAddr = "10.0.1.2".parse().unwrap();
+        let addr_v4: Multiaddr = format!("/ip4/10.0.1.2/tcp/9001").parse().unwrap();
+        b.note_known_source(&addr_v4);
+        // A pending handshake from the IPv4 form hits the known-pool limit.
+        b.track_pending(cid(1), now, true, Some(v4));
+        assert_eq!(b.pending_refusal(100, Some(v4)), Some("known-pool"));
+        // The same source as ::ffff:10.0.1.2 must hit the SAME known-pool
+        // limit — not slip through to the general pool.
+        let mapped: IpAddr = "::ffff:10.0.1.2".parse().unwrap();
+        assert_eq!(b.pending_refusal(100, Some(mapped)), Some("known-pool"));
+        // And the per-ip counter must be shared: the mapped spelling sees the
+        // pending handshake recorded under the IPv4 spelling.
+        b.track_pending(cid(2), now, true, Some(v4));
+        assert_eq!(b.pending_refusal(1, Some(mapped)), Some("per-ip"));
     }
 }
