@@ -18,6 +18,12 @@ RUN apt-get update && apt-get install -y \
 # Install additional Rust components
 RUN rustup component add clippy rustfmt
 
+# cargo-audit, because the rust-audit service in docker-compose.test.yml runs
+# `cargo audit` in this image. Without it the Security Audit suite fails with
+# "error: no such command: `audit`" before it can report anything about the
+# tree. --locked keeps the tool's own dependency graph pinned.
+RUN cargo install cargo-audit --locked
+
 # Add Android targets (for cross-compilation testing)
 RUN rustup target add \
     aarch64-linux-android \
