@@ -164,3 +164,5 @@ exclusions against this log; GitHub history is the fallback if disputed.
 Lessons live in `docs/EXPERIENCE.md` (append-only; any role appends a
 LESSON entry: date, role, one-line lesson, evidence link). This section
 is only a pointer -- do not duplicate lessons here.
+
+[INFO] Governing train plan: `HANDOFF/plans/V051_MERGE_TRAIN_PLAN_V7_2026-10-22.md` (v7, with the 2026-10-23 Overseer ERRATA section appended to it).
