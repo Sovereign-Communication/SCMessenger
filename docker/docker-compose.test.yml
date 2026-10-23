@@ -115,6 +115,7 @@ services:
     command: >
       bash -c "
         echo '=== Generating Kotlin Bindings ===' &&
+        cargo build --manifest-path core/Cargo.toml --lib &&
         cargo run --manifest-path core/Cargo.toml --bin gen_kotlin --features gen-bindings &&
         echo '=== Generating Swift Bindings ===' &&
         cargo run --manifest-path core/Cargo.toml --bin gen_swift --features gen-bindings &&
