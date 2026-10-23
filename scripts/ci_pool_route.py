@@ -108,10 +108,15 @@ def main() -> int:
         if "'ubuntu-latest'" not in runner:
             failures.append(f"ci.yml {job}: hosted default is not 'ubuntu-latest'")
 
-    # 4. Pool membership: only the approved jobs may name the OCI label set.
-    for path, text in ((CI, ci_text), (SEC, sec_text)):
+    # 4. Pool membership: inspect every workflow, including future workflow files.
+    # Approval is keyed by both filename and job id so a same-named job elsewhere
+    # cannot silently consume the scarce pool.
+    workflow_dir = ROOT / ".github" / "workflows"
+    workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+    for path in workflow_paths:
+        text = path.read_text(encoding="utf-8")
         for job, block in job_blocks(text).items():
-            if job not in ("test", "forgery-regression") and OCI_LABELS in "\n".join(block):
+            if OCI_LABELS in "\n".join(block) and (path.name, job) not in APPROVED_OCI_JOBS:
                 failures.append(f"{path.name} {job}: unapproved consumer of the OCI pool")
 
     # Routing table (derived from the expressions above; printed for the PR body).
