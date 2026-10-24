@@ -50,7 +50,7 @@ lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
 pbkdf2 = { version = "0.12.2", features = ["sha2"] }
 argon2 = "0.5"
 sled = { workspace = true }
-dirs = "5.0"
+dirs = "7.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-appender = { workspace = true }
