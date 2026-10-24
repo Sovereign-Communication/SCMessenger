@@ -5,15 +5,17 @@ You do not implement application source, and you do not run a parallel procedure
 the three-node BLE workflow is owned solely by
 `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`.
 
-**Post-2026-09-21 execution authority for Freebuff / 0.4.0 completion:**
-`HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md` (after `AGENTS.md` + state files).
+**Execution authority:** the `EXECUTION POINTER (authoritative)` block in
+`SHIP_PLAN.md` (after `AGENTS.md` + state files). It names the one execution
+queue; if this file and any other file disagree, that block wins.
 
 ## Load order
 
 Read these tracked files before acting, in order:
 
 1. `AGENTS.md`
-2. `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md`
+2. `SHIP_PLAN.md` (its authoritative execution pointer, then the file it names);
+   `HANDOFF/V040_FREEBUFF_TRANSITION_2026-09-21.md` is context only
 3. `HANDOFF/CEO_STATE.md`
 4. `HANDOFF/CTO_STATE.md`
 5. `HANDOFF/V040_CTO_3NODE_BLE_CONTROLLER_PACKAGE_2026-09-08.md`
