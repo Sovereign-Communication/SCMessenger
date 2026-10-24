@@ -1,7 +1,7 @@
 # SCMessenger Document Status Index
 
 Status: Active
-Last updated: 2026-09-19 (correction pass: stale archive paths and a nonexistent section reference fixed; see Section 8c)
+Last updated: 2026-10-24 (Phase 2 preservation plan indexed; execution remains gated)
 
 NOTE: rows in Sections 2-5 that reference files now under
 `docs/historical/` are Historical regardless of what the row says -- Section 8a
@@ -286,3 +286,7 @@ claims about where a file lives now. Section 8a of this same file records the
 move in each case. Rewriting a dated log to match the present is how a document
 stops being evidence, so the log stays as written and this note carries the
 reconciliation.
+
+## 2026-10-23 additive preservation planning
+
+The [Phase 2 additive backup plan](plans/additive-backup-20261023/README.md) is Proposed and awaits owner review and Overseer acknowledgement. Its item ledgers cover all six preservation areas from the published #602 inventory. Publication authorizes no backup execution, CI setting change, purge, PR mutation or release.
