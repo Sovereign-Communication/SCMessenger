@@ -4090,7 +4090,10 @@ final class MeshRepository {
         if wifi != previousWifi { reportDiscoveryEvent(.wifiChanged) }
         if cellular != previousCellular { reportDiscoveryEvent(.cellularChanged) }
 
-        // Report to Rust
+        // Issue #523: forward only real interface changes (available, lost,
+        // WiFi <-> cellular) into the core so dial revival resets backoff and
+        // redials immediately; onNetworkChanged precedes updateDeviceState.
+        // See NetworkReportGate for the decision and the ordering note.
         let profile = DeviceProfile(
             peerId: nil,
             deviceId: nil,
@@ -4099,7 +4102,14 @@ final class MeshRepository {
             hasWifi: wifi,
             motionState: currentMotionState
         )
-        meshService?.updateDeviceState(profile: profile)
+        NetworkReportGate.report(
+            previousWifi: previousWifi,
+            previousCellular: previousCellular,
+            wifi: wifi,
+            cellular: cellular,
+            profile: profile,
+            bridge: meshService
+        )
         Task { @MainActor [weak self] in
             await self?.applyPowerAdjustments(reason: "network_changed")
         }
