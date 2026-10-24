@@ -224,7 +224,7 @@ jobs:
 
       - name: Restore Gradle and Cargo dependencies cache
         id: gradle-cargo-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             docker/android-gradle-cache
@@ -253,7 +253,7 @@ jobs:
             run --rm -e ANDROID_ABI_FILTERS=none android-unit-test
 
       - name: Save Gradle and Cargo dependencies cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: always()
         with:
           path: |
