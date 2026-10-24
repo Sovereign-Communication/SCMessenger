@@ -377,16 +377,8 @@ impl OptimizedRoutingEngine {
         cell.peer_seen(peer_id, transport);
 
         // Ensure peer's direct hint is reachable in local cell
-        let direct_hint: [u8; 8] = blake3::hash(&peer_id).as_bytes()[0..8]
-            .try_into()
-            .unwrap_or([0u8; 8]);
-        if let Some(peer) = cell.get_peer(&peer_id) {
-            if !peer.reachable_hints.contains(&direct_hint) {
-                let mut hints = peer.reachable_hints.clone();
-                hints.push(direct_hint);
-                cell.update_peer_hints(&peer_id, hints);
-            }
-        }
+        // Not an announcement: bypass the announce rate limit.
+        cell.bind_direct_hint(&peer_id);
     }
 
     /// Check whether a specific peer is reachable via any known route.
@@ -407,9 +399,7 @@ impl OptimizedRoutingEngine {
                         return true;
                     }
                 }
-                let hint: [u8; 8] = blake3::hash(&peer_id).as_bytes()[0..8]
-                    .try_into()
-                    .unwrap_or([0u8; 8]);
+                let hint: [u8; 8] = crate::identity::keys::routing_hint_from_public_key(&peer_id);
                 let peers = self.base_engine.local_cell().peers_for_hint(&hint);
                 if !peers.is_empty() {
                     return true;
@@ -456,9 +446,7 @@ impl OptimizedRoutingEngine {
             arr
         };
         // Derive the 8-byte recipient hint from the peer ID (first 8 bytes of blake3 hash)
-        let hint: [u8; 8] = blake3::hash(&peer_id).as_bytes()[0..8]
-            .try_into()
-            .unwrap_or([0u8; 8]);
+        let hint: [u8; 8] = crate::identity::keys::routing_hint_from_public_key(&peer_id);
         let path = DeliveryPath {
             path_id,
             peer_id,
