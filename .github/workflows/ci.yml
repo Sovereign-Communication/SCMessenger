@@ -199,19 +199,16 @@ jobs:
     if: ${{ !cancelled() }}
     # Matrix value stays 'ubuntu-latest' so the required check name
     # 'Test (ubuntu-latest)' is unchanged.
+    # Pool allocation: the two 2-vCPU ARM OCI runners exist to shorten the one
+    # leg a merge actually waits on. They are reserved for car and main waves;
+    # Dependabot re-heads use the hosted pool instead of queueing behind a car's
+    # required leg.
     #
-    # The OCI selection is gated on the SAME flag that gates the steps. Before
-    # this, a docs-only or Kotlin-only diff selected the scarce self-hosted ARM
-    # pool, ran zero steps, and returned green: a required context satisfied by a
-    # job that did nothing, while a real car waited behind it (issue #642). When
-    # the diff cannot affect the Rust workspace the leg stays on hosted
-    # ubuntu-latest, where an empty run costs a hosted minute instead of a slot.
-    #
-    # `needs` is explicitly permitted in jobs.<job_id>.runs-on (allowed contexts:
-    # github, needs, strategy, matrix, vars, inputs). The matrix stays STATIC on
-    # purpose: a dynamic matrix would not create 'Test (ubuntu-latest)' until
-    # `changes` finished, and that delay is the required check reporting late.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
+    # Gate OCI selection on the SAME flag that gates the steps. A docs-only or
+    # Kotlin-only diff stays on hosted ubuntu-latest, where an empty run costs a
+    # hosted minute instead of a scarce runner slot. Keep the matrix STATIC so
+    # the required 'Test (ubuntu-latest)' context reports as soon as the job starts.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -274,7 +271,11 @@ jobs:
     name: Docs
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Small, architecture-agnostic job: keep it off the two ARM OCI slots so a
+    # required leg is never queued behind it. CI_SMALL_RUNNER optionally points
+    # this at a trial pool (e.g. ubicloud-standard-2); unset, it is hosted and
+    # can never strand a required context on a runner label nobody registered.
+    runs-on: ${{ vars.CI_SMALL_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
@@ -295,7 +296,11 @@ jobs:
     name: FFI Surface Contract
     needs: changes
     if: needs.changes.outputs.rust_relevant == 'true'
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Small, architecture-agnostic job: keep it off the two ARM OCI slots so a
+    # required leg is never queued behind it. CI_SMALL_RUNNER optionally points
+    # this at a trial pool (e.g. ubicloud-standard-2); unset, it is hosted and
+    # can never strand a required context on a runner label nobody registered.
+    runs-on: ${{ vars.CI_SMALL_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Use preinstalled Rust (self-hosted)
