@@ -13,11 +13,13 @@
 
 pub mod abstraction;
 pub mod addr_filter;
+pub mod admission;
 pub mod behaviour;
 pub mod ble;
 pub mod bootstrap;
 pub mod capability;
 pub mod circuit_breaker;
+pub mod conn_resources;
 pub mod diagnostics;
 pub mod dial_policy;
 pub mod discovery;
@@ -31,6 +33,7 @@ pub mod mesh_routing;
 pub mod multiport;
 pub mod nat;
 pub mod observation;
+pub mod path_budget;
 pub mod peer_broadcast;
 pub mod reflection;
 pub mod relay_health;
