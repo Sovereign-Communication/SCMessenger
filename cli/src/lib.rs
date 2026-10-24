@@ -11,6 +11,7 @@ pub mod ble_mesh;
 pub mod bootstrap;
 pub mod cli;
 pub mod config;
+pub mod inbound_receipts;
 pub mod invite;
 pub mod ledger;
 pub mod platform_signals;
