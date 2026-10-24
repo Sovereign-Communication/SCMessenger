@@ -129,7 +129,7 @@ pub fn encrypt_message(
     let recipient_x25519 = ed25519_public_to_x25519(recipient_public_key)?;
 
     // Generate ephemeral X25519 keypair for this message
-    let ephemeral_secret = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+    let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::rngs::OsRng);
     let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
     // ECDH: ephemeral_secret × recipient_public → shared_secret
