@@ -2439,7 +2439,7 @@ mod tests {
         let now = Instant::now();
         // Register 10.0.1.2 as a known source via its IPv4 form.
         let v4: IpAddr = "10.0.1.2".parse().unwrap();
-        let addr_v4: Multiaddr = format!("/ip4/10.0.1.2/tcp/9001").parse().unwrap();
+        let addr_v4: Multiaddr = "/ip4/10.0.1.2/tcp/9001".parse().unwrap();
         b.note_known_source(&addr_v4);
         // A pending handshake from the IPv4 form hits the known-pool limit.
         b.track_pending(cid(1), now, true, Some(v4));
@@ -2448,9 +2448,26 @@ mod tests {
         // limit — not slip through to the general pool.
         let mapped: IpAddr = "::ffff:10.0.1.2".parse().unwrap();
         assert_eq!(b.pending_refusal(100, Some(mapped)), Some("known-pool"));
-        // And the per-ip counter must be shared: the mapped spelling sees the
-        // pending handshake recorded under the IPv4 spelling.
+    }
+
+    #[test]
+    fn nf1_per_ip_counter_is_shared_across_ipv4_mapped_spellings() {
+        // NF-1 (per-ip half): pending_by_ip must count both spellings together.
+        // Uses a NON-known source so the per-ip (not known-pool) limit applies.
+        let mut b = AdmissionBehaviour::new();
+        let now = Instant::now();
+        let v4: IpAddr = "10.0.9.9".parse().unwrap();
+        let mapped: IpAddr = "::ffff:10.0.9.9".parse().unwrap();
+        // Two pendings under the IPv4 spelling ...
+        b.track_pending(cid(1), now, true, Some(v4));
         b.track_pending(cid(2), now, true, Some(v4));
-        assert_eq!(b.pending_refusal(1, Some(mapped)), Some("per-ip"));
+        // ... must count against the mapped spelling's per-ip limit.
+        // cap=1, one other distinct IP in the map: ip_limit = (1/2).max(1) = 1;
+        // 2 pending >= 1 -> per-ip refusal.
+        let other: IpAddr = "10.0.8.8".parse().unwrap();
+        b.track_pending(cid(3), now, true, Some(other));
+        // cap=6: general(3) < 6 so we pass the "cap" gate; ip_limit = (6/3).max(1) = 2;
+        // the mapped spelling sees 2 pendings -> per-ip refusal.
+        assert_eq!(b.pending_refusal(6, Some(mapped)), Some("per-ip"));
     }
 }
