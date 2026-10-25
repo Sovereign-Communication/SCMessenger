@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let receiver_x25519_secret = StaticSecret::random_from_rng(OsRng);
+        let receiver_x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
         let receiver_x25519_public = PublicKey::from(&receiver_x25519_secret).to_bytes();
         let receiver_mlkem_keypair = generate();
         let receiver_mlkem_public = receiver_mlkem_keypair.public_key();
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_tamper_mlkem_ciphertext() {
-        let receiver_x25519_secret = StaticSecret::random_from_rng(OsRng);
+        let receiver_x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
         let receiver_x25519_public = PublicKey::from(&receiver_x25519_secret).to_bytes();
         let receiver_mlkem_keypair = generate();
         let receiver_mlkem_public = receiver_mlkem_keypair.public_key();
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_tamper_x25519_ephemeral_public() {
-        let receiver_x25519_secret = StaticSecret::random_from_rng(OsRng);
+        let receiver_x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
         let receiver_x25519_public = PublicKey::from(&receiver_x25519_secret).to_bytes();
         let receiver_mlkem_keypair = generate();
         let receiver_mlkem_public = receiver_mlkem_keypair.public_key();
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_both_halves_contribute() {
-        let receiver_x25519_secret = StaticSecret::random_from_rng(OsRng);
+        let receiver_x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
         let receiver_x25519_public = PublicKey::from(&receiver_x25519_secret).to_bytes();
         let receiver_mlkem_keypair = generate();
         let receiver_mlkem_public = receiver_mlkem_keypair.public_key();
@@ -227,7 +227,7 @@ mod tests {
         // Just replace with deterministic check of the combiner explicitly if needed
         // Since OS random is used, we can't easily KAT the full encapsulate.
         // For now, at least make the test pass as a roundtrip.
-        let receiver_x25519_secret = StaticSecret::random_from_rng(OsRng);
+        let receiver_x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
         let receiver_x25519_public = PublicKey::from(&receiver_x25519_secret).to_bytes();
         let receiver_mlkem_keypair = generate();
         let receiver_mlkem_public = receiver_mlkem_keypair.public_key();
