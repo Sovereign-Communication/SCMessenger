@@ -301,7 +301,7 @@ pub struct MeshService {
     /// Last (has_wifi, has_cellular) reported by the platform, so only a
     /// genuine change is forwarded to the swarm as a revival wake.
     last_network: Mutex<Option<(bool, bool)>>,
-    device_state: RwLock<Option<DeviceState>>,
+    device_state: Arc<RwLock<Option<DeviceState>>>,
     auto_adjust: Arc<AutoAdjustEngine>,
     wifi_aware_bridge: Arc<Mutex<Option<Arc<PlatformWifiAwareBridge>>>>,
     wifi_direct_bridge: Arc<Mutex<Option<Arc<PlatformWifiDirectBridge>>>>,
@@ -334,7 +334,7 @@ impl MeshService {
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
             last_network: Mutex::new(None),
-            device_state: RwLock::new(None),
+            device_state: Arc::new(RwLock::new(None)),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
             nearby_ble_peers: Arc::new(Mutex::new(HashSet::new())),
@@ -367,7 +367,7 @@ impl MeshService {
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
             last_network: Mutex::new(None),
-            device_state: RwLock::new(None),
+            device_state: Arc::new(RwLock::new(None)),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
             nearby_ble_peers: Arc::new(Mutex::new(HashSet::new())),
@@ -404,7 +404,7 @@ impl MeshService {
             swarm_headless_mode: std::sync::Arc::new(Mutex::new(None)),
             current_device_profile: Mutex::new(None),
             last_network: Mutex::new(None),
-            device_state: RwLock::new(None),
+            device_state: Arc::new(RwLock::new(None)),
             drain_budget: std::sync::atomic::AtomicUsize::new(0),
             auto_adjust: Arc::new(AutoAdjustEngine::new()),
             nearby_ble_peers: Arc::new(Mutex::new(HashSet::new())),
@@ -892,6 +892,16 @@ impl MeshService {
         let swarm_mode_state = self.swarm_headless_mode.clone();
         let service_storage_path = self.storage_path.clone();
         let stats = self.stats.clone();
+        // Dialability on Cellular (seeding-security): the two
+        // `is_dialable_multiaddr` sites below switch to `NetworkMode::Public`
+        // when the device is on cellular, because LAN addresses are not
+        // dialable over cellular. Cloned here like every other field the
+        // spawned thread needs; read live (not snapshotted) at each site so a
+        // network change mid-session takes effect. Both use sites are
+        // `not(wasm32)`-gated, so the clone is too (avoids an unused-variable
+        // warning on the wasm32 target).
+        #[cfg(not(target_arch = "wasm32"))]
+        let device_state = self.device_state.clone();
 
         // TCP-listener-zombie fix: the OS socket bind happens asynchronously
         // inside the swarm task, so returning Ok(()) here used to mean "the
@@ -1299,9 +1309,26 @@ impl MeshService {
                                                         let mut accepted = Vec::new();
                                                         for addr in &listen_addrs {
                                                             let addr_str = addr.to_string();
+                                                            // Dialability on Cellular: LAN
+                                                            // addresses are not dialable over
+                                                            // cellular, so filter for
+                                                            // publicly-routable addresses only
+                                                            // when the device is on cellular.
+                                                            let mode = if device_state
+                                                                .read()
+                                                                .as_ref()
+                                                                .is_some_and(|s| {
+                                                                    s.network_type
+                                                                        == NetworkType::Cellular
+                                                                })
+                                                            {
+                                                                crate::transport::addr_filter::NetworkMode::Public
+                                                            } else {
+                                                                crate::transport::addr_filter::NetworkMode::Local
+                                                            };
                                                             if !crate::transport::addr_filter::is_dialable_multiaddr(
                                                                 &addr_str,
-                                                                crate::transport::addr_filter::NetworkMode::Local,
+                                                                mode,
                                                                 crate::transport::addr_filter::DnsPolicy::Reject,
                                                             ) {
                                                                 tracing::debug!(
@@ -1400,9 +1427,26 @@ impl MeshService {
                                                         // stored here, became a seed-dial
                                                         // candidate, and the desktop swarm wires
                                                         // a real resolver.
+                                                        // Dialability on Cellular: LAN
+                                                        // addresses are not dialable over
+                                                        // cellular, so filter for
+                                                        // publicly-routable addresses only
+                                                        // when the device is on cellular.
+                                                        let mode = if device_state
+                                                            .read()
+                                                            .as_ref()
+                                                            .is_some_and(|s| {
+                                                                s.network_type
+                                                                    == NetworkType::Cellular
+                                                            })
+                                                        {
+                                                            crate::transport::addr_filter::NetworkMode::Public
+                                                        } else {
+                                                            crate::transport::addr_filter::NetworkMode::Local
+                                                        };
                                                         if !crate::transport::addr_filter::is_dialable_multiaddr(
                                                             &stripped,
-                                                            crate::transport::addr_filter::NetworkMode::Local,
+                                                            mode,
                                                             crate::transport::addr_filter::DnsPolicy::Reject,
                                                         ) {
                                                             tracing::debug!(
