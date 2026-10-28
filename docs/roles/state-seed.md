@@ -49,6 +49,10 @@ BOUNCED, STUCK, HELD, LANDED. Release: TAGGED, GATE-RUNNING,
 GATE-PASSED, GATE-FAILED, PUBLISHED. MAIN-RED is a global flag, recorded
 in the OPERATION JOURNAL, not here.
 
+Each queue entry gains an Investigation field recording below-bar
+auto-investigations (drivers, evidence, re-assessment), so a
+parked-or-cleared ruling carries its audit trail.
+
 Installed live queue (installed per step 1 — the corrected table goes
 here, in train order):
 
