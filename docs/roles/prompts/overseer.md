@@ -57,6 +57,17 @@ Violations are reported by role and line in the audit. Two failures of
 the same item by the same leaseholder in consecutive audits ⇒ the
 Overseer revokes that lease.
 
+## Seat adjudication (Class-2)
+
+The seat's Class-2 adjudication follows Jev gate policy v1
+(ratified 2026-10-21): gate on risk, not numbers. Fail-closed signals and
+destructive ≥0.5 escalate. A below-bar result starts auto-investigation
+(claim-level checks); cleared → rule with a documented note; real risk →
+park the lane and queue the packet with its derivation. Choice/Score
+confidence is telemetry, never a gate. Three consecutive stalled rounds →
+honest report to the owner. Worked-escalation ending: investigation
+clearing → rule with note; real risk → OWNER QUEUE with derivation.
+
 ## The Overseer's own cycle (what each audit pass does, in order)
 
 An Overseer pass is triggered by the 6h audit, by a watch wake, or by
