@@ -88,6 +88,57 @@ class MeshServiceViewModelTest {
     }
 
     @Test
+    fun `toggle during STARTING sends stop instead of becoming a no-op`() = runTest {
+        val stateFlow = MutableStateFlow(uniffi.api.ServiceState.STARTING)
+        every { mockMeshRepository.serviceState } returns stateFlow
+        viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
+
+        // Trigger subscription so stateIn(WhileSubscribed) reflects STARTING
+        backgroundScope.launch(UnconfinedTestDispatcher(testDispatcher.scheduler)) {
+            viewModel.serviceState.collect()
+        }
+        // The subscription is asynchronous: without draining the scheduler the
+        // stateIn value is still its STOPPED initial value, toggleService() takes
+        // the start path, and this test would pass for the wrong reason.
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(uniffi.api.ServiceState.STARTING, viewModel.serviceState.value)
+
+        viewModel.toggleService()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Verified by Context method, not by Intent.action: under JVM unit tests
+        // android.content.Intent is stubbed and `returnDefaultValues = true`
+        // (android/app/build.gradle) makes its getters return null, so any
+        // action-based matcher is unsatisfiable. startService() is the stop path;
+        // startForegroundService() is the start path.
+        verify(exactly = 1) { mockContext.startService(any()) }
+        verify(exactly = 0) { mockContext.startForegroundService(any()) }
+    }
+
+    @Test
+    fun `toggle during STOPPING re-requests stop instead of starting`() = runTest {
+        val stateFlow = MutableStateFlow(uniffi.api.ServiceState.STOPPING)
+        every { mockMeshRepository.serviceState } returns stateFlow
+        viewModel = MeshServiceViewModel(mockContext, mockMeshRepository, mockPreferencesRepository)
+
+        // Trigger subscription so stateIn(WhileSubscribed) reflects STOPPING
+        backgroundScope.launch(UnconfinedTestDispatcher(testDispatcher.scheduler)) {
+            viewModel.serviceState.collect()
+        }
+        // See the STARTING case above: drain the scheduler so the stateIn value
+        // is STOPPING before the toggle, not its STOPPED initial value.
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(uniffi.api.ServiceState.STOPPING, viewModel.serviceState.value)
+
+        viewModel.toggleService()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // See the STARTING case above for why this is keyed on the Context method.
+        verify(exactly = 1) { mockContext.startService(any()) }
+        verify(exactly = 0) { mockContext.startForegroundService(any()) }
+    }
+
+    @Test
     fun `setAutoStart updates preference`() = runTest {
         // Given
         coEvery { mockPreferencesRepository.setServiceAutoStart(any()) } just runs
