@@ -19,3 +19,15 @@ contexts (latest run per job, never the combined status); trackers #602 and #595
   Claim-by-claim verification of the lane prompt against primary sources is in progress;
   the verification report posts in the lane thread and as a status comment here.
   Per the first-session limit, no item merges happen in session one.
+
+- 2026-10-29 session one, verification complete: backlog 40 open PRs (41 incl this
+  draft), 84 open issues (incl #650, #651 filed by Treystu today), 850 branches,
+  train A1/A2 merged (#627, #628), #597/#616 merged, fences confirmed (#489 open and
+  HELD, #620 open and separate, #594 open and operator-gated, #593/#592/#478 open).
+  Corrections recorded in the lane thread: #372/#364 are already closed (unmerged),
+  so the post-#521 fence action is #489's closure plus verifying their superseded
+  record; the safe-delete class is 137 name-matched merged heads, of which 76 pass
+  the full three-leg proof today (merged record + branch SHA equals PR head SHA +
+  merge commit is an ancestor of main) and 61 take judgment notes instead.
+  Main push CI on eb743aca in flight at last read (4/5 required contexts success,
+  Test (ubuntu-latest) in progress, zero failures); session two confirms it first.
