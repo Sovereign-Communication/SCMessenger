@@ -528,6 +528,7 @@ open class MeshRepository(
 
     // Mesh service instance (lazy init)
     @Volatile private var meshService: uniffi.api.MeshService? = null
+    @Volatile private var networkChangeBridge: NetworkChangeBridge? = null
 
     // Managers (lazy init)
     @Volatile private var contactManager: uniffi.api.ContactManager? = null
@@ -1727,6 +1728,16 @@ open class MeshRepository(
             Timber.i("TopicManager initialized for gossipsub topic management")
 
             // P0_NETWORK_001: Start network detection for cellular-aware fallback
+            // Forward every real network type change into the core so event-driven
+            // dial revival (backoff reset, immediate redial) reacts at once, and
+            // flush the outbox on the new network. The core echoes device state
+            // back through PlatformBridge; that path never calls this listener.
+            networkChangeBridge?.close()
+            networkChangeBridge = NetworkChangeBridge(
+                scope = repoScope,
+                applyToCore = { wifi, cellular -> meshService?.onNetworkChanged(wifi, cellular) },
+                onSettled = { flushPendingOutbox("network_changed") }
+            ).also { it.attach(networkDetector) }
             networkDetector.onDiscoveryEvent = { event -> reportDiscoveryEvent(event) }
             networkDetector.startMonitoring()
             Timber.i("NetworkDetector started — cellular-aware transport fallback active")
@@ -4403,6 +4414,9 @@ open class MeshRepository(
     fun stopMeshService() {
         synchronized(serviceLifecycleLock) {
         stopNetworkChangeWatch()
+        networkChangeBridge?.close()
+        networkChangeBridge = null
+        networkDetector.networkChangeListener = null
         networkDetector.stopMonitoring()
         radioStateReceiver.unregister()
         pendingOutboxRetryJob?.cancel()
