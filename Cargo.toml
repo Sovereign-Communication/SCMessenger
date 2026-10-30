@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "cli", "wasm", "mobile", "desktop_bridge"]
+members = ["core", "cli", "wasm", "mobile", "desktop_bridge", "vendor/libp2p-swarm-0.48.0"]
 resolver = "2"
 # wasm is a workspace member (it inherits version/edition/license and 13
 # workspace dependencies from this manifest). It targets wasm32, so build it with:
@@ -137,3 +137,11 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "unwind"
+
+# SCMessenger D9: vendored libp2p-swarm 0.48.0. Stock 0.48.0 panics with
+# `unreachable!()` in the Either handler/behaviour event routers when an event is
+# routed to the wrong side of the tree (observed live). The vendored copy degrades
+# those mismatches to logged drops ("D9-DEGRADE"); matched routing is unchanged.
+# Every delta vs upstream is listed in vendor/libp2p-swarm-0.48.0/PATCHES.md.
+[patch.crates-io]
+libp2p-swarm = { path = "vendor/libp2p-swarm-0.48.0" }
