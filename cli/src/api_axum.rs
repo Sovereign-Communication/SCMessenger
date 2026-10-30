@@ -18,11 +18,11 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use super::api::{
-    triad_dto, AddContactRequest, AddContactResponse, ConnectionPathStateResponse, DiscoveredPeer,
-    DiscoveryPeersResponse, DiscoveryStatusResponse, DriftStatusResponse,
-    GetExternalAddressResponse, GetHistoryRequest, GetHistoryResponse, GetListenersResponse,
-    GetPeersResponse, HistoryMessage, PeerEntry, PeerIdTriadDto, PeerResolveResponse,
-    SendMessageRequest, SendMessageResponse, API_PORT,
+    is_loopback_origin, triad_dto, AddContactRequest, AddContactResponse,
+    ConnectionPathStateResponse, DiscoveredPeer, DiscoveryPeersResponse, DiscoveryStatusResponse,
+    DriftStatusResponse, GetExternalAddressResponse, GetHistoryRequest, GetHistoryResponse,
+    GetListenersResponse, GetPeersResponse, HistoryMessage, PeerEntry, PeerIdTriadDto,
+    PeerResolveResponse, SendMessageRequest, SendMessageResponse, API_PORT,
 };
 
 /// Default number of messages `/api/history` returns when `limit` is
@@ -730,9 +730,11 @@ pub async fn start_api_server(ctx: ApiContext) -> Result<()> {
     let ctx = Arc::new(ctx);
     let addr = SocketAddr::from(([127, 0, 0, 1], API_PORT));
 
-    // Create CORS layer
+    // Create CORS layer restricted to localhost / loopback origins to prevent cross-origin attack vectors
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
+            is_loopback_origin(origin.as_bytes())
+        }))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers(Any);
 
