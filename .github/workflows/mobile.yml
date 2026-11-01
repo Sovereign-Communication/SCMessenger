@@ -22,6 +22,7 @@ on:
       - 'desktop_bridge/Cargo.toml'
       - 'rust-toolchain.toml'
       - '.cargo/**'
+      - '!**.md'
   release:
     types: [published]
   pull_request:
