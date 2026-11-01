@@ -1,0 +1,28 @@
+GRADES: Lucas style and perspective applied; Jev assessment recorded below. GAP: no candidate has been deleted. DID: recorded per-branch proof dispositions. SHAs: main 297e9e6179eb29f0cbe58006368c5718a33e3a76; checkout e4050f84ce6e6792c8e068c2b6e1a44fe4e843fe.
+
+## Local branch dispositions, part 3 of 3
+
+Rows are a complete partition of the 333 branches in the before-census (#595 comment 6564402727). Columns: branch, local head, same-name remote head or ABSENT, purpose inferred from the head commit subject or ref name, and disposition/proof. Subjects that may disclose sensitive material are withheld. Matching remote means no branch-tip push is needed; every differing local head is an ancestor of its same-name remote. All absent remote names are preservation refs, which remain untouched.
+
+PARK excluded keeps the ref under the stated preservation, active-PR or worktree fence; reopening requires that fence to be lifted plus all deletion-proof legs. PARK leg 1/2/3 keeps the ref until an import sweep establishes any unlanded work and a same-branch merged PR, exact head match and merge-commit ancestry are proven. DELETE-AFTER-PROOF means a candidate only: a restore record must be posted, then all facts and exclusions rechecked before deletion. No deletion is performed by this record.
+
+```text
+safe/work-ahead-20260925	d1c4a173835e7a90e117e2ad69e23953c323b8d5	d1c4a173835e7a90e117e2ad69e23953c323b8d5	fix(android): stop diagnostics claiming no node was reached when none was probed (#371)	PARK leg 1: no same-repository merged PR record
+train/2026-09-27	1dc70f0b192d6634b3c3dffcf8b2e73086b4ec4b	1dc70f0b192d6634b3c3dffcf8b2e73086b4ec4b	ref-name purpose; head subject withheld	PARK leg 1: no same-repository merged PR record
+train/A2-doctrine-rows-358	6fed6fbd47067fab5127fc7413dd3cc9e94e1a50	6fed6fbd47067fab5127fc7413dd3cc9e94e1a50	Merge remote-tracking branch 'origin/main' into train/A2-doctrine-rows-358	PARK leg 1: no same-repository merged PR record
+train/A3-deny-waiver	46f7b0d6cc28c6d64f261f65c2657975782cf1ed	46f7b0d6cc28c6d64f261f65c2657975782cf1ed	chore(deps): remove the rustls RUSTSEC-2026-0285 waiver now that the lock resolves the patched rustls	DELETE-AFTER-PROOF PR#373 merge=d00cfd50d7e7d597abc7b5c657ca5a290ebe1ae8
+train/A6-368-harness-plan	a2da1cb930fa037c1704013d211cb8bd1d53cf97	a2da1cb930fa037c1704013d211cb8bd1d53cf97	Merge remote-tracking branch 'origin/main' into train/A6-368-harness-plan	PARK leg 1: no same-repository merged PR record
+train/A9-354-jev-state	2089744da4a91f141c3a97f7639102317998bc95	2089744da4a91f141c3a97f7639102317998bc95	Merge remote-tracking branch 'origin/main' into train/A9-354-jev-state	PARK leg 1: no same-repository merged PR record
+velocity/pr510-initializer-lint-20261025	c48cb42b0920486afadd1471f61189f1d71f7e7d	c48cb42b0920486afadd1471f61189f1d71f7e7d	Merge branch 'main' into land/ios-durable-delivery	PARK leg 1: no same-repository merged PR record
+wip/session-close-20260929	cee46881a7bc84eaaa4f492bd6810198dfa5326d	cee46881a7bc84eaaa4f492bd6810198dfa5326d	docs(audit): naming audit, restated onto a reproducible occurrence-count basis	PARK leg 1: no same-repository merged PR record
+workahead/android-apk-host-hardening	73730e2f6d4ff2f5803f784bf63af193245de781	73730e2f6d4ff2f5803f784bf63af193245de781	ref-name purpose; head subject withheld	DELETE-AFTER-PROOF PR#300 merge=9086881a62c5d4d46eb8c46d7a2c9058db529d2d
+workahead/android-install-qr-payload	b107084befc3081e4e8b2fe6af9ace72949becd7	b107084befc3081e4e8b2fe6af9ace72949becd7	ref-name purpose; head subject withheld	DELETE-AFTER-PROOF PR#302 merge=1d4da402cb8bcc1fc0d116de9ec489a5ec0c59cc
+workahead/android-joinmesh-gms-gate	8af8c607d9f653601114a820493f76a1f0aa5725	8af8c607d9f653601114a820493f76a1f0aa5725	ref-name purpose; head subject withheld	DELETE-AFTER-PROOF PR#298 merge=140e7802e647d8742b575c4b0cfe553fff644559
+workahead/android-persist-join-seeds	1291e91872b67e4760d570c140a89db9192f0189	1291e91872b67e4760d570c140a89db9192f0189	ref-name purpose; head subject withheld	DELETE-AFTER-PROOF PR#299 merge=23b18b69d76c77e50548ef04b64085e185b3e5e8
+workahead/ios-apk-link-share	64e66b73fc9ab3ab22bdb2acf757a9a807013d45	64e66b73fc9ab3ab22bdb2acf757a9a807013d45	fix(lint): reword TODO comment that fails SwiftLint todo rule	DELETE-AFTER-PROOF PR#301 merge=25cc072a770e44eb6284fab3c878de8979cc6c6a
+workahead/merge-plan-handoff-20260916	da3438ea7351d3da8ae1170c8b1af46e17b0d2b1	da3438ea7351d3da8ae1170c8b1af46e17b0d2b1	ref-name purpose; head subject withheld	DELETE-AFTER-PROOF PR#303 merge=d18b761a1500360a70cdb04db6385ea975e7fc72
+```
+
+Jev evidence-publication assessment: completeness 63.00%, confidence 71.33% telemetry, correctness 82.00%, no-regression 94.67%, evidence quality 70.33%; destructive 0.03, actual-risk 0.22, advances-goal 0.76, proceed 0.92 versus needs-improvement 0.08. Request SHA-256 c56371a5d20de194092623805ecda0aa80a72bc69e78ed14a06a4cf52faa486b; response SHA-256 72546f391684fe7d32b159741850b4b946a373fdb450195a6842e1a56bbacd32. The lower completeness and evidence concerns were investigated by comparing every row to the full 333-ref census, all 403 merged PR records, current remote heads and actual main ancestry. The records are split into numbered complete parts, with no omitted branch. No additional risk in posting the redacted evidence was found: PROCEED WITH NOTE. Jev aspects are not Lucas Gate categories.
+
+Part 3: NEXT OBJECTIVE: publish and verify the complete restore record before considering local deletion. ROLE: Freebuff workspace operator. ACCEPTANCE: include every candidate branch, exact head, merged PR and merge commit; retain excluded and unproven branches; recheck live refs and main before any deletion. FIRST ACTION: post the restore record on #595.

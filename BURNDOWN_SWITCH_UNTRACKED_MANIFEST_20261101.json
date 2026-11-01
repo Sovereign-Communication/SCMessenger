@@ -1,0 +1,71 @@
+{
+  "source_head": "e4050f84ce6e6792c8e068c2b6e1a44fe4e843fe",
+  "target_head": "4d48cb6b131d2642bd0a03348d33091ec7299a38",
+  "untracked_files": [
+    {
+      "path": ".cloud-attachments/imported-conversation-45fecc76b396afbfc255272401a121f5889ec272037234265c60567b6935aeaf.json",
+      "size": 58911,
+      "sha256": "bdb82fc68177ed9e18e043fa11f117afb1a30c5c0ed7b371f466f6d2843b1130"
+    },
+    {
+      "path": ".cloud-attachments/imported-conversation-78f56f7ef770e38d4ea147698c66ee0ff28a7364d58e3b521b191d47d1d84d1c.json",
+      "size": 495579,
+      "sha256": "44f69f26aa715a361febb1a41a710843c09ff51712f7de41d788de891939889f"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_BRANCH_CENSUS_20261101.md",
+      "size": 44128,
+      "sha256": "504dddb90488f394a8bddd8fac5d816ff28b7668a07e7185a76d6c654d5fca0f"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_BRANCH_PROOF_20261101.json",
+      "size": 213156,
+      "sha256": "f5a5b4e3e78d35ed0ac5a6f786422e86e3413f27ee03642612e70ecf7f641578"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_DELETE_PREFLIGHT_20261101.json",
+      "size": 13902,
+      "sha256": "9399e541f6ae52995132e9655fc1ab3e06da861b9b7d8682b70ce204f93f6ce5"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_DELETE_RECEIPTS_20261101.jsonl",
+      "size": 13321,
+      "sha256": "537e9be8f707280393871eeaf3b6d5019224d5de153b9fca95cde62f3e83d813"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_DISK_CENSUS_20261101.json",
+      "size": 5551,
+      "sha256": "c2bc849f7a1a709486efda3e6975c5742bb70c76c2bff69cec339accc4d7daa8"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_DISPOSITIONS_20261101_PART1.md",
+      "size": 45367,
+      "sha256": "47bf295bf1615b4d431682944a04eaa5d26606bed91fed88a384e838977576b1"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_DISPOSITIONS_20261101_PART2.md",
+      "size": 45359,
+      "sha256": "8333a1610acfaf9dc1666c6481446418211cfe6b5f5e7f8574597a7dc6c1e0ef"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_DISPOSITIONS_20261101_PART3.md",
+      "size": 5738,
+      "sha256": "d6cd6c2dd76c35af80d6e2c931e3b2f813c9bb57af26b04c5cd04f5697e795d1"
+    },
+    {
+      "path": "BURNDOWN_LOCAL_RESTORE_RECORD_20261101.md",
+      "size": 9367,
+      "sha256": "fba2170c227823f5034fbdf9bdf155171adef68de9ed7490f56f8b6e1eca4f4b"
+    },
+    {
+      "path": "BURNDOWN_PR_533_CHECKS_20261101.json",
+      "size": 1224,
+      "sha256": "fbc33d9def030e77a86154967c1cea7dac572ebfd38a737c295d5439953c1ef1"
+    },
+    {
+      "path": "HANDOFF/plans/V051_V052_TOTAL_BURNDOWN_PLAN.md",
+      "size": 66846,
+      "sha256": "e261dde0e92d9403c43c2104904363bd4b5bb7c5a3a50c04662d4b1a9db5c61f"
+    }
+  ]
+}

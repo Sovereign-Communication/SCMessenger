@@ -1,0 +1,418 @@
+{
+  "generated_utc": "2026-11-01T22:01:39.118293+00:00",
+  "main": "297e9e6179eb29f0cbe58006368c5718a33e3a76",
+  "restore_comment": 6564489282,
+  "backup_verified": true,
+  "open_prs": 43,
+  "held_branches": [
+    "preserve/shared-checkout-20261003",
+    "rescue/SCMessenger-20260927-b"
+  ],
+  "candidate_count": 67,
+  "eligible_count": 67,
+  "blockers": [],
+  "eligible": [
+    {
+      "branch": "batch/b-deps-20261023",
+      "head": "03436be4d880b7717868f45d315636038570bca4",
+      "pr": 638,
+      "merge_commit": "2688b81763d6c539cb50393103d489db632a369c"
+    },
+    {
+      "branch": "chore/backfill-handoff-scope",
+      "head": "1b808344145134fcf73a772b00ef80ff0963839a",
+      "pr": 384,
+      "merge_commit": "cd511fa028029bf8fe1e64b2865709086fc0090a"
+    },
+    {
+      "branch": "ci/472-docs-only-skip",
+      "head": "f98b965e47e5fdc83c335606b8005f1958e4bac5",
+      "pr": 473,
+      "merge_commit": "d6e3353fae65f34c8dc92f698d51128c640c5dbb"
+    },
+    {
+      "branch": "ci/abi-matrix-parallel",
+      "head": "b525c9efdc9777808fa4a5db061da95529edd849",
+      "pr": 450,
+      "merge_commit": "051dbb5b9cd900669f11ecf5c40c63a38c2e86a6"
+    },
+    {
+      "branch": "ci/blacksmith-build-deps",
+      "head": "ce69e3cdf7362bcf9e861c59a2464996303aed70",
+      "pr": 558,
+      "merge_commit": "50ffeb8beff8565d0adf1ede69f5810097118b34"
+    },
+    {
+      "branch": "ci/blacksmith-light-jobs",
+      "head": "d3e8f9f406043a9c5656cdca70594e15526746a4",
+      "pr": 560,
+      "merge_commit": "1fbad2fc7bd125c5a81440553c1fa4c50b80bfb5"
+    },
+    {
+      "branch": "ci/docker-suite-nonblocking",
+      "head": "a7d7cc490d24d4fdcb2d1f9e8f528557878b96ee",
+      "pr": 156,
+      "merge_commit": "74076c3feef744fe57c7c7d383a0455987b32379"
+    },
+    {
+      "branch": "ci/empty-required-check-20261023",
+      "head": "a9c5412ffe2b2e599e1b315595b2fa1a114e9377",
+      "pr": 644,
+      "merge_commit": "c71de9d3adefc27b0325a27974af9b463bd34129"
+    },
+    {
+      "branch": "ci/findings-generator",
+      "head": "728c36b640a4c79a036e451debca5c949e06e360",
+      "pr": 445,
+      "merge_commit": "19229287fac2e84f0c58eb3ae356d599c5cad760"
+    },
+    {
+      "branch": "ci/forgery-timeout",
+      "head": "4c5de609bf2b5bafe2868e0c8cd747ffc8f1d645",
+      "pr": 527,
+      "merge_commit": "3b84f858b8156548c8debd1cd900c143e6b3c095"
+    },
+    {
+      "branch": "ci/triage-wiring-backlog",
+      "head": "5e7e2bba0dfddec75fff20500941eedf7966c3d6",
+      "pr": 444,
+      "merge_commit": "b07f0bb8774fd927117245ac2ddafcc391c48344"
+    },
+    {
+      "branch": "ci/trim-unrequested-ci-scaffolding",
+      "head": "35975d39b51d624a42f192d6ba1bd34497dc916e",
+      "pr": 438,
+      "merge_commit": "2bf9a46da0892d86a503d24c605cdc0cf219b857"
+    },
+    {
+      "branch": "ci/widen-wiring-dead-code-scan",
+      "head": "f71c55ea64cd8783bc6abd8726de61f9cf868919",
+      "pr": 437,
+      "merge_commit": "d74404e07a2343de6ac663ef9d15c3eee7d05004"
+    },
+    {
+      "branch": "claude/harness-lane-state-2026-09-22",
+      "head": "95d0bcf1a05155cac0664bb9aa72bfce4f00aeb1",
+      "pr": 362,
+      "merge_commit": "f009e7b1fe5c61815154c52b84fad006a9897d64"
+    },
+    {
+      "branch": "codex/takeover-state-20260929",
+      "head": "6b42dd6fdb23008497a444cab96c9173338bf063",
+      "pr": 424,
+      "merge_commit": "17d06db2f883d39b63cc6bc2787c028d9406ca80"
+    },
+    {
+      "branch": "cto/panic-self-circuit-guard-2026-08-22",
+      "head": "c4108d99a072b0b4288352bab5c5b95c6ce3522e",
+      "pr": 218,
+      "merge_commit": "8670072a86a661f1435b89c518d649c6ebd70995"
+    },
+    {
+      "branch": "docs/fix-rca-citations-20260926",
+      "head": "cac8489eea6014bb29205f6e3b52b8dee7dd03f1",
+      "pr": 390,
+      "merge_commit": "05df2960f9aa7dca4be2c4cb40e6653edca2bdbb"
+    },
+    {
+      "branch": "docs/jev-repo-insights-20260925",
+      "head": "b9339775c6de1f088b8cebf59aab21abc5a1ad2b",
+      "pr": 374,
+      "merge_commit": "ceba4ae8a7ac283ff90508c85a058bce2676b2ce"
+    },
+    {
+      "branch": "docs/merge-train-v040-v050-20260927",
+      "head": "1a3cb2744a53ee135ceada23b982a737116644ee",
+      "pr": 403,
+      "merge_commit": "0284fea15f9b86d8522fab9a93559e76681938b7"
+    },
+    {
+      "branch": "docs/naming-audit-occurrence-basis",
+      "head": "6c237a04a2e89f7848acf7c3f0ec93a28a18a34d",
+      "pr": 423,
+      "merge_commit": "e76e05933d49f5f764539960bf9768e409ea9fa4"
+    },
+    {
+      "branch": "docs/rollout-rca-bceacb94",
+      "head": "2a822e03e482fa417319894d9f8243f531e3480f",
+      "pr": 389,
+      "merge_commit": "e1fd6f16052132f6f5100f887328d66cad7654fa"
+    },
+    {
+      "branch": "docs/rule8-reviewer-eligibility-20261019",
+      "head": "da5f50825fed752a702c1f3b3bfc37508367d6ef",
+      "pr": 606,
+      "merge_commit": "b3f3a0a50321e41dc663a081364decafaee91740"
+    },
+    {
+      "branch": "feat/handoff-scope-gate",
+      "head": "e6e4c9e81dfee596ff0533c0261e7c962226cbe9",
+      "pr": 375,
+      "merge_commit": "03b7d29401413fec9fd90c4fe50aa64ff3dcf054"
+    },
+    {
+      "branch": "fix/cargo-wasm-workspace-members",
+      "head": "c29a04f1816ab77d47ab5fc090f13c04ad933a83",
+      "pr": 391,
+      "merge_commit": "1dc70f0b192d6634b3c3dffcf8b2e73086b4ec4b"
+    },
+    {
+      "branch": "fix/clippy-double-must-use",
+      "head": "f3206116719e89a9001a5c35c4838b71e194de78",
+      "pr": 427,
+      "merge_commit": "1e0453b171e25ee82bdb5c066c988d0c7cf63ed5"
+    },
+    {
+      "branch": "fix/ctutils-rustsec-2026-0385",
+      "head": "2aee7e401ba40d2892e3ad8238e503b089efdc34",
+      "pr": 641,
+      "merge_commit": "ec25a3ea6fd8bdfa08316842b8b4fb7ad68a4582"
+    },
+    {
+      "branch": "fix/decide-command-single-live-path",
+      "head": "5030a43093f4a83d344f337fde260fa13246a7d8",
+      "pr": 436,
+      "merge_commit": "8e672c4e7afb93a8c11fd4b2f68fe173e0ea96ce"
+    },
+    {
+      "branch": "fix/diag-relay-vacuous-truth",
+      "head": "8b098ac21fd0f6a0b81f9c7d30d5ade815769346",
+      "pr": 371,
+      "merge_commit": "d1c4a173835e7a90e117e2ad69e23953c323b8d5"
+    },
+    {
+      "branch": "fix/flaky-conversations-reload",
+      "head": "9c4b1e02d1fb1933d3bb39cbdbf52182118da4a6",
+      "pr": 566,
+      "merge_commit": "2677ea38d718d5562e9454593e4ca84fa751b78e"
+    },
+    {
+      "branch": "fix/handoff-gate-prose-only",
+      "head": "211c40acb9b56a019db73746d6f389896e6b1de1",
+      "pr": 385,
+      "merge_commit": "9e66868298bc7fb2a22424e8764c1ed8b2b448b7"
+    },
+    {
+      "branch": "fix/handoff-scope-waivers",
+      "head": "fd0ce10c153c01eb489936908934f0eafab2c28d",
+      "pr": 387,
+      "merge_commit": "bceacb9455fbf8aaaac2164059c4b7d8afcc226b"
+    },
+    {
+      "branch": "fix/naming-isrelay-a2",
+      "head": "98bbf338ae9d3f8022e26953a54924a8a3ffee1a",
+      "pr": 428,
+      "merge_commit": "15d25389179f4620e3230a98c29bffd49cc41b0e"
+    },
+    {
+      "branch": "fix/quinn-proto-advisories",
+      "head": "50cdaa73d3e6cf108a7da6d8b0a6dab6b5239b36",
+      "pr": 564,
+      "merge_commit": "c3d510b0684e497a64808fd09695ea1fba8d98d5"
+    },
+    {
+      "branch": "fix/rustls-0.23.46-advisories",
+      "head": "22620d2c4cc737adfdddcf1aaa9bfeae208d4a6e",
+      "pr": 604,
+      "merge_commit": "746bd1dea87cdfea646de3a5b507bb901ff1127a"
+    },
+    {
+      "branch": "freebuff/569-blacksmith-off",
+      "head": "63e10ac581dd4f872e492d76406541be66efd4f0",
+      "pr": 596,
+      "merge_commit": "542f01e80867d114c5ff07fa12b953c7499df476"
+    },
+    {
+      "branch": "freebuff/bump-0.4.1",
+      "head": "3f86f2c12dc874da18e25626179c45b00893c848",
+      "pr": 434,
+      "merge_commit": "dcd67b94ecb4a5c4602e659ee0539b9e5e56fe3c"
+    },
+    {
+      "branch": "freebuff/fix-and-ss-001-stop-start",
+      "head": "c806dee7a508765713d9bc64a66a3b16a3b5168b",
+      "pr": 432,
+      "merge_commit": "30caacc3643b8a553ffbad5106abdc9fecb69d48"
+    },
+    {
+      "branch": "freebuff/fix-release-tag-chain",
+      "head": "736b28350fbb3a690da787a9aaff778216ee781e",
+      "pr": 431,
+      "merge_commit": "3aa36ae0231320401517d3db78f2aa3333f80da1"
+    },
+    {
+      "branch": "freebuff/handoff-gate-lane-separation-20260927",
+      "head": "fb24575268cdbd67d42c49aeb776b96504a45bd6",
+      "pr": 402,
+      "merge_commit": "faf22a57db1dd9a830b81b81cb81e3d646f663ac"
+    },
+    {
+      "branch": "freebuff/harness-version-floor",
+      "head": "e0dea50147ac77defd0dab5354b24c645ed86f7f",
+      "pr": 360,
+      "merge_commit": "7deb8c9c7b853b4c02ab256539c53289070ccb90"
+    },
+    {
+      "branch": "freebuff/lane-unify-040-train-20260923",
+      "head": "4df59ca17733f12f24411a4addc5bfd6d7d364d4",
+      "pr": 366,
+      "merge_commit": "5a8f12aae60623d3129fdd5f808babea1ad464b9"
+    },
+    {
+      "branch": "freebuff/receipt-auth-contract",
+      "head": "9228a2bb29691ac869657a3b7565aea1474c3f6f",
+      "pr": 429,
+      "merge_commit": "f235d49d3df4c1c4cf5d4cf585ceed73100efbc9"
+    },
+    {
+      "branch": "freebuff/release-signing-diagnostics",
+      "head": "73aa93f24a68989f406b1ad89f7bcf5578d762cc",
+      "pr": 433,
+      "merge_commit": "49215201ac098661472d3a27d42d8225880e6151"
+    },
+    {
+      "branch": "freebuff/rollout-state-0.4.1",
+      "head": "1f49cd032038a0634f47e6bab4180d16597a9f4f",
+      "pr": 435,
+      "merge_commit": "e015076339c0346d1465d61f3bd5322677f487b3"
+    },
+    {
+      "branch": "freebuff/train-mt00a-tip",
+      "head": "091579e38133f2dd066c5ed6d1ba164eb55fd045",
+      "pr": 407,
+      "merge_commit": "19b54ac25c552864eff5fe3bad93798910930cb3"
+    },
+    {
+      "branch": "freebuff/train-mt01-security",
+      "head": "dbdbfd286706de469c1fc314405e55783433d1c7",
+      "pr": 405,
+      "merge_commit": "b279e4a099395f103b4c92b1d4ae2564ba177989"
+    },
+    {
+      "branch": "freebuff/train-mt02",
+      "head": "7b3b44b36b044b2ce1d6eb2d11df5479e39ebdcf",
+      "pr": 409,
+      "merge_commit": "2dff085a8c87ea2b151c9adaaf6bc8030c99faf3"
+    },
+    {
+      "branch": "freebuff/train-mt03",
+      "head": "923893a48cb7cf85545ba08505c033d90b757646",
+      "pr": 410,
+      "merge_commit": "e3546995133162e623127f19671e1bb4b0cfc4d2"
+    },
+    {
+      "branch": "freebuff/train-mt11-g5",
+      "head": "7f52d2c6a301a9e4767745798819490493ae5ea2",
+      "pr": 406,
+      "merge_commit": "b9c582b27075a27ae3568c5ddb12a9bc894d7526"
+    },
+    {
+      "branch": "freebuff/v040-merge-train-plan-20260924",
+      "head": "91cf02736cd6844e4e9c7c5976edfc2a05e001e3",
+      "pr": 370,
+      "merge_commit": "3e743ddd56def991c057ff4266bffad44a9ded82"
+    },
+    {
+      "branch": "freebuff/v050-wp1-identity",
+      "head": "6b5b08f37a267c5929bb93dce5770ae6d01db049",
+      "pr": 352,
+      "merge_commit": "5746ad264cb51bae46e6f8f4d1d4aeaded3c7baf"
+    },
+    {
+      "branch": "freebuff/v050-wp2-routing-feed-all-transports",
+      "head": "6a13352031352ff356eec22d839d765559145bf3",
+      "pr": 349,
+      "merge_commit": "7ee0be36219ef745bae52a34a7ee25f5918929fb"
+    },
+    {
+      "branch": "freebuff/v050-wp3-inbound-completeness",
+      "head": "dd146c5df1f0eab587df3c1151e28b7ba8d2cc4a",
+      "pr": 355,
+      "merge_commit": "1070bc51c980408f617d9ca38bed840acde9a2b2"
+    },
+    {
+      "branch": "freebuff/v050-wp4-delivery-truth",
+      "head": "4f87d52fe447f55fe6e37e0ed11b3da7e2113f1b",
+      "pr": 356,
+      "merge_commit": "beb3aa81c2888a84c05bca16bc387a32ff31ec1d"
+    },
+    {
+      "branch": "freebuff/wp1-identity-unification",
+      "head": "4c24c0fcc49281e85d774db657d4b5ceab334b04",
+      "pr": 383,
+      "merge_commit": "11b30c85f78165315baaad09af5da1cfbb811f19"
+    },
+    {
+      "branch": "integrate/train-20261004",
+      "head": "e45115d29e179bd553d136ae936f838bda53039a",
+      "pr": 451,
+      "merge_commit": "df3bd3af4946b59a18a8065c6bb14dc0304ecb65"
+    },
+    {
+      "branch": "jev/bucketed-gate",
+      "head": "744894c42a275743e8c93f6fe050a60a4880876f",
+      "pr": 481,
+      "merge_commit": "dd36e61de5c7e2c7595748b99fc3ae190e6d166d"
+    },
+    {
+      "branch": "land/a2-ci-20261022",
+      "head": "9cf71cca7f3236f7cf1b317ba9321d28c6f8b53a",
+      "pr": 628,
+      "merge_commit": "946400c62b92a684e458b48578d18042d33d76fb"
+    },
+    {
+      "branch": "orch/astra-handoff-20260929",
+      "head": "d8c592d9bc6e162caf7a6593217f0a81a869733b",
+      "pr": 420,
+      "merge_commit": "10f5642ea94cb6398f72ee60d3703aed26e9428d"
+    },
+    {
+      "branch": "orch/mt00b-amend",
+      "head": "d4138a07b4ff508e40f16d1f72987244e8b09e19",
+      "pr": 416,
+      "merge_commit": "fda2766ba547ce34e0cb755f548ebf8319d3dad0"
+    },
+    {
+      "branch": "train/A3-deny-waiver",
+      "head": "46f7b0d6cc28c6d64f261f65c2657975782cf1ed",
+      "pr": 373,
+      "merge_commit": "d00cfd50d7e7d597abc7b5c657ca5a290ebe1ae8"
+    },
+    {
+      "branch": "workahead/android-apk-host-hardening",
+      "head": "73730e2f6d4ff2f5803f784bf63af193245de781",
+      "pr": 300,
+      "merge_commit": "9086881a62c5d4d46eb8c46d7a2c9058db529d2d"
+    },
+    {
+      "branch": "workahead/android-install-qr-payload",
+      "head": "b107084befc3081e4e8b2fe6af9ace72949becd7",
+      "pr": 302,
+      "merge_commit": "1d4da402cb8bcc1fc0d116de9ec489a5ec0c59cc"
+    },
+    {
+      "branch": "workahead/android-joinmesh-gms-gate",
+      "head": "8af8c607d9f653601114a820493f76a1f0aa5725",
+      "pr": 298,
+      "merge_commit": "140e7802e647d8742b575c4b0cfe553fff644559"
+    },
+    {
+      "branch": "workahead/android-persist-join-seeds",
+      "head": "1291e91872b67e4760d570c140a89db9192f0189",
+      "pr": 299,
+      "merge_commit": "23b18b69d76c77e50548ef04b64085e185b3e5e8"
+    },
+    {
+      "branch": "workahead/ios-apk-link-share",
+      "head": "64e66b73fc9ab3ab22bdb2acf757a9a807013d45",
+      "pr": 301,
+      "merge_commit": "25cc072a770e44eb6284fab3c878de8979cc6c6a"
+    },
+    {
+      "branch": "workahead/merge-plan-handoff-20260916",
+      "head": "da3438ea7351d3da8ae1170c8b1af46e17b0d2b1",
+      "pr": 303,
+      "merge_commit": "d18b761a1500360a70cdb04db6385ea975e7fc72"
+    }
+  ]
+}
