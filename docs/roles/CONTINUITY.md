@@ -39,6 +39,9 @@ the supervision layer, never the owner (no whack-a-mole).
 - REVIEW-REQUEST entry appears -> Overseer spawns Reviewer
 - Any heartbeat ages past threshold; any wake event with no live
   holder -> Overseer (failover/spawn)
+- An owner decision was recorded -> Overseer wakes to federate it
+  (§4): per-repo translation in-thread, uptake verified, rollups and
+  confirmations main-chat-only.
 
 ## Wake protocol (duplicate-safe)
 
