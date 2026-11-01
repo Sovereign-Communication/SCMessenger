@@ -139,7 +139,7 @@ def _check_version() -> int:
     return 0
 
 
-def _harness_env() -> dict:
+def _harness_env(source: HarnessSource) -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source.root) + os.pathsep + env.get("PYTHONPATH", "")
     return env

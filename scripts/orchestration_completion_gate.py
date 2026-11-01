@@ -411,6 +411,7 @@ def run_completion_gate(
             "--wp", wp,
             "--state-file", str(jev_state_path),
             "--result-file", str(jev_result_path),
+            "--canon-only",
             "--no-openrouter",
         ]
         jev_outcome = _run_and_record(
