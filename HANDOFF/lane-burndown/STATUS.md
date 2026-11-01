@@ -1,5 +1,13 @@
 # SCMessenger full burndown lane - standing status
 
+<!-- HANDOFF-SCOPE-BEGIN -->
+scope: SCMessenger
+owner: Sovereign-Communication/SCMessenger
+purpose: SCMessenger-only findings and remediation handoff
+foreign_material: NONE
+boundary: No foreign-repository findings, evidence, status, or remediation are included.
+<!-- HANDOFF-SCOPE-END -->
+
 Lane branch: lane/burndown (base: main). This PR is the standing draft PR required by
 AGENTS.md LANE PROTOCOL: oversight's live view of all lane work, WIP included.
 Canonical plan: tracker issue #602 (v7) + burndown tracker #595. If any local plan copy
