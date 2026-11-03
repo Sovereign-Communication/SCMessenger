@@ -199,7 +199,19 @@ jobs:
     if: ${{ !cancelled() }}
     # Matrix value stays 'ubuntu-latest' so the required check name
     # 'Test (ubuntu-latest)' is unchanged.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
+    #
+    # The OCI selection is gated on the SAME flag that gates the steps. Before
+    # this, a docs-only or Kotlin-only diff selected the scarce self-hosted ARM
+    # pool, ran zero steps, and returned green: a required context satisfied by a
+    # job that did nothing, while a real car waited behind it (issue #642). When
+    # the diff cannot affect the Rust workspace the leg stays on hosted
+    # ubuntu-latest, where an empty run costs a hosted minute instead of a slot.
+    #
+    # `needs` is explicitly permitted in jobs.<job_id>.runs-on (allowed contexts:
+    # github, needs, strategy, matrix, vars, inputs). The matrix stays STATIC on
+    # purpose: a dynamic matrix would not create 'Test (ubuntu-latest)' until
+    # `changes` finished, and that delay is the required check reporting late.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -208,6 +220,16 @@ jobs:
         # scheduled when the diff can change the Rust workspace.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      # The invariant above is enforced here, mechanically. If the runs-on gate is
+      # ever removed or mis-edited, this turns the routing regression into a RED
+      # check instead of a silent empty success that burns an ARM slot.
+      - name: Refuse an empty required check on the scarce pool
+        if: runner.environment == 'self-hosted' && needs.changes.outputs.rust_relevant != 'true'
+        run: |
+          echo "[FAIL] Test (ubuntu-latest) landed on a self-hosted runner with"
+          echo "rust_relevant=${{ needs.changes.outputs.rust_relevant }} -- it would run no steps."
+          echo "A required context may never be satisfied by a job that did nothing."
+          exit 1
       - name: Fail closed if change detection failed
         if: needs.changes.result != 'success' && matrix.os == 'ubuntu-latest'
         run: |
