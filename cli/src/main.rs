@@ -10,6 +10,7 @@ pub mod ble_ids;
 mod ble_mesh;
 mod bootstrap;
 mod config;
+mod inbound_receipts;
 mod invite;
 mod ledger;
 mod platform_signals;
@@ -26,8 +27,9 @@ mod ble_windows;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
+use inbound_receipts::{envelope_sender_public_key_hex, should_ack_inbound};
 use libp2p::{Multiaddr, PeerId};
-use scmessenger_core::message::{decode_envelope, MessageType};
+use scmessenger_core::message::MessageType;
 use scmessenger_core::store::{Contact, ContactManager, MessageDirection, Outbox, QueuedMessage};
 use scmessenger_core::transport::abstraction::TransportType;
 use scmessenger_core::transport::{self, SwarmEvent, SwarmHandle};
@@ -2646,7 +2648,9 @@ async fn cmd_start(
         Some(Arc::downgrade(&core)),
         false,
         Some(discovery_config),
-        transport::default_routing_engine_handle(),
+        // Share the core's engine Arc so identify-time peer_seen lands in the
+        // engine the swarm reads (matches the mobile_bridge path).
+        core.routing_engine_handle(),
     )
     .await?;
 
@@ -3291,9 +3295,8 @@ async fn cmd_start(
                             SwarmEvent::MessageReceived { peer_id, envelope_data } => {
                                 // Extract sender's Ed25519 public key from the envelope before decryption.
                                 // We need it to encrypt the delivery receipt back to them.
-                                let sender_public_key_hex = decode_envelope(&envelope_data)
-                                    .ok()
-                                    .map(|env| hex::encode(&env.sender_public_key));
+                                let sender_public_key_hex =
+                                    envelope_sender_public_key_hex(&envelope_data);
 
                                 if let Ok(msg) = core_rx.receive_message(envelope_data) {
                                     match msg.message_type {
@@ -3384,16 +3387,15 @@ async fn cmd_start(
                                             // "text" are treated as metadata -- acking those produced
                                             // the receiver's "[RECEIPT-RX] IGNORING ...
                                             // direction=missing" stampede.
-                                            let is_identity_metadata = decoded_envelope
-                                                .as_ref()
-                                                .map(|d| d.kind.as_str() != "text")
-                                                .unwrap_or(false);
+                                            // Runs for duplicates too: receive_message returns
+                                            // Ok for a repeat id, and re-ACKing is what lets a
+                                            // sender whose first receipt was lost stop retrying.
                                             let local_pk = core_rx.get_identity_info().public_key_hex;
-                                            let is_self_loop = local_pk
-                                                .as_deref()
-                                                .map(|pk| sender_public_key_hex.as_deref() == Some(pk))
-                                                .unwrap_or(false);
-                                            if !is_identity_metadata && !is_self_loop {
+                                            if should_ack_inbound(
+                                                decoded_envelope.as_ref().map(|d| d.kind.as_str()),
+                                                sender_public_key_hex.as_deref(),
+                                                local_pk.as_deref(),
+                                            ) {
                                                 if let Some(ref pk_hex) = sender_public_key_hex {
                                                     match core_rx.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
                                                         Ok(ack_bytes) => {
@@ -4259,7 +4261,7 @@ async fn cmd_relay(
         Some(Arc::downgrade(&core)),
         true,
         Some(discovery_config),
-        transport::default_routing_engine_handle(),
+        core.routing_engine_handle(),
     )
     .await?;
     println!("{} P2P swarm started on {}", "[OK]".green(), listen_addr);
@@ -4587,9 +4589,7 @@ async fn cmd_relay(
                     }
                     SwarmEvent::MessageReceived { peer_id, envelope_data } => {
                         let sender_public_key_hex =
-                            decode_envelope(&envelope_data)
-                                .ok()
-                                .map(|e| hex::encode(e.sender_public_key));
+                            envelope_sender_public_key_hex(&envelope_data);
 
                         // In node mode, we automatically peel and forward onion layers or handle text/receipts
                         if let Ok(msg) = core_arc.receive_message(envelope_data.clone()) {
@@ -4651,16 +4651,12 @@ async fn cmd_relay(
                                         let _ = ui_broadcast.send(server::UiOutbound::JsonRpc(v));
                                     }
 
-                                    let is_identity_metadata = decoded_envelope
-                                        .as_ref()
-                                        .map(|d| d.kind.as_str() != "text")
-                                        .unwrap_or(false);
                                     let local_pk = core_arc.get_identity_info().public_key_hex;
-                                    let is_self_loop = local_pk
-                                        .as_deref()
-                                        .map(|pk| sender_public_key_hex.as_deref() == Some(pk))
-                                        .unwrap_or(false);
-                                    if !is_identity_metadata && !is_self_loop {
+                                    if should_ack_inbound(
+                                        decoded_envelope.as_ref().map(|d| d.kind.as_str()),
+                                        sender_public_key_hex.as_deref(),
+                                        local_pk.as_deref(),
+                                    ) {
                                         if let Some(ref pk_hex) = sender_public_key_hex {
                                             match core_arc.prepare_receipt(pk_hex.clone(), msg.id.clone()) {
                                                 Ok(ack_bytes) => {
@@ -4796,7 +4792,7 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
             }
         }
     });
-    let routing_handle = scmessenger_core::transport::default_routing_engine_handle();
+    let routing_handle = core.routing_engine_handle();
 
     let swarm_handle = match scmessenger_core::transport::start_swarm(
         network_keypair,
