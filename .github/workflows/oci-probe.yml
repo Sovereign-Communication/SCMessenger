@@ -1,0 +1,91 @@
+name: OCI Runner Probe
+
+# Runner-placement proof for the self-hosted pool.
+#
+# The required gate contexts were routed to the OCI pool in the same PR as this
+# file, but routing is only a request: the run log has to show WHICH box served
+# the job before placement can be claimed. This workflow fans one job out per
+# registered OCI box slot and prints the runner identity, so the acceptance
+# evidence ("jobs land on oci-a1-phx-1 and oci-a1-phx-2") comes from a run
+# rather than from the runner list.
+#
+# The two slots cannot pin a named box: the registered runners carry the shared
+# labels `self-hosted, Linux, ARM64, oci, arm64-oci` and no per-name label, so a
+# `runs-on` naming a box would queue forever. Two concurrent slots against a
+# two-runner pool therefore land one job per box in practice, and each job
+# prints `runner.name` so the actual placement is read from the log instead of
+# assumed. A per-name label (for example `oci-a1-phx-1`) would make the pinning
+# exact and is the improvement to make if this is ever flaky.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe slot ${{ matrix.slot }}
+    # Same routing shape as the gate jobs, widened by exactly one event: a
+    # dispatch has to reach the pool (that is the point of the probe), so the
+    # push/dispatch branch of the condition admits it, while fork pull requests
+    # stay pinned to ubuntu-latest because runner trust and secrets do not
+    # extend to them. CI_RUNNER=oci is the single switch; anything else, or
+    # USE_OCI_RUNNER=false, keeps the probe on hosted.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.USE_OCI_RUNNER != 'false' && (vars.CI_RUNNER == 'oci' || vars.CI_RUNNER == '') && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: ["1", "2"]
+    steps:
+      - name: Report placement
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "slot=${{ matrix.slot }}"
+          echo "runner.name=${{ runner.name }}"
+          echo "runner.os=${{ runner.os }}"
+          echo "runner.arch=${{ runner.arch }}"
+          echo "runner.environment=${{ runner.environment }}"
+          echo "hostname=$(hostname 2>/dev/null || echo unknown)"
+          echo "uname=$(uname -a 2>/dev/null || echo unknown)"
+          echo "arch=$(uname -m 2>/dev/null || echo unknown)"
+          {
+            echo "### Probe slot ${{ matrix.slot }}"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| runner.name | \`${{ runner.name }}\` |"
+            echo "| runner.os | \`${{ runner.os }}\` |"
+            echo "| runner.arch | \`${{ runner.arch }}\` |"
+            echo "| runner.environment | \`${{ runner.environment }}\` |"
+            echo "| uname -m | \`$(uname -m 2>/dev/null || echo unknown)\` |"
+            echo "| hostname | \`$(hostname 2>/dev/null || echo unknown)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Assert the pool actually served the job
+        # The probe exists to catch the silent failure mode: routing requested
+        # the pool, the job quietly ran on a hosted image, and the run looked
+        # green while proving nothing about placement.
+        shell: bash
+        env:
+          CI_RUNNER_VALUE: ${{ vars.CI_RUNNER }}
+        run: |
+          set -euo pipefail
+          if [ "${CI_RUNNER_VALUE:-}" = "oci" ] && [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "[FAIL] CI_RUNNER=oci but the job ran on ${{ runner.environment }} (${{ runner.name }}); the pool did not serve it"
+            exit 1
+          fi
+          echo "[OK] placement consistent with routing (CI_RUNNER=${CI_RUNNER_VALUE:-unset}, environment=${{ runner.environment }})"
+      - name: Check out the local cleanup action
+        if: always()
+        uses: actions/checkout@v7
+      - name: Clean self-hosted workspace
+        if: always()
+        uses: ./.github/actions/self-hosted-cleanup
