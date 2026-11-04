@@ -2,13 +2,19 @@ name: Linux build dependencies
 description: >-
   Installs the system packages the Rust workspace needs on Linux. On
   GitHub-hosted runners this is the same apt-get call the workflows always
-  made. On the self-hosted OCI ARM runner the step runs in verify-only mode:
-  it checks that every required package and toolchain component is present
-  (pkg-config, libdbus-1-dev, protoc, rustc/clippy/rustfmt 1.99.0) and fails
-  naming anything missing. It never runs sudo or apt on the OCI self-hosted
-  runner.
+  made. The self-hosted OCI ARM runner uses verify-only mode by default: it
+  checks required packages and toolchain components (pkg-config, libdbus-1-dev,
+  protoc, rustc/clippy/rustfmt 1.99.0) and names anything missing. Ubicloud
+  reports its managed runners as self-hosted, so Ubicloud callers must set
+  mode: install. The OCI runner never runs sudo or apt.
 
 inputs:
+  mode:
+    description: >-
+      Dependency handling mode. auto preserves runner detection, install uses
+      apt, and verify checks preinstalled dependencies.
+    required: false
+    default: "auto"
   ripgrep:
     description: "Also require ripgrep (rg). Preinstalled on GitHub-hosted runners."
     required: false
@@ -20,14 +26,29 @@ runs:
     - name: Install or verify Linux build dependencies
       shell: bash
       env:
+        DEPENDENCY_MODE: ${{ inputs.mode }}
         NEED_RG: ${{ inputs.ripgrep }}
       run: |
         set -euo pipefail
-        if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
-          sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config protobuf-compiler
-          exit 0
-        fi
-        # OCI self-hosted: verify only. No sudo, no apt. Missing items fail the job.
+        case "$DEPENDENCY_MODE" in
+          install)
+            sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config protobuf-compiler
+            exit 0
+            ;;
+          verify)
+            ;;
+          auto)
+            if [ "$RUNNER_ENVIRONMENT" != "self-hosted" ]; then
+              sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config protobuf-compiler
+              exit 0
+            fi
+            ;;
+          *)
+            echo "[FAIL] unsupported dependency mode: $DEPENDENCY_MODE"
+            exit 2
+            ;;
+        esac
+        # OCI self-hosted callers use auto/verify-only; hosted Ubicloud callers set install explicitly.
         missing=()
         pkg-config --exists dbus-1 || missing+=(libdbus-1-dev)
         command -v pkg-config >/dev/null 2>&1 || missing+=(pkg-config)
