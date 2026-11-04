@@ -1,0 +1,104 @@
+{
+  "wp": "BATCH-D-COMBINED-HEAD-DISPOSITION-2026-11-04",
+  "gate_call_nonce": "3f9a7c21-5b84-4e6d-9a17-6c0d2e8b41f5",
+  "ticket": "https://github.com/Sovereign-Communication/SCMessenger/pull/660",
+  "instruction": "Review the Batch D combined head cd7c4514c (cars #550, #556, #554, #509 in batch order) on base main a6a0b0d73d77, and disposition it as ready to land after its checks are green, given that the two conflicts were hand-resolved as additive unions and that the rule-8 files are byte-identical to the head already signed off by a non-author reviewer.",
+  "acceptance": [
+    "Combined head is cd7c4514c130e65ccc4398fdd3e305164a4e911a, built from main a6a0b0d73d7720da6c0218180497f1c48bd20a8d, containing the four Batch D cars as four merge commits in batch order b00a95808, a1feec389, ececa3a1ab, cd7c4514c.",
+    "The batch scope is 23 files, +2318/-254, with no build artifacts and no secrets.",
+    "The NetworkDetector.kt conflicts are additive: the logging gate val changed is kept together with lastPhysicalType bookkeeping and the notifyNetworkChange call, and both top-level declarations shouldLogNetworkTypeTransition and NetworkAvailability are kept because each is called in the same file.",
+    "The rule-8 files core/src/routing/local.rs, core/src/routing/optimized_engine.rs, core/src/transport/swarm.rs and core/src/identity/keys.rs are byte-identical at this head to the car 3/4 head that already carries an independent non-author rule-8 sign-off, verified by git object hash equality.",
+    "Main introduced no gated changes between the review base 2677ea38d7 and this head, so no unreviewed gated code arrives through the base.",
+    "Untrusted announce lists are bounded before the routing lock in IronCore::routing_update_peer_hints: parse to 8 bytes, dedupe, take max_peer_hint_budget 128, inject the direct hint, and ignore unknown peers.",
+    "The local cell enforces a per-peer budget of 8 plus 120 times reliability and a global budget of max(1, peers) times 64 with a 90 percent low-water mark, evicting lowest reliability then oldest, with direct hints exempt.",
+    "The identify arm now routes through IronCore::routing_peer_seen, which length-bounds the transport, parses the peer id to 32 bytes, rejects all-zero ids and fails closed, and the removed transport_type_to_routing_transport had no remaining callers.",
+    "The conflict resolution in section 2 of the review record was authored by this lane, so under Amendment 6 it still needs a non-author read of those two hunks; the rule-8 verdict carried here is the non-author reviewer's on #554 and is not reissued by this document.",
+    "mobile.yml android jobs are executing on this head (Android JVM Unit Tests and Android Debug APK in progress, Android Wiring Gate success), and security.yml is dispatched on this branch because it is schedule or manual only."
+  ],
+  "files": [
+    "android/app/src/main/java/com/scmessenger/android/transport/NetworkDetector.kt",
+    "android/app/src/main/java/com/scmessenger/android/data/NetworkChangeBridge.kt",
+    "android/app/src/main/java/com/scmessenger/android/data/MeshRepository.kt",
+    "cli/src/inbound_receipts.rs",
+    "cli/src/main.rs",
+    "core/src/identity/keys.rs",
+    "core/src/iron_core.rs",
+    "core/src/mobile_bridge.rs",
+    "core/src/routing/local.rs",
+    "core/src/routing/optimized_engine.rs",
+    "core/src/store/outbox.rs",
+    "core/src/transport/swarm.rs",
+    "core/tests/integration_retry_lifecycle.rs",
+    "iOS/SCMessenger/Services/NetworkReportGate.swift",
+    "iOS/SCMessengerTests/NetworkReportGateTests.swift",
+    "wiring-audit/FINDINGS.md"
+  ],
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "git log --oneline origin/main..batch-d-combined; git rev-parse HEAD",
+      "detail": "Four merge commits in batch order on base a6a0b0d73d77, head cd7c4514c130e65ccc4398fdd3e305164a4e911a."
+    },
+    {
+      "id": "E2",
+      "source": "git diff --stat origin/main...HEAD",
+      "detail": "23 files, 2318 insertions, 254 deletions."
+    },
+    {
+      "id": "E3",
+      "source": "git status during merge; git --no-pager diff of NetworkDetector.kt after union resolution",
+      "detail": "Two conflict hunks resolved by keeping both sides; markers absent afterwards; val changed appears once and is read twice; both shouldLogNetworkTypeTransition and NetworkAvailability declared."
+    },
+    {
+      "id": "E4",
+      "source": "git rev-parse origin/fix/recipient-hint-canonical:<file> versus HEAD:<file>",
+      "detail": "local.rs fcd2d7b39, optimized_engine.rs e1d421750, swarm.rs b02c58e75, keys.rs d636c94d7 identical on both heads."
+    },
+    {
+      "id": "E5",
+      "source": "git diff --name-only 2677ea38d7..origin/main -- core/src/crypto core/src/transport core/src/routing core/src/privacy vendor/",
+      "detail": "Empty output: no gated changes on main between the #554 review base and this head."
+    },
+    {
+      "id": "E6",
+      "source": "gh pr view 554 comments and gh api pulls/554/reviews",
+      "detail": "Independent non-author rule-8 sign-offs on #554, including delta 4bc650e795 to 5be2e8a20d (current head 5b3efc47) and earlier delta sign-offs."
+    },
+    {
+      "id": "E7",
+      "source": "core/src/iron_core.rs lines 3320-3362",
+      "detail": "routing_update_peer_hints validates the id, parses and dedupes hints, takes max_peer_hint_budget 128 before the write lock, injects the direct hint, and ignores unknown peers."
+    },
+    {
+      "id": "E8",
+      "source": "core/src/routing/local.rs diff and tests",
+      "detail": "Per-peer and global budgets, reliability-then-oldest eviction with deterministic tie-break, direct hints exempt from eviction and TTL, index consistency asserted by tests including a 100k-hint flood."
+    },
+    {
+      "id": "E9",
+      "source": "core/src/transport/swarm.rs diff",
+      "detail": "Identify arm calls bind_identified_peer_to_routing which uses IronCore::routing_peer_seen; transport_type_to_routing_transport removed with no remaining caller; three wiring tests added including all-zero rejection and no-core no-op."
+    },
+    {
+      "id": "E10",
+      "source": "gh api check-runs on cd7c4514c and gh pr checks 660",
+      "detail": "Check set running on the batch head: Android JVM Unit Tests and Android Debug APK in progress, Android Wiring Gate success, one neutral CodeQL, 15 success, 17 pending at review time."
+    },
+    {
+      "id": "E11",
+      "source": "docs/audit/BATCH_D_COMBINED_HEAD_REVIEW_2026-11-04.md",
+      "detail": "The full review record and Amendment 5 comparison, including the open non-author read of the resolution hunks."
+    },
+    {
+      "id": "E12",
+      "source": "current user steering 2026-11-03 evening, queue item 4",
+      "detail": "Directs building this combined head, running standard checks plus mobile.yml and security.yml, recording the rule-8 review and Amendment 5 comparison, then landing the four in batch order."
+    }
+  ],
+  "evidence_map": {
+    "instruction.instruction_matches": ["E1", "E2", "E3", "E4", "E5", "E6", "E11", "E12"],
+    "concurrency.shared_state_safe": ["E7", "E8", "E9"],
+    "testplan.named_test": ["E8", "E9", "E10"]
+  },
+  "na_justifications": {}
+}
