@@ -38,7 +38,7 @@ jobs:
     # stay pinned to ubuntu-latest because runner trust and secrets do not
     # extend to them. CI_RUNNER=oci is the single switch; anything else, or
     # USE_OCI_RUNNER=false, keeps the probe on hosted.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.USE_OCI_RUNNER != 'false' && (vars.CI_RUNNER == 'oci' || vars.CI_RUNNER == '') && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -83,6 +83,9 @@ jobs:
             exit 1
           fi
           echo "[OK] placement consistent with routing (CI_RUNNER=${CI_RUNNER_VALUE:-unset}, environment=${{ runner.environment }})"
+      - name: Check out the local cleanup action
+        if: always()
+        uses: actions/checkout@v7
       - name: Clean self-hosted workspace
         if: always()
         uses: ./.github/actions/self-hosted-cleanup
