@@ -1,7 +1,7 @@
 # Security Rules
 
 Status: Active
-Last updated: 2026-08-08 (extracted from `.claude/rules/security.md` for Tier 1
+Last updated: 2026-10-19 (extracted from `.claude/rules/security.md` for Tier 1
 on-demand loading)
 
 Loaded on demand. These are definitive constraints, not suggestions. The
@@ -95,7 +95,29 @@ thread, but it does **not** constitute the gate and must not be allowed to stand
 in for it by default. State the conflict explicitly and route the sign-off to an
 uninvolved reviewer.
 
-Two further constraints on who may sign:
+#### Reviewer eligibility (updated 2026-10-19)
+
+Any capable agent session may provide the Rule 8 sign-off — there is no
+privileged reviewer class. Eligibility has exactly two requirements:
+
+1. **Independence.** The reviewer must not have authored, proposed, or specified
+   the fix under review (unchanged). In addition, the reviewer must explicitly
+   declare in the review which files and commits they — or their lane in prior
+   sessions — previously touched on the PR. The conflict check is auditable,
+   not assumed. (Rationale: lane agent sessions are ephemeral; prior
+   involvement by the same lane in an earlier session is otherwise invisible.)
+
+2. **Jev-gated quality.** The review itself must pass the Jev gate:
+   completeness, confidence (0–100), and relevant aspects (correctness of
+   findings, severity accuracy, no missed attack surface) each ≥90/100,
+   iterating until the gate passes.
+
+Stale or pending Rule-8 reviews may be taken up by any Freebuff lane agent
+meeting both requirements, but the new reviewer must re-verify from scratch
+against the current head — not merely diff the fix commits — since original
+review context may be lost.
+
+Additional gate constraints:
 
 - **Multi-model panels are not a substitute.** `docs/FUSION_LITE.md` is explicit
   that `fusion_lite.py` is not a substitute for this gate on

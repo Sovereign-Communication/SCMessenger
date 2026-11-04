@@ -2183,6 +2183,7 @@ mod tests {
         assert!(info.initialized);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_desktop_identity_flow_exposes_metadata_after_init() {
         let core = RustIronCore::with_storage(temp_storage_path("identity-flow"));
@@ -2268,6 +2269,7 @@ mod tests {
         assert!(ensure_mesh_participation_enabled(true).is_ok());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_desktop_contacts_and_messaging_interaction_flow() {
         let core = RustIronCore::with_storage(temp_storage_path("contacts-flow"));
@@ -2318,6 +2320,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_desktop_mesh_dashboard_stats_update_with_message_flow() {
         let core = RustIronCore::with_storage(temp_storage_path("dashboard-stats"));
@@ -2361,6 +2364,7 @@ mod tests {
         assert!(manager.is_supported());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn temp_storage_path(label: &str) -> String {
         let ts = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)

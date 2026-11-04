@@ -78,13 +78,56 @@ After saving, a new Freebuff session should show `issue_sort` and the other
 11 tools as callable MCP tools. If they do not appear, re-check the exe path
 (`python -m pip show sovereign-harness` → Location).
 
+## Claude Code local MCP (orchestrator sessions), 2026-09-29
+
+Two dedicated, exact-SHA worktrees of the Harness repo. Never the shared pip
+editable install (other lanes use it) and never a moving branch:
+
+| Purpose | Worktree | Ref | Why |
+|---|---|---|---|
+| Release-gate scoring (`jev-phase` CLI, `scripts/jev_post_merge.py`) and the Board (`scripts/bod_governance.py`) | `wt-harness-canonical` | admitted tag `v0.4.1` (`ad4a300`) | BUILD_AND_CI.md: production is the immutable tag |
+| Interactive MCP registration in Claude Code | `wt-harness-canary` | exact SHA `6961c09` (CANARY) | the tag's MCP server rejects Claude Code's protocol version (`-32602 unsupported MCP protocol version '2025-11-25'; supported: 2025-06-18`); `6961c09` negotiates it and exposes 15 tools |
+
+    git -C C:/Users/SCM/Documents/GitHub/Harness worktree add --detach C:/Users/SCM/Documents/GitHub/wt-harness-canonical v0.4.1
+    git -C C:/Users/SCM/Documents/GitHub/Harness worktree add --detach C:/Users/SCM/Documents/GitHub/wt-harness-canary 6961c09
+    claude mcp add harness --scope local \
+      -e PYTHONPATH=C:/Users/SCM/Documents/GitHub/wt-harness-canary \
+      -e HARNESS_REPO=C:/Users/SCM/Documents/GitHub/wt-harness-canary \
+      -e HARNESS_PACK=C:/Users/SCM/Documents/GitHub/SCMessenger/HANDOFF/harness/packs/scm-ops-issues-v1.json \
+      -e PYTHONIOENCODING=utf-8 -- C:/Python314/python.exe -m harness.mcp
+
+Registration is local scope (user config only, no repo change). Verified
+2026-09-29: `claude mcp list` reports `Connected` at `6961c09` and
+`Failed to connect` at the tag. The tools appear in a NEW session; a running
+session does not hot-load a newly registered server.
+
+Facts that matter when you use it:
+
+- Results from the canary MCP are canary evidence, never a release gate. Score
+  cars with the admitted tag: the tag has the `jev-phase` CLI (its MCP server has
+  no `jev_phase` tool), so run `HARNESS_REPO=<wt-harness-canonical> python
+  scripts/jev_post_merge.py ...` or `PYTHONPATH=<wt-harness-canonical> python -m
+  harness.cli jev-phase --local-only ...`. If the canary advances, its old SHA is
+  invalid and a new exact SHA must be admitted (BUILD_AND_CI.md).
+- Spend: the OpenRouter key has a daily limit (`spend_status` shows it) and the
+  harness session ceiling is $0.05 unless `HARNESS_MAX_COST` is raised (the
+  operator cap is $0.10 per gated PR, A9). A worst-case preflight refusal costs
+  nothing; a panelist that returns only reasoning text costs money and casts no
+  vote; a panel with fewer than 5 valid votes is a DEFERRED Board result.
+- Do not redirect or print the server's or the CLI's stderr: it carries the
+  key-identity line. Read results from `--out` JSON and typed progress from
+  `--events FILE`.
+- Never repoint the shared pip editable install to fix this locally.
+
 ## Dogfood loop for SCM (stay in sync with newest Harness dev)
 
-1. **Sync check** (weekly or before any JEV run): fetch in the Harness
-   repo; if `origin/main` moved past the installed commit, pull (editable
-   install tracks the checkout automatically, so a pull IS the upgrade)
-   and re-validate the pack + smoke the MCP server. Latest verdict:
-   2026-09-22, `f07c814` == origin/main, **already newest**.
+1. **Sync check** (weekly or before any JEV run): SUPERSEDED 2026-09-29. Do
+   NOT pull `origin/main` to upgrade. `docs/rules/BUILD_AND_CI.md` ("Harness
+   admission and update gate") makes the immutable tag `v0.4.1` the
+   production source and `origin/main` a bounded canary that a release gate
+   must never use directly; the old pull-to-upgrade habit is how the shared
+   editable install drifted off any admitted source. Re-admit by exact tag or
+   SHA, then re-validate the pack and smoke the MCP server.
 2. **Smoke after any pull**:
    `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | harness-mcp.exe`
    (expects the 12-tool list).
@@ -105,7 +148,8 @@ After saving, a new Freebuff session should show `issue_sort` and the other
   else is file-managed in-repo.
 - The installed CLI is not on PATH by default; call the full exe path
   (`%APPDATA%\Python\Python314\Scripts\harness.exe`). `python -m harness`
-  does NOT work (the package has no `__main__`).
+  does NOT work (the package has no `__main__`); use `python -m harness.cli`
+  or `python -m harness.mcp` with `PYTHONPATH` set to the worktree.
 - The bucket pack encodes SCM doctrine as of 2026-09-22 — review it when
   doctrine changes (it is versioned `scm-ops-issues-v1` for this reason).
   Run history: `HANDOFF/harness/JEV_DOGFOOD_RUN_2026-09-22.md`.

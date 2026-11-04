@@ -1,5 +1,7 @@
 # V040/V050 merge train + unification: land everything, prove the mesh on three nodes
 
+**SUPERSEDED for execution 2026-10-14 by `V051_UNIFIED_MERGE_TRAIN_2026-10-14.md`; v0.4.0/v0.4.1/v0.5.0 are tagged.**
+
 <!-- HANDOFF-SCOPE-BEGIN -->
 scope: SCMessenger
 owner: Sovereign-Communication/SCMessenger

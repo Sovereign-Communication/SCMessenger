@@ -1,10 +1,19 @@
-# SCMessenger Ship Plan -- v0.4.0 Public Alpha
+# SCMessenger Ship Plan -- v0.4.0 Public Alpha (history) / v0.5.1 unified release (active)
 
-Status: Active (v0.4.0 and v0.4.1 SHIPPED, v0.5.0 line tagged; see 2026-10-06 status note)
-Last updated: 2026-10-06
+Status: Active (v0.4.0, v0.4.1, v0.5.0 tagged; unified target is v0.5.1; see 2026-10-14 execution pointer)
+Last updated: 2026-10-14
 Created: 2026-08-14
 Owner: Operator (Treystu)
 Supersedes for execution purposes: `HANDOFF/todo/_QUEUE.md` (see Amnesty, S0-4)
+
+**2026-10-14 EXECUTION POINTER (authoritative):** the single execution queue is
+**`HANDOFF/freebuff/queue/V051_UNIFIED_MERGE_TRAIN_2026-10-14.md`**. Operator
+decisions of 2026-10-14: `v0.5.0` stays tagged (`df3bd3af4`) and is never
+rewritten; all remaining work lands on main and ships as **v0.5.1**; PRs merge
+when green (exact-head CI, no conflicts, Rule-8 where required); the Freebuff
+lane orchestrates with push and merge rights; preserve snapshot `e4050f8` stays
+NEVER MERGE (useful parts only via car MT-05; MT-07 already landed as #413). Trackers: #452, #567.
+The 2026-09-29 pointer below is SUPERSEDED (kept as history).
 
 **2026-10-06 STATUS NOTE (authoritative where it conflicts with the sections below):**
 - **G4-1 is DONE.** The final `v0.4.0` tag exists on origin (annotated tag
@@ -21,7 +30,7 @@ Supersedes for execution purposes: `HANDOFF/todo/_QUEUE.md` (see Amnesty, S0-4)
   E-04, D-01, D-02, D-03 marked done; D-04, C-05, C-06 marked retired (archived in
   the 2026-08-15 amnesty, never implemented).
 
-**2026-09-29 EXECUTION POINTER (authoritative until 2026-10-06; see status note above):** the v0.4.0 and v0.5.0
+**2026-09-29 EXECUTION POINTER (SUPERSEDED 2026-10-14; was authoritative until 2026-10-06; see status note above):** the v0.4.0 and v0.5.0
 execution queue is the merge-train task file
 **`HANDOFF/freebuff/queue/V040_V050_MERGE_TRAIN_UNIFY_2026-09-27.md`**, with live
 state on the tracker PR #403, the operator rulings of 2026-09-28 (its section 14)
