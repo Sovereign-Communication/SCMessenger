@@ -80,7 +80,10 @@ env:
 jobs:
   forgery-regression:
     name: Forgery/Negative Security Regression Tests
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
+    # Reserved for car and main waves, same rule as ci.yml's required leg:
+    # a dependabot re-head runs this gate on the hosted pool so the two ARM
+    # OCI slots are never spent on a wave nobody is waiting to merge.
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && (vars.CI_RUNNER == 'oci' || (vars.CI_RUNNER == '' && vars.USE_OCI_RUNNER != 'false')) && fromJSON('["self-hosted","oci"]') || 'ubuntu-latest' }}
     # 90, not 45: the full `forg` suite takes ~41-50 min on the OCI runner
     # (passing run on PR #611: 41 min; runs on #612-#615 and on main were
     # cancelled at the 45-minute cap with zero test failures -- the timeout
