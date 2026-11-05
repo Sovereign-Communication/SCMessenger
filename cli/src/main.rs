@@ -2646,7 +2646,9 @@ async fn cmd_start(
         Some(Arc::downgrade(&core)),
         false,
         Some(discovery_config),
-        transport::default_routing_engine_handle(),
+        // Share the core's engine Arc so identify-time peer_seen lands in the
+        // engine the swarm reads (matches the mobile_bridge path).
+        core.routing_engine_handle(),
     )
     .await?;
 
@@ -4259,7 +4261,7 @@ async fn cmd_relay(
         Some(Arc::downgrade(&core)),
         true,
         Some(discovery_config),
-        transport::default_routing_engine_handle(),
+        core.routing_engine_handle(),
     )
     .await?;
     println!("{} P2P swarm started on {}", "[OK]".green(), listen_addr);
@@ -4796,7 +4798,7 @@ async fn cmd_send_offline(recipient: String, message: String) -> Result<()> {
             }
         }
     });
-    let routing_handle = scmessenger_core::transport::default_routing_engine_handle();
+    let routing_handle = core.routing_engine_handle();
 
     let swarm_handle = match scmessenger_core::transport::start_swarm(
         network_keypair,

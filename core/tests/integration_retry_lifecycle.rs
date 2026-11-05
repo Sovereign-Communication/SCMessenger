@@ -23,14 +23,17 @@ fn pubkey(node: &IronCore) -> String {
         .expect("node must be initialized before calling pubkey()")
 }
 
-/// Mirror `prepare_message_internal`'s recipient-hint derivation
-/// (`blake3::hash(recipient_id.as_bytes())[0..8]`, hex-encoded) so tests can
+/// Mirror `prepare_message_internal`'s recipient-hint derivation: the canonical
+/// routing hint is `blake3(RAW public key bytes)[0..8]` (see
+/// `identity::keys::routing_hint_from_public_key`), hex-encoded so tests can
 /// mark/clear the same hint the routing engine's negative cache keys on.
 fn recipient_hint_hex(recipient_pubkey_hex: &str) -> String {
-    let hint: [u8; 8] = blake3::hash(recipient_pubkey_hex.as_bytes()).as_bytes()[0..8]
+    let raw = hex::decode(recipient_pubkey_hex).expect("recipient pubkey must be valid hex");
+    let raw: [u8; 32] = raw
+        .as_slice()
         .try_into()
-        .unwrap_or([0u8; 8]);
-    hex::encode(hint)
+        .expect("recipient pubkey must be 32 bytes");
+    hex::encode(scmessenger_core::identity::keys::routing_hint_from_public_key(&raw))
 }
 
 fn make_msg(id: &str, recipient: &str, attempts: u32) -> QueuedMessage {
