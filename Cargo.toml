@@ -68,7 +68,7 @@ tokio-tungstenite = { version = "0.24", features = ["connect"] }
 sled = "0.34"
 
 # UniFFI for mobile bindings
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 
 # WASM bindings
 wasm-bindgen = "0.2"
