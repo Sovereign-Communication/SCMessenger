@@ -11,7 +11,8 @@
 #
 # Jobs:
 #   build-ios:         Cross-compile Rust -> iOS, build XCFramework, run XCTest
-#   test-macos-native: Native macOS cargo test + CLI build verification
+#   test-macos-native: Native macOS release CLI build verification (the macOS
+#                      `cargo test --workspace` lives only in ci.yml Test (macos-latest))
 #
 # WHY THIS FILE LOOKS THE WAY IT DOES
 # -----------------------------------
@@ -389,10 +390,12 @@ jobs:
   test-macos-native:
     name: macOS Native Tests
     runs-on: macos-14  # Apple Silicon M1 runner
-    # This job already passes (28.9min in run 30154609526: 18.1min for
-    # `cargo test --workspace`, 9.8min for the release CLI build) - the workflow
-    # was only ever red because build-ios timed out. 60min keeps headroom for a
-    # cold cache without inviting an hour-long hang.
+    # `cargo test --workspace` used to run here too, duplicating ci.yml's
+    # Test (macos-latest) leg (which also enables --features test-utils and runs
+    # on every Rust-relevant change). It was removed to stop paying for the same
+    # macOS test run twice; only the release CLI build, which ci.yml does not do,
+    # remains. The job name is kept so existing check references still resolve.
+    # 60min keeps headroom for a cold cache without inviting an hour-long hang.
     timeout-minutes: 60
 
     steps:
@@ -413,10 +416,6 @@ jobs:
         with:
           key: macos-native
           cache-on-failure: true
-
-      # --- Test ---
-      - name: Run workspace tests
-        run: cargo test --workspace
 
       # --- CLI Build ---
       - name: Build CLI (release)

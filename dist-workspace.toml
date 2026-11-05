@@ -1,0 +1,19 @@
+# cargo-dist configuration for SCMessenger
+# See https://axodotdev.github.io/cargo-dist/
+# New files only — the existing release process is untouched until this is used.
+# Release policy: the three-node gate (#603) is the trigger for any publish.
+
+[workspace]
+members = ["cli"]
+
+[package]
+# cargo-dist reads package metadata from cli/Cargo.toml
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.28.0"
+rust-toolchain-version = "1.99.0"
+ci = ["github"]
+installers = ["shell", "powershell"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+pr-run-mode = "plan"
+allow-dirty = ["ci"]
