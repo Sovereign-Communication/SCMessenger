@@ -24,6 +24,7 @@ pub mod diagnostics;
 pub mod dial_policy;
 pub mod discovery;
 pub mod discovery_scheduler;
+pub mod envelope_gate;
 pub mod escalation;
 pub mod health;
 pub mod hint_store;
