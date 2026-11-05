@@ -364,9 +364,18 @@ class BleGattClient(
                     deviceAddress,
                     targetAddress
                 )
-            } else {
-                Timber.w("Not connected to %s, requesting reconnect before send", deviceAddress)
+            } else if (deviceAddress.isNotBlank()) {
+                Timber.w("Not connected to %s, initiating connection and waiting for CONNECTED...", deviceAddress)
                 connect(deviceAddress)
+                val connected = withTimeoutOrNull(1500L) {
+                    while (connectionStates[deviceAddress] != ConnectionState.CONNECTED) {
+                        delay(50)
+                    }
+                    true
+                } ?: false
+                if (!connected) return false
+                gatt = activeConnections[deviceAddress]
+            } else {
                 return false
             }
         }
@@ -375,13 +384,19 @@ class BleGattClient(
             return false
         }
 
-        val state = connectionStates[targetAddress]
+        var state = connectionStates[targetAddress]
         if (state != ConnectionState.CONNECTED) {
-            Timber.w("Cannot send data - not in CONNECTED state for %s: %s", targetAddress, state)
-            if (state != ConnectionState.CONNECTING) {
+            Timber.w("Cannot send data - waiting for CONNECTED state for %s (current: %s)", targetAddress, state)
+            if (state != ConnectionState.CONNECTING && state != ConnectionState.DISCOVERING_SERVICES) {
                 connect(targetAddress)
             }
-            return false
+            val connected = withTimeoutOrNull(1500L) {
+                while (connectionStates[targetAddress] != ConnectionState.CONNECTED) {
+                    delay(50)
+                }
+                true
+            } ?: false
+            if (!connected) return false
         }
 
         val service = activeGatt.getService(BleGattServer.SERVICE_UUID)
@@ -404,10 +419,13 @@ class BleGattClient(
             val enqueued = enqueueGattOp(targetAddress) {
                 try {
                     characteristic.value = fragment
-                    // Use write-with-response for deterministic flow control.
-                    // This is slower than WRITE_TYPE_NO_RESPONSE but avoids reporting
-                    // false-positive BLE accepts when the stack refuses to start a write.
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    val hasWriteWithResponse = (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                    val hasWriteNoResponse = (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+                    characteristic.writeType = when {
+                        hasWriteWithResponse -> BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                        hasWriteNoResponse -> BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                        else -> BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    }
                     val didInitiate = activeGatt.writeCharacteristic(characteristic)
                     initiated.set(didInitiate)
                     if (!didInitiate) {
