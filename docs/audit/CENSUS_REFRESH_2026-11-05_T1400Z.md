@@ -92,3 +92,52 @@ repair it has not already had.
 - `commits/main`, 13:58:55Z: `ba7fa77851f0`.
 - `git merge-tree --write-tree origin/main refs/tmp/p609`, 14:00:31Z.
 - No CI action was dispatched and nothing was re-run in this pass.
+
+## Independent acceptance read (successor session, 2026-11-05T14:16-14:18Z)
+
+Clause 13: the producing session's status is evidence, not acceptance. This
+section is the read-back, taken by a different session from the API rather than
+from the census text.
+
+**Table: ACCEPTED, 20 of 20 heads.** Every head SHA in the 20-row census matches
+the live `headRefOid` exactly (read: GraphQL `repository.pullRequests(first:100,
+states:OPEN)`, `tmp/census_acceptance_result.txt`, 2026-11-05T14:16:32Z-
+14:17:35Z). Required-context counts reproduce: `#507` is the only car short at
+4/5 (`Test (ubuntu-latest)=failure`), `#599` is 0/5 with 9 check-runs and none of
+the five required names, and the other 18 rows read 5/5 success. States
+reproduce: `#609` `DIRTY/CONFLICTING`, `#643` `DIRTY/CONFLICTING`, `#507`
+`BLOCKED`, `#599` `CLEAN`, the rest `UNSTABLE` or `BEHIND`.
+
+**A22: ACCEPTED, and narrower than filed in one useful direction.** A fresh
+`git merge-tree --write-tree origin/main 4ed8168bbf1f` (head fetched locally)
+exits 1 with exactly one conflicted path, `.github/workflows/ci.yml`. The same
+command on `#643`'s `0340c094468f` also exits 1 with exactly one conflicted
+path, `.github/workflows/ci.yml` (read 14:18:31Z). So the two dirty cars do not
+merely both conflict on `ci.yml`: each conflicts on that file and on nothing
+else, which means a single conflict-resolution decision covers both, and neither
+car has any other merge obstacle.
+
+**Addendum fact 2 REFUTED.** The 14:06Z addendum recorded that every car is
+`BEHIND` main, so each landing needs an `update-branch` and that dispatches a
+fresh required `Test (ubuntu-latest)` at 39-65 minutes on the two-slot pool.
+Direct commit comparison falsifies this for exactly the cars that can land:
+`#660` `behind_by=0 ahead_by=62`, `#506` `0/12`, `#508` `0/9`, `#521` `0/15`,
+`#611` `0/2` (read: `compare/main...<head>`, 14:18:31Z). `behind_by=0` means
+every main commit is already an ancestor, so `strict=true` is already satisfied
+and no `update-branch`, and therefore no additional required-`Test` dispatch, is
+needed to land any of them. The behind rows are the ones that are not landing
+candidates: `#609` 46, `#643` 34, `#509` 51, `#654` 31.
+
+Consequence for the owner's decision: the five ready cars carry 5/5 required
+success on heads that are strictly ahead of main. A word to land them costs zero
+additional CI runs and consumes no pool capacity - it is not a 2-3 hour
+serialised operation. Recorded as register row A23.
+
+## Acceptance reads
+
+- GraphQL open-PR census (40 open PRs) + `commits/<head>/check-runs?filter=latest`
+  for the 20 scoped rows, 2026-11-05T14:16:32Z-14:17:35Z.
+- `repos/.../compare/ba7fa77851f0...<head>` for #660, #506, #508, #521, #611,
+  #609, #643, #507, #509, #654, 14:18:31Z.
+- `git merge-tree --write-tree origin/main <head>` for #609 and #643, 14:18:31Z.
+- Nothing dispatched, nothing re-run, no merge performed.
