@@ -117,3 +117,32 @@ written down precisely, with a verified fix sitting in the repository.
   `refs/tmp/p208`, `refs/tmp/p178`; both patches proven by
   `git apply` + `diff` against the verified builds, 14:47Z.
 - `rustfmt 1.10.0-stable`, `cargo 1.99.0` on this host, 14:39Z.
+
+## 5. Delivery executed on the authors' PRs (2026-11-05T14:50:35Z)
+
+Push to the forks is impossible (A10), so option 1 from section 3 was executed
+directly instead of waiting: each patch was posted as a comment on the PR whose
+branch it fixes, with the diff inline and the exact apply command.
+
+- #208: `#issuecomment-6661021545` (2227 chars, patch block embedded).
+- #178: `#issuecomment-6661022160` (2121 chars, patch block embedded).
+
+Read back by id at 14:51:11Z: both bodies intact, fences balanced, diff lines
+present (10 and 18 `+`/`-` lines respectively).
+
+This is delivery of a fix, not a landing: the branches are unchanged, no CI was
+dispatched, and the author or the owner still decides whether to apply it.
+
+## 6. The defects are branch-local - main carries none of them
+
+Checked so that a later reader cannot mistake these patches for main-side fixes,
+and so that applying them cannot regress main:
+
+| defect | main | fork branch |
+|---|---|---|
+| `sendMultipeerPacket(peerId:data:)` duplicate | **0** occurrences of the name in `MeshRepository.swift` (7498 lines) | 2 declarations at 4351 / 4414 (7250 lines) |
+| `ble_daemon.rs` rustfmt diff | different call shape: `AssertUnwindSafe(manager.adapters())` at line 39; **0** occurrences of `AssertUnwindSafe(adapter.adapter_state())` | the line CI's rustfmt rejects |
+| blank line at EOF | `HANDOFF/coordination/apple-windows/CTO_TO_CAO.md` does not exist; the main-side file is `HANDOFF/gpt/CTO_TO_CAO.md`, which ends with a single `\n` | `HANDOFF/coordination/apple-windows/CTO_TO_CAO.md:310` |
+
+Read: `git show origin/main:<path>` and `git ls-tree -r --name-only origin/main`,
+2026-11-05T14:49Z. Register row A30.
