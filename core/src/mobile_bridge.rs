@@ -1626,6 +1626,13 @@ impl MeshService {
         // Persist the new DeviceState.
         *self.device_state.write() = Some(new_state.clone());
 
+        // Feed the transport's derived connection bound: on battery every kept-alive
+        // path costs radio wakeups, so the total scales down (see conn_resources).
+        crate::transport::conn_resources::set_platform_power(
+            new_state.battery_level,
+            new_state.is_charging,
+        );
+
         // Also keep the legacy DeviceProfile for callers that still use it.
         *self.current_device_profile.lock() = Some(profile.clone());
 
@@ -5635,6 +5642,52 @@ mod tests {
 
         let adj = svc.recommended_behavior().unwrap();
         assert!(adj.minimal_operation);
+    }
+
+    /// `update_device_state` feeds the transport's platform power scale
+    /// (conn_resources), which derives the connection bound. The scale is a
+    /// process-global, so a concurrent test that also reports a power state
+    /// can interleave between the store and the load; the check therefore
+    /// retries a bounded number of times. A missing wiring fails every try.
+    #[test]
+    fn test_update_device_state_feeds_transport_power_scale() {
+        use crate::transport::conn_resources::{platform_scale_permille, scale_for_power};
+
+        let svc = MeshService::new(MeshServiceConfig {
+            discovery_interval_ms: 1000,
+            battery_floor_pct: 20,
+        });
+        let report = |battery_pct: u8, is_charging: bool| {
+            svc.update_device_state(DeviceProfile {
+                battery_pct,
+                is_charging,
+                has_wifi: true,
+                motion_state: MotionState::Still,
+                peer_id: None,
+                device_id: None,
+            });
+        };
+        let observed_after = |battery_pct: u8, is_charging: bool, expected: u32| {
+            (0..50).any(|_| {
+                report(battery_pct, is_charging);
+                platform_scale_permille() == expected
+            })
+        };
+
+        // Charging: unscaled.
+        assert!(observed_after(100, true, 1000), "charging is unscaled");
+        // On battery the scale drops, proving the report reached the model.
+        let on_battery = scale_for_power(20, false);
+        assert_eq!(on_battery, 600);
+        assert!(
+            observed_after(20, false, on_battery),
+            "an unplugged 20% report must lower the platform scale"
+        );
+        // Plugging back in restores it.
+        assert!(
+            observed_after(20, true, 1000),
+            "charging restores the scale"
+        );
     }
 
     #[test]

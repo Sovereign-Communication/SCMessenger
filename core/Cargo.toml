@@ -12,6 +12,9 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tokio = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+# Timer for the admission behaviour's grace-expiry wake (already in the lock
+# as a libp2p-swarm dependency; the wasm32 feature is enabled below).
+futures-timer = "3.0.3"
 libp2p = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -61,6 +64,7 @@ tracing-appender = { workspace = true }
 if-addrs = "0.15"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-timer = { version = "3.0.3", features = ["wasm-bindgen"] }
 uuid = { workspace = true, features = ["js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }

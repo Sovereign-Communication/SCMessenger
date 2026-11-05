@@ -39,12 +39,18 @@ RUN apt-get update && apt-get install -y \
 # Cargo.toml: core, cli, wasm, mobile, desktop_bridge - a missing member's
 # Cargo.toml makes the workspace build fail with "failed to read
 # <member>/Cargo.toml").
+# DOCKER-VENDOR-001: the vendored libp2p-swarm crate (D9) is also a
+# workspace member, and the cargo build needs its full source tree, not
+# just its manifest -- without it the manifest load fails with "failed to
+# load manifest for workspace member /usr/src/scmessenger/vendor/..."
 COPY Cargo.toml Cargo.lock ./
 COPY core/Cargo.toml core/
 COPY cli/Cargo.toml cli/
 COPY mobile/Cargo.toml mobile/
 COPY wasm/Cargo.toml wasm/
 COPY desktop_bridge/Cargo.toml desktop_bridge/
+COPY vendor/libp2p-swarm-0.48.0/Cargo.toml vendor/libp2p-swarm-0.48.0/
+COPY vendor/libp2p-swarm-0.48.0/src vendor/libp2p-swarm-0.48.0/src
 
 # Copy source code
 COPY core/src core/src
