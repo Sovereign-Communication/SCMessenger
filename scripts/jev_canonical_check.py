@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -64,6 +65,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 SCHEMA_VERSION = "1.1.0"
+CANON_SCHEMA_VERSION = "1.0.0"
 DEFAULT_BUCKET_THRESHOLD = 0.80
 INSTRUCTION_BUCKET = "instruction"
 
@@ -1083,10 +1085,75 @@ def resolve_paths(args: argparse.Namespace, state: Dict[str, Any]) -> Dict[str, 
     return info
 
 
+def run_canon_only(args: argparse.Namespace, state: Dict[str, Any], import_harness: Any, make_policy: Any) -> int:
+    """Evaluate the original bare-key Noul pack for the controller completion gate.
+
+    This mode always uses keyed TypeSafe and fails closed on a fallback or a
+    malformed result. The bucketed WP gate is deliberately separate.
+    """
+    mod = import_harness()
+    policy, _ = make_policy()
+    result = policy.evaluator.evaluate(state, questions=CANON_QUESTIONS)
+    answers = result.answers if isinstance(result.answers, dict) else {}
+
+    def probability(value: Any) -> bool:
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and 0.0 <= value <= 1.0)
+
+    valid_answers = set(answers) == set(CANON_QUESTIONS) and all(
+        isinstance(answers[key], dict)
+        and answers[key].get("type") == "noul"
+        and probability(answers[key].get("noul"))
+        for key in CANON_QUESTIONS
+    )
+    supported = getattr(result, "supported", None)
+    confidence = getattr(result, "confidence", None)
+    signals_match = (
+        valid_answers and probability(supported) and probability(confidence)
+        and math.isclose(supported, min(answers[key]["noul"] for key in CANON_QUESTIONS),
+                         rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(confidence, 0.0, rel_tol=0.0, abs_tol=1e-9)
+    )
+    passing = bool(
+        signals_match and bool(mod.get("key")) and not result.is_fallback
+        and result.is_passing(args.min_confidence)
+    )
+    payload = {
+        "schema_version": CANON_SCHEMA_VERSION,
+        "wp": args.wp,
+        "is_passing": passing,
+        "is_fallback": bool(result.is_fallback),
+        "fallback_used": False,
+        "keyed": bool(mod.get("key")),
+        "endpoint": "typesafe",
+        "model": result.model,
+        "confidence": confidence,
+        "supported": supported,
+        "answers": answers,
+        "reasons": result.reasons,
+        "cost": result.cost,
+        "input_tokens": result.input_tokens,
+        "output_tokens": getattr(result, "output_tokens", 0),
+    }
+    if args.result_file:
+        result_path = Path(args.result_file)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"[INFO] mode=canon-only keyed={payload['keyed']} fallback={payload['is_fallback']} "
+          f"schema={CANON_SCHEMA_VERSION} passing={passing}")
+    if not passing:
+        print("[FAIL] JEV canonical completion check did not pass")
+        return 1
+    print(f"[OK] JEV canonical completion pass (min_confidence={args.min_confidence})")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--wp", required=True)
     ap.add_argument("--state-file", required=True)
+    ap.add_argument("--canon-only", action="store_true",
+                    help="Use the three bare Noul questions for the controller completion gate")
     ap.add_argument("--min-confidence", type=float, default=0.70)
     ap.add_argument("--bucket-threshold", type=float, default=DEFAULT_BUCKET_THRESHOLD,
                     help="Minimum score for every applicable non-instruction bucket (default 0.80)")
@@ -1129,6 +1196,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     state = json.loads(Path(args.state_file).read_text(encoding="utf-8"))
     state.setdefault("wp", args.wp)
+
+    if args.canon_only:
+        return run_canon_only(args, state, import_harness, make_policy)
 
     info = resolve_paths(args, state)
     path_selected: Optional[Set[str]] = None

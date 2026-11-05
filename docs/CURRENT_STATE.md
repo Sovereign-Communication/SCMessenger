@@ -7,10 +7,18 @@
 > authority once v0.4.0 is tagged. (Added 2026-08-15.)
 
 Status: Active
-Last updated: 2026-10-18 (PR #604 check results at head 7e5993cc)
+Last updated: 2026-10-31 (completion gate contract)
 Last verified: No build was run for the 2026-10-01 checkpoint; the 2026-07-21 host-gate result is historical and must be rerun.
 
 ---
+
+### Canonical completion gate contract (2026-10-31)
+
+The controller invokes `jev_canonical_check.py --canon-only` for the three
+bare Noul questions in schema 1.0.0. The helper's default bucketed WP gate
+continues to use schema 1.1.0. Completion evidence covers controller-supplied
+metadata and mechanical checks; it does not replace independent patch review
+or release approval.
 
 ### Dependency security patch candidate (2026-10-16)
 
