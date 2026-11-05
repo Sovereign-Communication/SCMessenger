@@ -99,7 +99,7 @@ fn undelivered_message_does_not_transition_to_terminal_drop() {
 }
 
 #[test]
-fn test_custody_ownership_mutual_exclusion() {
+fn test_outbox_entry_is_removed_when_delivery_is_confirmed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir
         .path()
@@ -118,7 +118,9 @@ fn test_custody_ownership_mutual_exclusion() {
     let queued = outbox.peek_for_peer("peer-a");
     assert_eq!(queued.len(), 1);
 
-    // When moved to Drift custody (StoreAndCarry), it is removed from the outbox queue
+    // Delivery confirmed (receipt or transport accept): the retry entry is removed.
+    // This only exercises Outbox::remove; the StoreAndCarry send path, where an
+    // entry stays in the outbox alongside Drift custody, is tested below.
     let removed = outbox.remove("msg-custody");
     assert!(removed);
 
@@ -133,11 +135,11 @@ fn test_custody_ownership_mutual_exclusion() {
 // ============================================================================
 
 /// Forcing a StoreAndCarry routing decision (recipient marked definitely
-/// unreachable) must hand the message to drift custody and never enqueue it
-/// in the active outbox - there is nothing there for the retry loop to keep
-/// retrying.
+/// unreachable) must hand the message to drift custody AND keep it in the
+/// outbox, so the reconnect flush and periodic sweep keep retrying it. Drift is
+/// an additional path, not a replacement for the outbox entry.
 #[test]
-fn outbox_stops_retrying_when_route_is_store_and_carry() {
+fn store_and_carry_send_is_held_in_drift_and_stays_in_outbox_for_retry() {
     let alice = make_core_with_routing();
     let bob = IronCore::new();
     bob.grant_consent();
@@ -167,11 +169,17 @@ fn outbox_stops_retrying_when_route_is_store_and_carry() {
         "message must be handed off to drift custody when the route is StoreAndCarry"
     );
     assert!(
-        !alice.outbox_contains_for_recipient(&bob_pubkey, &prepared.message_id),
-        "message must NOT also be queued in the active outbox - nothing there to retry"
+        alice.outbox_contains_for_recipient(&bob_pubkey, &prepared.message_id),
+        "StoreAndCarry must not bypass the outbox: without a pending entry nothing          retries on peer connect, identify or the periodic sweep (cell test 2026-10-10)"
     );
-    assert_eq!(alice.outbox_count(), 0);
+    assert_eq!(alice.outbox_count(), 1);
     assert_eq!(alice.drift_store_size(), 1);
+
+    // A receipt (mark_message_sent) must clear both holders together.
+    assert!(alice.mark_message_sent(prepared.message_id.clone()));
+    assert!(!alice.drift_contains(&prepared.message_id));
+    assert!(!alice.outbox_contains_for_recipient(&bob_pubkey, &prepared.message_id));
+    assert_eq!(alice.outbox_count(), 0);
 }
 
 /// Once a route is restored (negative-cache entry cleared), new messages to
@@ -242,8 +250,8 @@ fn restored_route_sends_new_messages_via_outbox_without_disturbing_existing_cust
          doesn't retroactively touch already-custodied messages"
     );
     assert!(
-        !alice.outbox_contains_for_recipient(&bob_pubkey, &custodied.message_id),
-        "the earlier custodied message must never also appear in the outbox"
+        alice.outbox_contains_for_recipient(&bob_pubkey, &custodied.message_id),
+        "the earlier custodied message keeps its outbox retry entry until a receipt"
     );
 
     // Delivery-receipt convergence clears whichever store actually holds
@@ -265,10 +273,10 @@ proptest::proptest! {
     /// State-transition property: across any sequence of routing-decision
     /// flips (recipient marked unreachable / reachable) and out-of-order
     /// delivery confirmations, no message the real IronCore send path
-    /// prepared is ever simultaneously present in both the active outbox
-    /// and drift custody.
+    /// prepared is ever held in drift custody without a pending outbox entry
+    /// (drift is an additional carry path, never the only one).
     #[test]
-    fn property_message_never_owned_by_both_outbox_and_drift(
+    fn property_message_in_drift_always_has_outbox_retry_entry(
         ops in proptest::collection::vec(
             prop_oneof![
                 Just(CustodyOp::SendWhileUnreachable),
@@ -319,8 +327,8 @@ proptest::proptest! {
                 let in_outbox = alice.outbox_contains_for_recipient(&bob_pubkey, id);
                 let in_drift = alice.drift_contains(id);
                 proptest::prop_assert!(
-                    !(in_outbox && in_drift),
-                    "message {} owned by both outbox and drift custody simultaneously",
+                    !in_drift || in_outbox,
+                    "message {} is in drift custody without an outbox retry entry",
                     id
                 );
             }

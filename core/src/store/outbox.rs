@@ -77,11 +77,55 @@ pub const QUEUED_VERSION_FIRE_AND_FORGET: u8 = 2;
 /// message can still matter to the sender.
 pub const MESSAGE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
-/// Maximum messages queued per peer
-const MAX_QUEUE_PER_PEER: usize = 1000;
+/// Fraction of the resources actually available to the outbox (free disk for a
+/// persistent outbox, available memory for an in-memory one) that queued
+/// payloads may occupy: `available / OUTBOX_RESOURCE_DIVISOR`. This is derived
+/// from the live resource report, not a fixed message count, and it is applied
+/// only by evicting the OLDEST entries -- `enqueue` never fails on a count.
+const OUTBOX_RESOURCE_DIVISOR: u64 = 8;
 
-/// Maximum total messages across all peers
-const MAX_TOTAL_QUEUED: usize = 10_000;
+/// Byte budget for queued payloads given the resource currently available and
+/// the bytes the outbox already holds (which are part of what it may keep).
+fn pressure_budget(available: u64, queued: u64) -> u64 {
+    available.saturating_add(queued) / OUTBOX_RESOURCE_DIVISOR
+}
+
+/// Oldest-first eviction plan. `entries` is `(message_id, queued_at, bytes)`.
+/// Returns the ids to drop so that `queued + incoming <= budget`, or every
+/// entry if even an empty outbox cannot hold `incoming` (the new message is
+/// always admitted; only older ones make room for it).
+fn plan_evictions(
+    mut entries: Vec<(String, u64, u64)>,
+    queued: u64,
+    incoming: u64,
+    budget: u64,
+) -> Vec<String> {
+    entries.sort_by_key(|(_, queued_at, _)| *queued_at);
+    let mut held = queued;
+    let mut victims = Vec::new();
+    for (id, _, bytes) in entries {
+        if held.saturating_add(incoming) <= budget {
+            break;
+        }
+        held = held.saturating_sub(bytes);
+        victims.push(id);
+    }
+    victims
+}
+
+/// Memory the OS reports as available, where that is cheaply knowable.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn available_memory_bytes() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = meminfo.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib.saturating_mul(1024))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn available_memory_bytes() -> Option<u64> {
+    None
+}
 
 /// Maximum delivery attempts before automatic removal
 const MAX_DELIVERY_ATTEMPTS: u32 = 12;
@@ -333,6 +377,9 @@ enum OutboxBackend {
 pub struct Outbox {
     backend: OutboxBackend,
     storage_manager: Option<Arc<StorageManager>>,
+    /// Free disk bytes last reported by the platform, if any. Drives the
+    /// resource-derived bound of a persistent outbox.
+    free_disk_bytes: Option<u64>,
 }
 
 impl Outbox {
@@ -345,6 +392,7 @@ impl Outbox {
                 receipt_authorizations: HashMap::new(),
             },
             storage_manager: None,
+            free_disk_bytes: None,
         }
     }
 
@@ -356,6 +404,7 @@ impl Outbox {
         Self {
             backend: OutboxBackend::Persistent(backend),
             storage_manager: Some(storage_manager),
+            free_disk_bytes: None,
         }
     }
 
@@ -364,6 +413,82 @@ impl Outbox {
         Self {
             backend: OutboxBackend::Persistent(backend),
             storage_manager: None,
+            free_disk_bytes: None,
+        }
+    }
+
+    /// Record the platform's free-disk report. It only influences how much the
+    /// outbox may keep under pressure; it never causes a send to fail.
+    pub fn update_free_disk_bytes(&mut self, free_bytes: u64) {
+        self.free_disk_bytes = Some(free_bytes);
+    }
+
+    /// `(message_id, queued_at, payload_bytes)` for every queued entry.
+    fn entry_sizes(&self) -> Vec<(String, u64, u64)> {
+        match &self.backend {
+            OutboxBackend::Memory { queues, .. } => queues
+                .values()
+                .flat_map(|q| q.iter())
+                .map(|m| {
+                    (
+                        m.message_id.clone(),
+                        m.queued_at,
+                        m.envelope_data.len() as u64,
+                    )
+                })
+                .collect(),
+            OutboxBackend::Persistent(db) => db
+                .scan_prefix(QUEUE_PREFIX)
+                .map(|rows| {
+                    rows.into_iter()
+                        .filter_map(|(_, value)| deserialize_queued_message(&value).ok())
+                        .map(|m| (m.message_id, m.queued_at, m.envelope_data.len() as u64))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Make room for `incoming` payload bytes when the resources actually
+    /// available are short. Expired entries go first, then the oldest. This
+    /// never refuses the incoming message and never returns an error: with no
+    /// resource report there is no pressure signal and nothing is evicted.
+    fn relieve_pressure(&mut self, incoming: u64) {
+        let available = match &self.backend {
+            OutboxBackend::Memory { .. } => available_memory_bytes(),
+            OutboxBackend::Persistent(_) => self.free_disk_bytes,
+        };
+        let Some(available) = available else {
+            return;
+        };
+        self.relieve_pressure_with(available, incoming);
+    }
+
+    fn relieve_pressure_with(&mut self, available: u64, incoming: u64) {
+        let mut entries = self.entry_sizes();
+        let queued: u64 = entries.iter().map(|(_, _, bytes)| *bytes).sum();
+        let budget = pressure_budget(available, queued);
+        if queued.saturating_add(incoming) <= budget {
+            return;
+        }
+        let expired = self.remove_expired(MESSAGE_RETENTION_SECS);
+        if expired > 0 {
+            entries = self.entry_sizes();
+        }
+        let queued: u64 = entries.iter().map(|(_, _, bytes)| *bytes).sum();
+        let victims = plan_evictions(entries, queued, incoming, budget);
+        if victims.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            event = "outbox_pressure_eviction",
+            evicted = victims.len(),
+            available_bytes = available,
+            budget_bytes = budget,
+            "Outbox under resource pressure; evicting oldest queued messages"
+        );
+        for id in victims {
+            self.remove(&id);
         }
     }
 
@@ -443,24 +568,17 @@ impl Outbox {
         // same spelling `resolve_queue_key` will look under on reconnect.
         let queue_key = canonical_peer_key(&msg.recipient_id);
 
+        // Bound by resources, not by count: oldest entries make room.
+        self.relieve_pressure(msg.envelope_data.len() as u64);
+
         match &mut self.backend {
             OutboxBackend::Memory {
                 queues,
                 total,
                 receipt_authorizations,
             } => {
-                if *total >= MAX_TOTAL_QUEUED {
-                    return Err(format!("Outbox full ({} messages)", MAX_TOTAL_QUEUED));
-                }
-
                 let queue = queues.entry(queue_key.clone()).or_default();
 
-                if queue.len() >= MAX_QUEUE_PER_PEER {
-                    return Err(format!(
-                        "Queue full for peer {} ({} messages)",
-                        msg.recipient_id, MAX_QUEUE_PER_PEER
-                    ));
-                }
                 if let Some(recipient_key) = decode_recipient_key(&queue_key) {
                     remember_memory_receipt_authorization(
                         receipt_authorizations,
@@ -486,27 +604,6 @@ impl Outbox {
                 let previous_queue = db
                     .get(storage_key.as_bytes())
                     .map_err(|error| error.to_string())?;
-                let queue_exists = previous_queue.is_some();
-                let current_total = db
-                    .count_prefix(QUEUE_PREFIX)
-                    .map_err(|error| error.to_string())?;
-                if current_total >= MAX_TOTAL_QUEUED && !queue_exists {
-                    return Err(format!("Outbox full ({} messages)", MAX_TOTAL_QUEUED));
-                }
-
-                // Check per-peer limit
-                let peer_prefix =
-                    format!("{}{}_", String::from_utf8_lossy(QUEUE_PREFIX), queue_key);
-                let peer_count = db
-                    .count_prefix(peer_prefix.as_bytes())
-                    .map_err(|error| format!("failed counting queued peer messages: {error}"))?;
-                if peer_count >= MAX_QUEUE_PER_PEER && !queue_exists {
-                    return Err(format!(
-                        "Queue full for peer {} ({} messages)",
-                        msg.recipient_id, MAX_QUEUE_PER_PEER
-                    ));
-                }
-
                 // Store message
                 let bytes = bincode::serialize(&msg).map_err(|error| error.to_string())?;
                 if let Some(recipient_key) = decode_recipient_key(&queue_key) {
@@ -1987,19 +2084,62 @@ mod tests {
         outbox.enqueue(drained.clone()).unwrap();
         assert_eq!(outbox.drain_for_peer("peer_a").len(), 1);
 
-        for index in 0..MAX_QUEUE_PER_PEER {
+        for index in 0..1500 {
             outbox
                 .enqueue(make_msg(&format!("existing-{index}"), "peer_a"))
                 .unwrap();
         }
-        assert_eq!(outbox.total_count(), MAX_QUEUE_PER_PEER);
+        assert_eq!(outbox.total_count(), 1500);
 
         outbox.restore_drained(drained).unwrap();
-        assert_eq!(outbox.total_count(), MAX_QUEUE_PER_PEER + 1);
+        assert_eq!(outbox.total_count(), 1501);
         assert!(outbox
             .peek_for_peer("peer_a")
             .iter()
             .any(|msg| msg.message_id == "drained"));
+    }
+
+    #[test]
+    fn enqueue_never_fails_on_message_count() {
+        let mut outbox = Outbox::new();
+        for index in 0..10_500 {
+            outbox
+                .enqueue(make_msg(&format!("m-{index}"), "peer_a"))
+                .unwrap();
+        }
+        assert_eq!(outbox.total_count(), 10_500);
+    }
+
+    #[test]
+    fn pressure_evicts_oldest_first_and_always_admits_the_new_message() {
+        let mut outbox = Outbox::new();
+        for (id, age) in [("oldest", 10u64), ("middle", 20), ("newest", 30)] {
+            let mut msg = make_msg(id, "peer_a");
+            msg.queued_at = current_unix_secs() - 1_000 + age;
+            msg.envelope_data = vec![0u8; 100];
+            outbox.enqueue(msg).unwrap();
+        }
+        // available chosen so the budget is (available + 300) / 8 = 150 bytes:
+        // room for one 100-byte entry plus the 50-byte incoming payload.
+        outbox.relieve_pressure_with(900, 50);
+        let left: Vec<String> = outbox
+            .peek_for_peer("peer_a")
+            .into_iter()
+            .map(|m| m.message_id)
+            .collect();
+        assert_eq!(left, vec!["newest".to_string()]);
+
+        let mut incoming = make_msg("incoming", "peer_a");
+        incoming.envelope_data = vec![0u8; 50];
+        outbox.enqueue(incoming).unwrap();
+        assert_eq!(outbox.total_count(), 2);
+    }
+
+    #[test]
+    fn plan_evictions_empties_outbox_rather_than_refusing_oversized_incoming() {
+        let entries = vec![("a".to_string(), 1, 10), ("b".to_string(), 2, 10)];
+        let victims = plan_evictions(entries, 20, 1_000, 5);
+        assert_eq!(victims, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
