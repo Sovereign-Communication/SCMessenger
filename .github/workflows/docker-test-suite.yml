@@ -514,6 +514,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Free up disk space
+        run: |
+          set -euo pipefail
+          echo "[INFO] Disk usage before cleanup:"
+          df -h
+          echo "[INFO] Removing unnecessary files..."
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+          echo "[INFO] Disk usage after cleanup:"
+          df -h
+
       # run-all-tests.sh always calls `docker compose build`. Seeding the
       # builder from the GHA layer cache first means that build is mostly cache
       # hits instead of a from-scratch rebuild of every image.
