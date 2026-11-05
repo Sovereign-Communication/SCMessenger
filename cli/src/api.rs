@@ -1943,6 +1943,58 @@ async fn handle_invite_redeem(
     }))
 }
 
+/// Returns true only when `origin` is exactly `http(s)://<loopback-host>[:port]`
+/// where the host is `localhost`, `127.0.0.1` or `[::1]`.
+///
+/// This is the CORS allow-list predicate for the control API. It parses the
+/// whole Origin value instead of matching a prefix, so look-alike hosts such as
+/// `http://localhost.evil.com`, `http://localhost@evil.com` or
+/// `http://127.0.0.1.evil.com` are rejected, as are `null`, `file://` and any
+/// value with a path, query, fragment, userinfo or non-numeric port.
+///
+/// Requests with no Origin header (curl, the CLI, other non-browser clients)
+/// never reach this predicate: CORS is a browser mechanism and tower-http only
+/// consults the predicate when an Origin header is present. Those requests are
+/// deliberately unaffected by this check.
+pub fn is_loopback_origin(origin: &[u8]) -> bool {
+    let Ok(origin) = std::str::from_utf8(origin) else {
+        return false;
+    };
+    let rest = if let Some(r) = origin.strip_prefix("http://") {
+        r
+    } else if let Some(r) = origin.strip_prefix("https://") {
+        r
+    } else {
+        return false;
+    };
+    // Split an optional port off the authority.
+    let (host, port) = if let Some(bracketed) = rest.strip_prefix('[') {
+        let Some((inner, tail)) = bracketed.split_once(']') else {
+            return false;
+        };
+        let host = &rest[..inner.len() + 2];
+        match tail.strip_prefix(':') {
+            Some(p) => (host, Some(p)),
+            None if tail.is_empty() => (host, None),
+            None => return false,
+        }
+    } else {
+        match rest.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (rest, None),
+        }
+    };
+    if let Some(p) = port {
+        if p.is_empty() || p.len() > 5 || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        if p.parse::<u16>().is_err() {
+            return false;
+        }
+    }
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "[::1]"
+}
+
 #[allow(clippy::disallowed_methods)] // serde_json::json! expands to unwrap() calls internally
 pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Result<()> {
     let ctx = Arc::new(ctx);
@@ -1963,9 +2015,11 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         SocketAddr::from(([127, 0, 0, 1], API_PORT))
     };
 
-    // Create CORS layer
+    // Create CORS layer restricted to localhost / loopback origins to prevent cross-origin attack vectors
     let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
+            is_loopback_origin(origin.as_bytes())
+        }))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers(tower_http::cors::Any);
 
@@ -2034,6 +2088,63 @@ pub async fn start_api_server(ctx: ApiContext, bind_addr: Option<String>) -> Res
         .context("API server error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod cors_origin_tests {
+    use super::is_loopback_origin;
+
+    #[test]
+    fn loopback_origins_are_allowed() {
+        for o in [
+            "http://localhost",
+            "https://localhost",
+            "http://localhost:3000",
+            "https://localhost:8443",
+            "http://127.0.0.1",
+            "https://127.0.0.1:9876",
+            "http://[::1]",
+            "http://[::1]:5173",
+            "http://LOCALHOST:8080",
+        ] {
+            assert!(is_loopback_origin(o.as_bytes()), "should allow {o}");
+        }
+    }
+
+    #[test]
+    fn hostile_origins_are_rejected() {
+        for o in [
+            "http://localhost.evil.com",
+            "http://localhost@evil.com",
+            "http://localhost:80@evil.com",
+            "http://127.0.0.1.evil.com",
+            "http://127.0.0.1@evil.com",
+            "http://localhost/",
+            "http://localhost/path",
+            "http://localhost?x=1",
+            "http://localhost:",
+            "http://localhost:abc",
+            "http://localhost:99999",
+            "http://[::1]evil.com",
+            "http://[::1",
+            "http://[::2]",
+            "http://localhostevil.com",
+            "http://127.0.0.2",
+            "null",
+            "file://",
+            "file:///etc/passwd",
+            "file://localhost",
+            "ftp://localhost",
+            "localhost",
+            "http://",
+            "",
+            " http://localhost",
+            "http://localhost ",
+        ] {
+            assert!(!is_loopback_origin(o.as_bytes()), "should reject {o:?}");
+        }
+        assert!(!is_loopback_origin(&[0xff, 0xfe, 0x00]));
+    }
 }
 
 #[cfg(test)]
