@@ -1666,9 +1666,14 @@ impl MeshService {
         // report arriving while the bridge is hidden is stashed and
         // replayed once all windows close (R10-F2), so no state update
         // is ever dropped.
+        let last_cellular = self
+            .last_network
+            .lock()
+            .map(|(_, cellular)| cellular)
+            .unwrap_or(false);
         match self.dispatch_bridge_event(|bridge| {
             bridge.on_battery_changed(profile.battery_pct, profile.is_charging);
-            bridge.on_network_changed(profile.has_wifi, false); // Cellular not in profile yet
+            bridge.on_network_changed(profile.has_wifi, last_cellular);
             bridge.on_motion_changed(profile.motion_state);
         }) {
             BridgeDispatch::WindowOpen => {
@@ -1836,29 +1841,28 @@ impl MeshService {
     }
 
     pub fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
+        // Record the new report first so the device-state echo to the platform
+        // bridge carries the real cellular flag instead of a hardcoded false.
+        // A false echo made the platform see a "change" it never made and
+        // report it straight back (ping-pong).
+        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
+
         let mut profile = self
             .current_device_profile
             .lock()
             .clone()
             .unwrap_or_default();
         profile.has_wifi = has_wifi;
-        // profile doesn't have has_cellular yet, but we've ingested it.
         self.update_device_state(profile);
 
-        // Revival wake: a genuine interface change (for example the Wi-Fi to
-        // cellular handover) is a reason to expect previously unreachable
-        // peers may now be reachable. The first report only records the
-        // baseline; repeated identical reports are not events. The swarm
-        // rate limits wakes per source, so a flapping platform callback
-        // cannot hold addresses at the backoff floor.
-        let previous = self.last_network.lock().replace((has_wifi, has_cellular));
-        if let Some((prev_wifi, prev_cellular)) = previous {
-            if prev_wifi != has_wifi {
-                self.dispatch_network_event(crate::transport::NetworkEvent::WifiChanged);
-            }
-            if prev_cellular != has_cellular {
-                self.dispatch_network_event(crate::transport::NetworkEvent::CellularChanged);
-            }
+        // Revival wake: a genuine interface change (available, lost, or the
+        // Wi-Fi to cellular handover) is a reason to expect previously
+        // unreachable peers may now be reachable. The first report only
+        // records the baseline; repeated identical reports are not events.
+        // The swarm rate limits wakes per source, so a flapping platform
+        // callback cannot hold addresses at the backoff floor.
+        for event in network_change_events(previous, (has_wifi, has_cellular)) {
+            self.dispatch_network_event(event);
         }
     }
 
@@ -4948,6 +4952,25 @@ fn stored_at_millis(db: &sled::Db, key: &[u8]) -> Option<u64> {
     (record.stored_at_millis != 0).then_some(record.stored_at_millis)
 }
 
+/// Map a platform network report onto discovery events. The first report
+/// (`previous == None`) only establishes the baseline and yields nothing; an
+/// identical report yields nothing; each flipped interface yields its event.
+fn network_change_events(
+    previous: Option<(bool, bool)>,
+    current: (bool, bool),
+) -> Vec<crate::transport::NetworkEvent> {
+    let mut events = Vec::new();
+    if let Some((prev_wifi, prev_cellular)) = previous {
+        if prev_wifi != current.0 {
+            events.push(crate::transport::NetworkEvent::WifiChanged);
+        }
+        if prev_cellular != current.1 {
+            events.push(crate::transport::NetworkEvent::CellularChanged);
+        }
+    }
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5078,6 +5101,45 @@ mod tests {
     use super::*;
     use crate::store::ledger_entry::LedgerManager;
     use tempfile::tempdir;
+
+    #[test]
+    fn network_change_events_baseline_and_noop_emit_nothing() {
+        assert!(network_change_events(None, (true, false)).is_empty());
+        assert!(network_change_events(Some((true, false)), (true, false)).is_empty());
+    }
+
+    #[test]
+    fn network_change_events_cover_handover_and_loss() {
+        use crate::transport::NetworkEvent;
+        assert_eq!(
+            network_change_events(Some((true, false)), (false, true)),
+            vec![NetworkEvent::WifiChanged, NetworkEvent::CellularChanged]
+        );
+        // Lost: both interfaces down.
+        assert_eq!(
+            network_change_events(Some((false, true)), (false, false)),
+            vec![NetworkEvent::CellularChanged]
+        );
+        // Available again.
+        assert_eq!(
+            network_change_events(Some((false, false)), (true, false)),
+            vec![NetworkEvent::WifiChanged]
+        );
+    }
+
+    #[test]
+    fn network_change_events_reset_backoff_and_wake_redial() {
+        use crate::transport::dial_policy::DialPolicyManager;
+        let manager = DialPolicyManager::new();
+        let addr = "/ip4/203.0.113.7/tcp/9001";
+        for _ in 0..8 {
+            manager.record_dial_failure(addr, None);
+        }
+        let events = network_change_events(Some((true, false)), (false, true));
+        assert!(!events.is_empty());
+        let woken: usize = events.iter().map(|e| manager.on_network_event(e)).sum();
+        assert!(woken >= 1, "handover must wake the backed-off address");
+    }
 
     #[test]
     fn dial_error_is_skip_matches_only_the_neutral_prefix() {
@@ -8013,5 +8075,161 @@ mod tests {
             .name("rx-stall-watchdog-test".to_string())
             .spawn(|| {});
         assert!(note_rx_stall_watchdog_spawn(ok));
+    }
+
+    // -----------------------------------------------------------------------
+    // PR #556: network-change echo and ordering
+    // -----------------------------------------------------------------------
+
+    /// Recording platform bridge that behaves like a real platform: when the
+    /// core echoes a network state different from the one the platform just
+    /// reported, it reports the echoed state back (the ping-pong path).
+    struct NetRecorder {
+        service: std::sync::Weak<MeshService>,
+        reported: (bool, bool),
+        echoes: parking_lot::Mutex<Vec<(bool, bool)>>,
+        callbacks_into_core: std::sync::atomic::AtomicUsize,
+    }
+
+    struct NetRecorderHandle(std::sync::Arc<NetRecorder>);
+
+    impl PlatformBridge for NetRecorderHandle {
+        fn on_battery_changed(&self, _battery_pct: u8, _is_charging: bool) {}
+        fn on_network_changed(&self, has_wifi: bool, has_cellular: bool) {
+            self.0.echoes.lock().push((has_wifi, has_cellular));
+            if (has_wifi, has_cellular) != self.0.reported {
+                self.0
+                    .callbacks_into_core
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if let Some(service) = self.0.service.upgrade() {
+                    service.on_network_changed(has_wifi, has_cellular);
+                }
+            }
+        }
+        fn on_motion_changed(&self, _motion: MotionState) {}
+        fn on_ble_data_received(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_entering_background(&self) {}
+        fn on_entering_foreground(&self) {}
+        fn send_ble_packet(&self, _peer_id: String, _data: Vec<u8>) {}
+        fn on_proximity_data_received(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn send_proximity_packet(
+            &self,
+            _peer_id: String,
+            _transport: ProximityTransport,
+            _data: Vec<u8>,
+        ) {
+        }
+        fn wifi_aware_publish(&self, _service_name: String, _service_info: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_subscribe(&self, _service_name: String) -> bool {
+            false
+        }
+        fn wifi_aware_create_data_path(&self, _peer_id: String, _pmk: Vec<u8>) -> bool {
+            false
+        }
+        fn wifi_aware_stop(&self) {}
+        fn wifi_direct_discover_peers(&self) -> bool {
+            false
+        }
+        fn wifi_direct_stop_discovery(&self) {}
+        fn wifi_direct_connect(&self, _device_address: String) -> bool {
+            false
+        }
+        fn wifi_direct_create_group(&self, _group_name: String) -> bool {
+            false
+        }
+        fn wifi_direct_remove_group(&self) {}
+    }
+
+    fn net_recorder_fixture(
+        reported: (bool, bool),
+    ) -> (std::sync::Arc<MeshService>, std::sync::Arc<NetRecorder>) {
+        let service = std::sync::Arc::new(MeshService::new(test_mesh_service_config()));
+        let recorder = std::sync::Arc::new(NetRecorder {
+            service: std::sync::Arc::downgrade(&service),
+            reported,
+            echoes: parking_lot::Mutex::new(Vec::new()),
+            callbacks_into_core: std::sync::atomic::AtomicUsize::new(0),
+        });
+        service.set_platform_bridge(Some(Box::new(NetRecorderHandle(recorder.clone()))));
+        (service, recorder)
+    }
+
+    #[test]
+    fn network_changed_echoes_real_cellular_flag_to_bridge() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let (service, recorder) = net_recorder_fixture((false, true));
+
+        service.on_network_changed(false, true);
+
+        let echoes = recorder.echoes.lock().clone();
+        assert_eq!(
+            echoes,
+            vec![(false, true)],
+            "the echo must carry the real has_cellular flag, not a hardcoded false"
+        );
+    }
+
+    #[test]
+    fn network_changed_records_last_network_before_echo_and_events() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let (service, recorder) = net_recorder_fixture((false, true));
+
+        service.on_network_changed(false, true);
+        assert_eq!(
+            *service.last_network.lock(),
+            Some((false, true)),
+            "last_network must hold the reported state after the call"
+        );
+
+        // An identical second report is not a change: no network event is
+        // derived from it, and the echo repeats the same values rather than
+        // flipping the cellular flag.
+        let previous = *service.last_network.lock();
+        assert!(
+            network_change_events(previous, (false, true)).is_empty(),
+            "an identical report must derive no network event"
+        );
+        service.on_network_changed(false, true);
+
+        let echoes = recorder.echoes.lock().clone();
+        assert_eq!(
+            echoes,
+            vec![(false, true), (false, true)],
+            "a repeated report must echo the same values, never a flipped flag"
+        );
+        assert_eq!(
+            *service.last_network.lock(),
+            Some((false, true)),
+            "last_network must be unchanged by an identical report"
+        );
+    }
+
+    #[test]
+    fn network_echo_does_not_call_back_into_on_network_changed() {
+        let _serial = BRIDGE_TEST_SERIAL.lock();
+        let (service, recorder) = net_recorder_fixture((false, true));
+
+        service.on_network_changed(false, true);
+
+        assert_eq!(
+            recorder
+                .callbacks_into_core
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the echo matched the platform report, so the platform must not report back"
+        );
+        assert_eq!(
+            recorder.echoes.lock().len(),
+            1,
+            "exactly one echo per report: no ping-pong"
+        );
     }
 }
