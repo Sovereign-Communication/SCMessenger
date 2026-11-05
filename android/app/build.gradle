@@ -288,7 +288,7 @@ dependencies {
     implementation "com.google.dagger:hilt-android:$hilt_version"
     implementation "com.google.zxing:core:3.5.2"
     implementation 'com.google.android.gms:play-services-code-scanner:16.1.0'
-    implementation 'com.google.android.gms:play-services-base:18.2.0'
+    implementation 'com.google.android.gms:play-services-base:18.11.1'
     ksp "com.google.dagger:hilt-android-compiler:$hilt_version"
     implementation 'androidx.hilt:hilt-navigation-compose:1.1.0'
     
