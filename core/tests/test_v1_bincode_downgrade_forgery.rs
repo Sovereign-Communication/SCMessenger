@@ -82,7 +82,7 @@ fn test_v1_bincode_downgrade_forgery() {
     let bob_x25519_public =
         ed25519_public_to_x25519(&bob_pubkey_bytes).expect("Derive Bob's X25519 public key");
 
-    let mallory_ephemeral_secret = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+    let mallory_ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::rngs::OsRng);
     let mallory_ephemeral_public = X25519PublicKey::from(&mallory_ephemeral_secret);
 
     // ECDH: mallory_ephemeral_secret x bob_x25519_public -> shared_secret

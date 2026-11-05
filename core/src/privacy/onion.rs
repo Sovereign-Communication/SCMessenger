@@ -208,7 +208,7 @@ pub fn construct_onion(
         let destination_public_key = PublicKey::from(destination_pk);
 
         // Generate ephemeral key for destination layer
-        let ephemeral_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+        let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::thread_rng());
         let ephemeral_pk = PublicKey::from(&ephemeral_secret);
 
         // Perform ECDH with destination
@@ -325,7 +325,7 @@ pub fn construct_onion(
             let relay_public_key = PublicKey::from(relay_pk);
 
             // Generate new ephemeral key for this layer
-            let ephemeral_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+            let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::thread_rng());
             let ephemeral_pk = PublicKey::from(&ephemeral_secret);
 
             // ECDH with relay
@@ -617,7 +617,7 @@ mod tests {
     use x25519_dalek::StaticSecret;
 
     fn create_test_bundle() -> (HopAddress, StaticSecret, MlKem768KeyPair) {
-        let x25519_secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let x25519_secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
         let x25519_public = PublicKey::from(&x25519_secret).to_bytes();
         let mlkem_keypair = generate();
 
@@ -636,7 +636,7 @@ mod tests {
     }
 
     fn create_classical_hop() -> (HopAddress, StaticSecret) {
-        let secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
         let pk = PublicKey::from(&secret).to_bytes();
         (HopAddress::Classical(pk), secret)
     }
@@ -803,10 +803,10 @@ mod tests {
     #[test]
     fn test_classical_circuit_unchanged() {
         // Test that classical circuits work exactly as before
-        let relay_secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let relay_secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
         let relay_pk = PublicKey::from(&relay_secret);
 
-        let dest_secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let dest_secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
         let dest_pk = PublicKey::from(&dest_secret);
 
         let path = vec![*relay_pk.as_bytes(), *dest_pk.as_bytes()];

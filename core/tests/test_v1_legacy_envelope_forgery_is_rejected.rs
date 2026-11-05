@@ -75,7 +75,7 @@ fn test_v1_legacy_forged_unsigned_envelope_is_rejected() {
     let bob_x25519_public = ed25519_public_to_x25519(&bob_ed25519_public)
         .expect("Deriving Bob's X25519 public key must succeed");
 
-    let mallory_ephemeral_secret = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+    let mallory_ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::rngs::OsRng);
     let mallory_ephemeral_public = X25519PublicKey::from(&mallory_ephemeral_secret);
     let shared_secret = mallory_ephemeral_secret.diffie_hellman(&bob_x25519_public);
     let symmetric_key = blake3::derive_key(KDF_CONTEXT, shared_secret.as_bytes());
