@@ -4,6 +4,8 @@ import com.scmessenger.android.data.MeshRepository
 import com.scmessenger.android.service.PeerEvent
 import com.scmessenger.android.service.TransportType
 import io.mockk.*
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +26,15 @@ class ContactsViewModelTest {
     private lateinit var mockMeshRepository: MeshRepository
     private val testDispatcher = StandardTestDispatcher()
 
+    // ContactsViewModel.init calls loadContacts(), which launches on
+    // Dispatchers.IO -- not the test dispatcher -- and assigns
+    // `_error.value = null` before it reads the repository. Unless that load is
+    // joined, the reset can land after a test has set an error and wipe the very
+    // value the assertion is about to read. This latch is released from the
+    // stubbed listContacts() and awaited in setup(), so no init-driven write to
+    // `_error` can happen once a test body starts.
+    private lateinit var initLoadDone: CountDownLatch
+
     // Reusable valid 64-char hex public key for tests.
     private val validPublicKey = "a".repeat(64)
 
@@ -41,7 +52,11 @@ class ContactsViewModelTest {
             uniffi.api.ServiceState.STOPPED
         )
         every { mockMeshRepository.discoveredPeers } returns MutableStateFlow(emptyMap())
-        every { mockMeshRepository.listContacts() } returns emptyList()
+        initLoadDone = CountDownLatch(1)
+        every { mockMeshRepository.listContacts() } answers {
+            initLoadDone.countDown()
+            emptyList()
+        }
         every { mockMeshRepository.getContact(any<String>()) } returns null
         every { mockMeshRepository.isBootstrapRelayPeer(any<String>()) } returns false
         every { mockMeshRepository.replayDiscoveredPeerEvents() } returns Unit
@@ -49,6 +64,12 @@ class ContactsViewModelTest {
         every { mockMeshRepository.connectToPeer(any<String>(), any<List<String>>()) } returns Unit
 
         viewModel = ContactsViewModel(mockMeshRepository)
+        // Join init's loadContacts() before the test body runs: past this point
+        // the ViewModel makes no further writes to `_error` from init.
+        assertTrue(
+            "ContactsViewModel.init loadContacts() should finish within 5s",
+            initLoadDone.await(5, TimeUnit.SECONDS)
+        )
     }
 
     @After
