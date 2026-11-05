@@ -2,7 +2,14 @@
 
 Fourth slice of the 2026-11-05 lane session. Waves C2 and C5 are defined here from the
 plan of record's own PR census rather than from the lane's shorthand, then discharged:
-one car repaired and pushed, four refused with the evidence that establishes each.
+one car repaired and pushed, five refused with the evidence that establishes each.
+
+Corrections applied 2026-11-05 after an independent conformance review returned CHANGES:
+the census table now carries all 40 PR rows (it previously omitted #639), the refusal count
+matches the five cars enumerated, #609's job coverage is reconciled against the authoritative
+required-checks list, #643's claim is stated as a guard-preservation risk under conflict
+resolution rather than a completed deletion, and check-run citations are paired with the
+workflow run or job they belong to instead of standing alone as CI evidence.
 
 ## 1. What C2 and C5 actually are
 
@@ -18,6 +25,8 @@ each PR to a lane and a batch; the counts below are the full census, not a sampl
 | `batch D; core lane` | 4 | #550, #554, #556, #509 |
 | `held; operator/platform reviewer` | 5 | #489, #220, #216, #208, #178 |
 | `parked; dependency owner` | 20 | the dependabot set |
+| `scope decision; platform owner` | 1 | **#639** (the row this table previously omitted) |
+| **total** | **40** | `awk` over the census counts 40 rows labeled exactly as above |
 
 **C2 is the four CI-lane PRs, not #601 alone.** The lane's shorthand "C2 = #601" was an
 incomplete label: #601 is one of four, and the other three (#643, #611, #609) are
@@ -75,7 +84,7 @@ residue (`label`, `WASM`, `JavaScript Linting`, each with the billing annotation
 runner assigned), so no genuine failure survived the merge. The required contexts were
 still queued at that read; a terminal read follows in the slice's final state.
 
-## 3. #643 - refused: it would delete #661's rollback switch
+## 3. #643 - refused: its expression drops #661's rollback guard (a conflict-resolution risk, not a completed deletion)
 
 #643's `Test` leg, read from the branch at `0340c094468f`:
 
@@ -94,10 +103,15 @@ runs-on: ${{ matryx... && (github.event_name == 'push' || ...)
 ```
 
 `USE_OCI_RUNNER` occurs **1** time in main's expression and **0** times in #643's (read:
-`git show origin/main:.github/workflows/ci.yml` and the branch blob, 10:33Z). Landing
-#643 as written would remove the rollback switch that #661's review added deliberately
-after the cubic P2 finding: with the switch gone, `USE_OCI_RUNNER=false` would no longer
-force a rusty Test leg back onto hosted runners.
+`git show origin/main:.github/workflows/ci.yml` and the branch blob, 10:33Z).
+
+**Stated precisely, because the earlier wording overclaimed.** #643 cannot land as-is: it is
+`CONFLICTING` against `main`, so nothing is deleted today. The finding is a
+**guard-preservation risk that any resolution must not take its side on**: #643's Test-leg
+expression has no `USE_OCI_RUNNER != 'false'` term, so resolving that conflict in the PR's
+favour would drop the rollback switch #661's review added deliberately after the cubic P2
+finding - and with it the ability to force a rusty Test leg back onto hosted runners. That
+is a decision about which side of a conflict wins, which is why it is the CI owner's call.
 
 #643 also contains genuinely new and useful content - a dependabot re-head exclusion and
 a `CI_SMALL_RUNNER` indirection that keeps small jobs off the two ARM slots, which is
@@ -108,8 +122,19 @@ rebasing it is a scope decision for the CI owner, not a lane repair. Refused on 
 ## 4. #609 - refused: it would strand required contexts on runners that do not exist
 
 #609 replaces `runs-on: ubuntu-latest` with
-`${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}` on
-`Detect changed areas`, `Handoff ownership scope`, `Naming policy` and `Lint`.
+`${{ vars.USE_UBICLOUD == 'false' && 'ubuntu-latest' || 'ubicloud-standard-2' }}` on **five**
+jobs (read: `git diff origin/main <head> -- .github/workflows/ci.yml` counts 5 added
+`ubicloud-standard-2` `runs-on` lines; the job names are `changes`, `handoff-scope`,
+`naming-policy`, `lint`, `orchestration`, which display as `Detect changed areas`, `Handoff
+ownership scope`, `Naming policy`, `Lint`, `Orchestration control plane`).
+
+**How many of those are required contexts: two.** The authoritative list is
+`branches/main/protection/required_status_checks` (read: 12:15:57Z), which returns exactly
+five contexts - `Repository Hygiene Checks`, `Lint`, `Rust Linting`, `Test (ubuntu-latest)`,
+`Handoff ownership scope`. Of #609's five redirected jobs, exactly **`Handoff ownership
+scope` and `Lint`** are on that list; the `changes` job is not a context itself but gates the
+whole test fan-out behind it. An earlier version of this record said "three" in this section
+and "two" in the status; **two is correct** and the discrepancy is closed here.
 
 Two reads make this dangerous rather than merely pending:
 
@@ -120,18 +145,29 @@ Two reads make this dangerous rather than merely pending:
 2. **No such runner is registered.** `actions/runners` returns exactly two, both OCI:
    `oci-a1-phx-1` and `oci-a1-phx-2` (read: 10:27:37Z).
 
-Landing #609 today would point three required contexts and the `changes` gate job at a
+Landing #609 today would point two required contexts (`Handoff ownership scope`, `Lint`)
+and the `changes` gate job at a
 runner label nobody has registered, so they would queue forever and never report - main's
 green base broke by construction. The fix is to provision Ubicloud runners (the subject
 of open issue #607) or invert the default; both are owner/infra decisions. Refused.
 
-## 5. #601 - refused (untouched, carried)
+## 5. #601 - DISPOSITIONED: closed as superseded (2026-11-05)
 
-Untouched by this slice, per the standing boundary. Its disposition stands as recorded in
-register row A4: content superseded in effect by merged #661, head `CONFLICTING`, and one
-genuine three-week-old failure (`Android JVM Unit Tests`, check-run `116275412600`, run
-`38690619216`, started 2026-10-15). Zero reviews (read: 10:35Z). Needs an owner
-disposition (close as superseded or rewrite).
+Resolved in the follow-up pass, not left carried. Ruling filed on the PR
+(`#issuecomment-6657824603`) and the PR **closed**, state read back as `CLOSED` (12:21Z).
+
+The evidence that made closing correct rather than blocked: its `ci.yml` delta since
+merge-base `542f01e8` routes two jobs to the pool, **moves two other jobs back to
+`runs-on: ubuntu-latest`**, and adds inline self-hosted Rust/cleanup steps (read: `git diff
+542f01e8 7f93eed6 -- .github/workflows/ci.yml`, 12:20Z). Main already carries the same
+mechanism more completely - **8 routing tokens against the PR's 3** (12:17Z), the
+`self-hosted-rust` action it adds inline, and a `USE_OCI_RUNNER` rollback switch the PR
+predates - and main's required contexts are 5/5 `success` (12:18Z). So the PR's purpose is
+discharged, and its remaining unique hunks would *reduce* main's routing.
+
+It never landed on one genuine failure from 2026-10-15 (`Android JVM Unit Tests`, run
+`38690619216`) and has since gone `CONFLICTING`. The branch is retained; reopening is one
+click if the CI owner wants the two-job un-routing re-derived against current main.
 
 ## 6. C5 - batch E refused: the chain is gated, and its base is untouched
 
@@ -153,12 +189,25 @@ plus a stacked base on an untouched car.
 | Car | Wave | Verdict | Class |
 |---|---|---|---|
 | #611 | C2 | **repaired, pushed, new head `e03c1d7df43a`** | repair |
-| #643 | C2 | refused | owner scope decision (deletes #661's rollback switch) |
+| #643 | C2 | refused | owner scope decision (resolution must not drop #661's rollback guard) |
 | #609 | C2 | refused | owner/infra decision (`USE_UBICLOUD=true`, no runner registered) |
-| #601 | C2 | refused, untouched | owner disposition (superseded + genuine stale failure) |
+| #601 | C2 | **closed as superseded** (disposition filed, state read back) | superseded in mechanism |
 | #521 | C5 | refused, untouched | missing external PASS (zero reviews) |
 | #599 | C5 | refused | missing external PASS + stacked on untouched base |
 
 Not touched, per the standing boundaries: #506, #507, #508 (no runs dispatched), #178,
 #208, #510, #489, #594, #620, #622, #365, and C1. No merge was performed on any PR. No
 run was dispatched except the one automatic run that #611's own push triggered.
+
+## 8. Citation rule for this record
+
+An **Actions check-run is not, by itself, CI evidence** in this record. A check-run carries a
+name and a conclusion; it does not show what ran or whether anything ran at all - a
+billing-locked job and a passing job are both just "Test (ubuntu-latest)" to the check-runs
+API, distinguishable only by `steps`, `runner_name` and the annotation.
+
+So every CI claim above is cited as a pair: the exact-head check-run set **and** the workflow
+run or job it resolves to (`actions/jobs/<id>`, its `steps`, its log summary), plus the read
+timestamp. Where a job log was needed to establish that a green result was real, the log is
+named explicitly (as for #611's 2292-test summary). Where a check-run is cited alone, it is
+because the claim is only about which context reported what - never about the work behind it.
