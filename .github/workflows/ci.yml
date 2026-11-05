@@ -263,12 +263,14 @@ jobs:
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
       - name: Run workspace tests (Windows serialized)
         if: matrix.os == 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
-        run: cargo test --workspace --features test-utils -- --test-threads=1
+        run: cargo nextest run --workspace --features test-utils --test-threads 1
       - name: Run workspace tests
         if: matrix.os != 'windows-latest' && needs.changes.outputs.rust_relevant == 'true'
-        run: cargo test --workspace --features test-utils
+        run: cargo nextest run --workspace --features test-utils
 
   docs:
     name: Docs
