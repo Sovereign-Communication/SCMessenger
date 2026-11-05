@@ -35,20 +35,9 @@
 # tests, the job fails loudly rather than reporting a silent, meaningless
 # green.
 #
-# WHY THIS TRIGGERS ON EVERY PUSH/PR RATHER THAN BEING PATH-FILTERED
+# Documentation-only push and PR events do not change these tests.
+# Required checks remain in their own unfiltered workflows.
 # ---------------------------------------------------------------------
-# The task this job exists for is "every change touching
-# core/src/{crypto,transport,routing,privacy}/", which argues for a `paths:`
-# filter on the trigger below. That filter was deliberately NOT added: this
-# repo's branch protection uses classic required-status-check *contexts*
-# (job/workflow names), and a required context whose workflow is path-filtered
-# leaves any PR that doesn't touch those paths stuck showing "Expected --
-# waiting for a status to be reported" forever, because the workflow (and
-# therefore the check) never runs for that PR at all. None of this repo's
-# other required checks (Lint, Rust Linting, Test) use path filters for
-# exactly that reason. Running unconditionally is a strict superset of
-# "every change touching the perimeter" and costs a few extra minutes of CI
-# time on unrelated PRs in exchange for never getting stuck.
 #
 # NOTE: adding this workflow does not, by itself, make it a *required* check
 # for merging (see the branch-protection findings in the CI-hardening task
@@ -63,8 +52,14 @@ name: Security Regression Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
 
 permissions:
   contents: read
@@ -94,12 +89,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Docs-only PRs (markdown, docs/, HANDOFF/) cannot change what this job
-      # compiles or tests. The job still starts and completes green so the
-      # check reports instead of vanishing; every compile and test step below
-      # is gated on the classifier. detect-platform-change fails open: push to
-      # main, undiffable PRs and unrecognised paths all report
-      # rust_relevant=true, so main's runs are never weakened.
+      # For mixed or code changes, the classifier still gates compile and
+      # test steps and fails open for undiffable or unrecognised paths.
+      # Documentation-only push and PR events are filtered above.
       - name: Detect Rust-relevant change
         id: platform
         uses: ./.github/actions/detect-platform-change

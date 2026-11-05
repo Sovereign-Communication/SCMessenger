@@ -80,6 +80,7 @@ on:
       - 'core/src/store/ledger_entry.rs'
       - 'core/src/store/storage.rs'
       - 'mobile/**'
+      - '!**.md'
   push:
     branches:
       - main
@@ -98,6 +99,7 @@ on:
       - 'core/src/store/ledger_entry.rs'
       - 'core/src/store/storage.rs'
       - 'mobile/**'
+      - '!**.md'
 
 permissions:
   contents: read
