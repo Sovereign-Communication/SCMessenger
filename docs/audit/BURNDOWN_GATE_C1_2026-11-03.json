@@ -1,0 +1,62 @@
+{
+    "wp":  "C1 terminal verdicts and wave 4 rerun launch",
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/issues/602",
+    "instruction":  "Post factual terminal CI verdicts on PRs #609, #630, #632 using current exact-head check-run evidence, then schedule only the required Test (ubuntu-latest) job on #634 and #635 after verifying the job head SHA and absence of a concurrent run on each PR. Do not merge or update any branch in this gate.",
+    "files":  [
+
+              ],
+    "acceptance":  [
+                       "PR #609 head 4ed8168bbf1febfc677979990344d5c9f00ab072: all five required contexts success and no non-success jobs in the current check summary.",
+                       "PR #630 head 08af5fa64924130bdf5840a69f306307de684d8e: all five required contexts success; non-required iOS Build job 120404146215 and Swift Linting job 120404049436 have raw conclusion cancelled.",
+                       "PR #632 head 50c1a661823d219f96b2bfc48fbc02a7508ac636: all five required contexts success; non-required Swift Linting job 120412592156 and Forgery/Negative Security Regression Tests job 120400206789 have raw conclusion cancelled.",
+                       "PR #634 head e9cb31d880b42a0dc10bf3139b74a6ad0cf1ccb8: Test (ubuntu-latest) job 120407991951 is cancelled on this same SHA.",
+                       "PR #635 head de27304f982caf122dcfacc730bafc0bfe99a936: Test (ubuntu-latest) job 120416933135 is cancelled on this same SHA."
+                   ],
+    "evidence":  [
+                     {
+                         "detail":  "PR metadata verified exact head; gh pr checks listed the required contexts successful and no failed/cancelled jobs.",
+                         "source":  "gh pr view/checks 609",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "Exact head 08af5fa64924130bdf5840a69f306307de684d8e; required set success. Raw job conclusions: iOS Build 120404146215 cancelled; Swift Linting 120404049436 cancelled. Parent runs were cancelled.",
+                         "source":  "gh pr view/checks 630; gh run view 39948417724; gh run view 39948417423",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "Exact head 50c1a661823d219f96b2bfc48fbc02a7508ac636; required set success. Raw job conclusions: Swift Linting 120412592156 cancelled; Forgery/Negative Security Regression Tests 120400206789 cancelled. Parent runs were cancelled.",
+                         "source":  "gh pr view/checks 632; gh run view 39949497176; gh run view 39949497180",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Exact head e9cb31d880b42a0dc10bf3139b74a6ad0cf1ccb8; Ubuntu test job 120407991951 cancelled.",
+                         "source":  "gh pr view/checks 634; gh run view 39950659161",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "Exact head de27304f982caf122dcfacc730bafc0bfe99a936; Ubuntu test job 120416933135 cancelled.",
+                         "source":  "gh pr view/checks 635; gh run view 39950760506",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "No run on either current head is queued or in progress; latest run entries are completed.",
+                         "source":  "gh run list --branch for #634 and #635",
+                         "id":  "E6"
+                     }
+                 ],
+    "evidence_map":  {
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6"
+                                                             ]
+                     },
+    "na_justifications":  {
+                              "identity.canon_identity":  "This action reports CI status and triggers two CI jobs; it changes no identity behavior.",
+                              "routing.canon_routing_feed":  "This action reports CI status and triggers two CI jobs; it changes no routing behavior."
+                          },
+    "gate_call_nonce":  "a6d46fdb-e2b6-42ca-b85d-74f8e79f0ad4"
+}

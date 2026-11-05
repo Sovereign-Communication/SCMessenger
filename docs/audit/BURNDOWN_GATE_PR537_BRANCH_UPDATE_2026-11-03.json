@@ -1,0 +1,73 @@
+{
+    "evidence_map":  {
+                         "infra.ci_run_evidence":  [
+                                                       "E3",
+                                                       "E5"
+                                                   ],
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6"
+                                                             ],
+                         "infra.checks_not_weakened":  [
+                                                           "E2",
+                                                           "E3"
+                                                       ],
+                         "infra.bounded_behaviour":  [
+                                                         "E1",
+                                                         "E5"
+                                                     ]
+                     },
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/pull/537",
+    "wp":  "PR537-BRANCH-UPDATE-2026-11-03",
+    "files":  [
+                  ".github/workflows/docker-publish.yml"
+              ],
+    "acceptance":  [
+                       "PR #537 is open at exact head 7a040170263d09431d6dadfa37e68be7c9d0ebc4 and is behind main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef.",
+                       "The complete PR diff changes only docker/metadata-action@v5 to @v6 in .github/workflows/docker-publish.yml.",
+                       "All 23 checks reported SUCCESS at the exact current PR head, including all five required contexts.",
+                       "No new comments, reviews, or inline review comments supersede the current assignment; the current user steering explicitly directs updating and landing #537.",
+                       "The Docker Publish workflow runs on main pushes and workflow_dispatch, logs into Docker Hub, and pushes images; an update to the PR branch does not invoke this main-only publishing workflow."
+                   ],
+    "evidence":  [
+                     {
+                         "detail":  "Exact current head, base, state and mergeability.",
+                         "source":  "gh api repos/Sovereign-Communication/SCMessenger/pulls/537",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "Complete diff is one action reference change from docker/metadata-action@v5 to @v6.",
+                         "source":  "gh pr diff 537",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "All 23 checks SUCCESS on exact head; includes required contexts.",
+                         "source":  "gh pr checks 537 --json name,state,workflow,bucket,link",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Issue comments were read; no review records or inline review comments were returned. The latest PR comment is 2026-11-01; current user steering supersedes its earlier parked disposition.",
+                         "source":  "gh api --paginate repos/Sovereign-Communication/SCMessenger/issues/537/comments; gh api --paginate repos/Sovereign-Communication/SCMessenger/pulls/537/reviews; gh api --paginate repos/Sovereign-Communication/SCMessenger/pulls/537/comments",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "Workflow triggers on main push or workflow_dispatch, logs in for non-PR events, and sets push=true for non-PR events. A PR branch update does not itself publish.",
+                         "source":  "git show origin/main:.github/workflows/docker-publish.yml",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "Current main has the five required contexts and 23 successful check-runs.",
+                         "source":  "gh api repos/Sovereign-Communication/SCMessenger/branches/main/protection/required_status_checks; gh api repos/Sovereign-Communication/SCMessenger/commits/43a3cdbdc709b2a376f4e5d30b9980463c70dfef/check-runs",
+                         "id":  "E6"
+                     }
+                 ],
+    "gate_call_nonce":  "7bb899aa-2e19-40d2-b57b-66c4a7b776ad",
+    "na_justifications":  {
+
+                          },
+    "instruction":  "For the assigned queue PR #537, update its branch from current main only if the exact current head and reviewed diff remain unchanged, using an expected-head guard. Do not merge in this gate. The update should only start ordinary PR validation; it must not dispatch Docker Publish."
+}

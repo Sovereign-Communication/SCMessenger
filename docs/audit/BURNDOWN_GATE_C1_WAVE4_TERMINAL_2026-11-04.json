@@ -1,0 +1,43 @@
+{
+    "acceptance":  [
+                       "PR #634 head e9cb31d880b42a0dc10bf3139b74a6ad0cf1ccb8 matches current head. Test (ubuntu-latest) job 126268168767 on run 39950659161 is SUCCESS; all five required contexts are SUCCESS.",
+                       "PR #635 head de27304f982caf122dcfacc730bafc0bfe99a936 matches current head. Test (ubuntu-latest) job 126268190729 on run 39950760506 is SUCCESS; all five required contexts are SUCCESS.",
+                       "The targeted rerun was the only requested job action for each PR; current overall run conclusion is cancelled because other jobs were cancelled, skipped, or neutral.",
+                       "No branch update or merge is included in these verdict comments."
+                   ],
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/issues/602",
+    "instruction":  "Post factual terminal CI verdicts on assigned PRs #634 and #635. Their exact current heads match the requested heads, each targeted Test (ubuntu-latest) job is successful after the single requested rerun, and all five required contexts are successful. Clearly identify unrelated cancelled, skipped, or neutral jobs; do not merge or update either branch.",
+    "evidence":  [
+                     {
+                         "detail":  "Exact PR head and successful target job 126268168767; all five required contexts success. Run 39950659161 attempt 2 is overall cancelled, so the verdict is limited to the job and required contexts.",
+                         "source":  "gh pr checks 634 and gh run view 39950659161",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "Exact PR head and successful target job 126268190729; all five required contexts success. Run 39950760506 attempt 2 is overall cancelled, so the verdict is limited to the job and required contexts.",
+                         "source":  "gh pr checks 635 and gh run view 39950760506",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "No new review/disposition comment supersedes this C1 action.",
+                         "source":  "gh pr view 634 and gh pr view 635 --json comments",
+                         "id":  "E3"
+                     }
+                 ],
+    "gate_call_nonce":  "67667510-fa8e-4733-a3e4-ccf4acf1a528",
+    "wp":  "C1-WAVE4-TERMINAL-VERDICTS-2026-11-04",
+    "evidence_map":  {
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3"
+                                                             ]
+                     },
+    "files":  [
+
+              ],
+    "na_justifications":  {
+                              "identity.canon_identity":  "This action reports CI outcomes and posts factual PR comments; it does not change identity code.",
+                              "routing.canon_routing_feed":  "This action reports CI outcomes and posts factual PR comments; it does not change routing code."
+                          }
+}

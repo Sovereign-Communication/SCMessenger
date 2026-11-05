@@ -1,0 +1,71 @@
+{
+    "acceptance":  [
+                       "Current exact head is 354a82b003d4da2679510d1e8ce0f45429b1b405; only the test file changed, +22/-1.",
+                       "All five required contexts are SUCCESS at this exact head. Check summary has 32 jobs: 26 success and 6 skipped, with zero failed or pending. Android JVM Unit Tests passed.",
+                       "The test stubs listContacts to count down a CountDownLatch and return an empty list, then awaits for at most five seconds in setup before each test body.",
+                       "Current origin/main implementation sets _error.value=null before calling listContacts; after success it assigns contacts and filters nearby peers, while _error is assigned after that point only in the exception handler. The stubbed successful empty-list path does not throw.",
+                       "The PR base is 73630feb3ef19c5cf15b99dbccc2e32355eab067 while main is 43a3cdbdc709b2a376f4e5d30b9980463c70dfef; update-branch is authorized for assigned queue PRs and will require fresh checks.",
+                       "The latest PR comment records a prior Lucas Gate v2 failure on 2026-10-29. Current steering explicitly orders a canonical helper review; that prior failure is retained as history and does not substitute for this fresh result."
+                   ],
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/pull/639",
+    "instruction":  "Review the exact PR #639 test-only race fix with the canonical helper and all PR discussion. If evidence supports it, refresh the assigned PR branch from current main; do not merge until the refreshed exact head has all required checks green, the base is green, and scope review is clear. The wait in setup is bounded to five seconds.",
+    "diff":  "diff --git a/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt b/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt\n--- a/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt\n+++ b/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt\n@@ -4,6 +4,8 @@\n import io.mockk.*\n+import java.util.concurrent.CountDownLatch\n+import java.util.concurrent.TimeUnit\n@@ -41,7 +52,11 @@\n-        every { mockMeshRepository.listContacts() } returns emptyList()\n+        initLoadDone = CountDownLatch(1)\n+        every { mockMeshRepository.listContacts() } answers {\n+            initLoadDone.countDown()\n+            emptyList()\n+        }\n@@ -49,6 +64,12 @@\n         viewModel = ContactsViewModel(mockMeshRepository)\n+        assertTrue(\n+            \"ContactsViewModel.init loadContacts() should finish within 5s\",\n+            initLoadDone.await(5, TimeUnit.SECONDS)\n+        )",
+    "evidence":  [
+                     {
+                         "detail":  "Exact current PR head and one-file +22/-1 patch.",
+                         "source":  "gh api pulls/639 and gh api pulls/639/files",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "32 jobs enumerated: 26 success, 6 skipped, zero failed/pending; five required contexts all success; Android JVM Unit Tests success.",
+                         "source":  "gh pr checks 639 --json name,state,bucket",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "loadContacts clears _error before listContacts, then writes contacts and nearby peers; error assignment after the repository call is only in catch.",
+                         "source":  "git show origin/main:android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ContactsViewModel.kt",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Three issue comments read; latest is 6486849131 (2026-10-29) describing prior final Gate failure. No submitted reviews or inline comments.",
+                         "source":  "gh issue view 639 --json comments; gh api pulls/639/reviews; gh api pulls/639/comments",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "All five required contexts currently successful on main.",
+                         "source":  "gh api required_status_checks and check-runs on main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "Explicitly directs #639 canonical helper review, Rule-8 comment review, and landing; assigned queue branch update is within assignment.",
+                         "source":  "current user steering 2026-11-03",
+                         "id":  "E6"
+                     }
+                 ],
+    "gate_call_nonce":  "ef0fbc4d-09de-4f84-9f8c-90531babdc15",
+    "wp":  "PR639-CANONICAL-REVIEW-2026-11-03",
+    "evidence_map":  {
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6"
+                                                             ],
+                         "testplan.named_test":  [
+                                                     "E1",
+                                                     "E2"
+                                                 ],
+                         "concurrency.shared_state_safe":  [
+                                                               "E1",
+                                                               "E3"
+                                                           ]
+                     },
+    "files":  [
+                  "android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt"
+              ],
+    "na_justifications":  {
+
+                          }
+}

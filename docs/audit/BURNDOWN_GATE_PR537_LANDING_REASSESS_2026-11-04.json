@@ -1,0 +1,96 @@
+{
+    "acceptance":  [
+                       "Current PR head ffdd56ace21c9b47dbb5fd148feac77f1ff5c03d is based on prior head 7a040170263d09431d6dadfa37e68be7c9d0ebc4 and current main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef.",
+                       "The full PR diff is exactly one uses-line change from docker/metadata-action@v5 to @v6.",
+                       "All 26 PR checks are successful at the exact head; all five branch-protection contexts are successful on the current main.",
+                       "GitHub Actions job timeout default is 360 minutes, so the workflow has a platform-enforced bound even though this file has no explicit timeout-minutes.",
+                       "No PR validation run executes Docker Publish itself because that workflow triggers on main push or workflow_dispatch, not pull_request. The latest main Docker Publish success used the pre-change v5 workflow; first v6 execution will be the expected main push after merge.",
+                       "The current user explicitly directs the updated PR to be landed, and the post-merge Docker Publish result will be inspected before marking the PR verified."
+                   ],
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/pull/537",
+    "instruction":  "Merge assigned PR #537 as directed after confirming its updated exact head, current required checks, current green base, full PR scope, and comment history. The one-line action bump changes no build steps, retry loops, or check semantics. After merge, treat the main-push Docker Publish run as required verification evidence.",
+    "diff":  "diff --git a/.github/workflows/docker-publish.yml b/.github/workflows/docker-publish.yml\r\nindex 6d5d0ed38..9a3b31575 100644\r\n--- a/.github/workflows/docker-publish.yml\r\n+++ b/.github/workflows/docker-publish.yml\r\n@@ -36,7 +36,7 @@ jobs:\r\n \r\n       - name: Extract Docker metadata\r\n         id: meta\r\n-        uses: docker/metadata-action@v5\r\n+        uses: docker/metadata-action@v6\r\n         with:\r\n           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\r\n           tags: |",
+    "evidence":  [
+                     {
+                         "detail":  "Exact current head/base/merge state and complete one-line diff.",
+                         "source":  "gh api pulls/537; gh pr diff 537",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "All 26 checks success at current head, including all five required contexts.",
+                         "source":  "gh pr checks 537 --json name,state,bucket,link",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "Five required contexts all success; all 23 current main check-runs success.",
+                         "source":  "gh api required status checks and check-runs for main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Exit 0; six commits, one changed file; 26 checks green; no scope, conflict, or merge blocker.",
+                         "source":  "scripts/pr_scope.sh 537",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "Main push or workflow_dispatch runs login and pushes image tags; no PR trigger.",
+                         "source":  "git show origin/main:.github/workflows/docker-publish.yml",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "Official v6.0.0 uses Node24, requires runner 2.327.1+, and documents hash input behavior; current tag values contain no hash.",
+                         "source":  "gh api repos/docker/metadata-action/releases/tags/v6.0.0 and action.yml",
+                         "id":  "E6"
+                     },
+                     {
+                         "detail":  "GitHub documents a default 360-minute job timeout; the workflow is platform bounded.",
+                         "source":  "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes",
+                         "id":  "E7"
+                     },
+                     {
+                         "detail":  "Latest Docker Publish success 41353398815 ran on old base 297e9e6 with v5; no v6 run exists before merge.",
+                         "source":  "gh run list --workflow Docker Publish --branch main",
+                         "id":  "E8"
+                     },
+                     {
+                         "detail":  "Current steering orders #537 to update, reverify and land; older parked comment is superseded. No PR reviews or inline comments.",
+                         "source":  "current user steering 2026-11-03 and all 7 PR comments",
+                         "id":  "E9"
+                     }
+                 ],
+    "gate_call_nonce":  "83424e5d-4dd5-4d05-8ef8-0fdfef84aa77",
+    "wp":  "PR537-LANDING-REVIEW-REASSESS-2026-11-04",
+    "evidence_map":  {
+                         "infra.ci_run_evidence":  [
+                                                       "E2",
+                                                       "E5",
+                                                       "E8"
+                                                   ],
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6",
+                                                                 "E7",
+                                                                 "E8",
+                                                                 "E9"
+                                                             ],
+                         "infra.checks_not_weakened":  [
+                                                           "E1",
+                                                           "E2",
+                                                           "E4"
+                                                       ],
+                         "infra.bounded_behaviour":  [
+                                                         "E1",
+                                                         "E5",
+                                                         "E7"
+                                                     ]
+                     },
+    "files":  [
+                  ".github/workflows/docker-publish.yml"
+              ],
+    "na_justifications":  {
+
+                          }
+}

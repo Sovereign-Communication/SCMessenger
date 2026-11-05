@@ -1,0 +1,84 @@
+{
+    "acceptance":  [
+                       "PR #537 is OPEN, current head ffdd56ace21c9b47dbb5fd148feac77f1ff5c03d, current base main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef, mergeState clean.",
+                       "Complete diff remains one line: docker/metadata-action@v5 to @v6 in .github/workflows/docker-publish.yml.",
+                       "All 26 checks on exact current head are SUCCESS; all five required contexts are SUCCESS.",
+                       "Current main check-runs count 23, all success; required branch-protection contexts were read.",
+                       "scripts/pr_scope.sh 537 reports 6 commits, 1 file, all 26 checks green, no merge blockers, and no conflicts.",
+                       "Seven issue comments have been read; latest prior comment is 6564370912 (2026-11-01); no submitted review or inline review comments. Current user steering supersedes earlier park notes.",
+                       "The workflow triggers Docker Publish on main push or workflow_dispatch, logs into Docker Hub, and pushes image tags. The latest prior Docker Publish success 41353398815 was on base 297e9e6 using v5; no v6 production execution has yet occurred. The explicitly authorized merge will trigger the expected main-push publish; check it after merge."
+                   ],
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/pull/537",
+    "instruction":  "Merge assigned PR #537 as the first green queue PR, using the repository merge convention. The current steering explicitly orders update-branch, reverify, and land. Require current exact-head checks green, current main green, and no pr_scope blocker; then verify the expected main-push Docker Publish result after merge.",
+    "diff":  "diff --git a/.github/workflows/docker-publish.yml b/.github/workflows/docker-publish.yml\r\nindex 6d5d0ed38..9a3b31575 100644\r\n--- a/.github/workflows/docker-publish.yml\r\n+++ b/.github/workflows/docker-publish.yml\r\n@@ -36,7 +36,7 @@ jobs:\r\n \r\n       - name: Extract Docker metadata\r\n         id: meta\r\n-        uses: docker/metadata-action@v5\r\n+        uses: docker/metadata-action@v6\r\n         with:\r\n           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\r\n           tags: |",
+    "evidence":  [
+                     {
+                         "detail":  "Current exact head/base/state and complete one-line diff.",
+                         "source":  "gh api pulls/537 and gh pr diff 537",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "All 26 current exact-head checks SUCCESS, including five required contexts.",
+                         "source":  "gh pr checks 537 --json name,state,bucket,link",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "Current main SHA 43a3cdbdc709b2a376f4e5d30b9980463c70dfef has 23 successful check-runs and the five required contexts.",
+                         "source":  "git fetch origin main; gh api current main check-runs and branch protection",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Exit 0; six commits, one changed file, 26 checks green, no conflicts or merge blockers.",
+                         "source":  "scripts/pr_scope.sh 537",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "Full PR comment history read; zero submitted/inline reviews; new steering explicitly directs landing.",
+                         "source":  "gh api issue comments/reviews and current user steering",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "Main-push publishing side effect verified; latest pre-change main publish succeeded on 297e9e6 and does not validate v6.",
+                         "source":  "git show origin/main:.github/workflows/docker-publish.yml and gh run list --workflow Docker Publish --branch main",
+                         "id":  "E6"
+                     },
+                     {
+                         "detail":  "Upstream v6.0.0 uses Node24, requires runner 2.327.1+, and its documented behavior changes are unrelated to current tag values.",
+                         "source":  "gh api repos/docker/metadata-action/releases/tags/v6.0.0 and action.yml at v6.0.0",
+                         "id":  "E7"
+                     }
+                 ],
+    "gate_call_nonce":  "26963156-3fc1-458c-a2bc-993b8138b470",
+    "wp":  "PR537-LANDING-REVIEW-2026-11-04",
+    "evidence_map":  {
+                         "infra.ci_run_evidence":  [
+                                                       "E2",
+                                                       "E6"
+                                                   ],
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6",
+                                                                 "E7"
+                                                             ],
+                         "infra.checks_not_weakened":  [
+                                                           "E1",
+                                                           "E2",
+                                                           "E4"
+                                                       ],
+                         "infra.bounded_behaviour":  [
+                                                         "E1",
+                                                         "E6",
+                                                         "E7"
+                                                     ]
+                     },
+    "files":  [
+                  ".github/workflows/docker-publish.yml"
+              ],
+    "na_justifications":  {
+
+                          }
+}

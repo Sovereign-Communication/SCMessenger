@@ -1,0 +1,71 @@
+{
+    "acceptance":  [
+                       "PR head 354a82b003d4da2679510d1e8ce0f45429b1b405 has one test file changed by +22/-1.",
+                       "All five required contexts are successful on this exact head. There are 32 check-runs: 26 success, 6 skipped, zero failures and zero pending; Android JVM Unit Tests succeeded.",
+                       "The change adds a standard CountDownLatch with a five-second bounded await in test setup. The mock counts down when listContacts is called and returns an empty list.",
+                       "On current main, loadContacts clears _error before calling listContacts. In the successful empty-list path it updates contacts and nearby peers; the later _error assignment is only in catch.",
+                       "The PR has no submitted review and no inline review comments. Three conversation comments have been read; the newest is the 2026-10-29 final-gate checkpoint.",
+                       "Current PR base 73630feb3ef19c5cf15b99dbccc2e32355eab067 is behind main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef, so assigned-branch refresh will produce a new head and new checks."
+                   ],
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/pull/639",
+    "instruction":  "For assigned PR #639, update the branch from current main with an exact-head guard, re-run validation on the new head, and merge only when all five required contexts are successful on that head and current main remains green. The current steering explicitly assigns this PR for canonical helper review, Rule-8 comment review, and landing.",
+    "diff":  "diff --git a/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt b/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt\r\nindex 54d14bb9a..2e8d5a4b2 100644\r\n--- a/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt\r\n+++ b/android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt\r\n@@ -4,6 +4,8 @@ import com.scmessenger.android.data.MeshRepository\r\n import com.scmessenger.android.service.PeerEvent\r\n import com.scmessenger.android.service.TransportType\r\n import io.mockk.*\r\n+import java.util.concurrent.CountDownLatch\r\n+import java.util.concurrent.TimeUnit\r\n import kotlinx.coroutines.Dispatchers\r\n import kotlinx.coroutines.ExperimentalCoroutinesApi\r\n import kotlinx.coroutines.flow.MutableStateFlow\r\n@@ -24,6 +26,15 @@ class ContactsViewModelTest {\r\n     private lateinit var mockMeshRepository: MeshRepository\r\n     private val testDispatcher = StandardTestDispatcher()\r\n \r\n+    // ContactsViewModel.init calls loadContacts(), which launches on\r\n+    // Dispatchers.IO -- not the test dispatcher -- and assigns\r\n+    // `_error.value = null` before it reads the repository. Unless that load is\r\n+    // joined, the reset can land after a test has set an error and wipe the very\r\n+    // value the assertion is about to read. This latch is released from the\r\n+    // stubbed listContacts() and awaited in setup(), so no init-driven write to\r\n+    // `_error` can happen once a test body starts.\r\n+    private lateinit var initLoadDone: CountDownLatch\r\n+\r\n     // Reusable valid 64-char hex public key for tests.\r\n     private val validPublicKey = \"a\".repeat(64)\r\n \r\n@@ -41,7 +52,11 @@ class ContactsViewModelTest {\r\n             uniffi.api.ServiceState.STOPPED\r\n         )\r\n         every { mockMeshRepository.discoveredPeers } returns MutableStateFlow(emptyMap())\r\n-        every { mockMeshRepository.listContacts() } returns emptyList()\r\n+        initLoadDone = CountDownLatch(1)\r\n+        every { mockMeshRepository.listContacts() } answers {\r\n+            initLoadDone.countDown()\r\n+            emptyList()\r\n+        }\r\n         every { mockMeshRepository.getContact(any\u003cString\u003e()) } returns null\r\n         every { mockMeshRepository.isBootstrapRelayPeer(any\u003cString\u003e()) } returns false\r\n         every { mockMeshRepository.replayDiscoveredPeerEvents() } returns Unit\r\n@@ -49,6 +64,12 @@ class ContactsViewModelTest {\r\n         every { mockMeshRepository.connectToPeer(any\u003cString\u003e(), any\u003cList\u003cString\u003e\u003e()) } returns Unit\r\n \r\n         viewModel = ContactsViewModel(mockMeshRepository)\r\n+        // Join init\u0027s loadContacts() before the test body runs: past this point\r\n+        // the ViewModel makes no further writes to `_error` from init.\r\n+        assertTrue(\r\n+            \"ContactsViewModel.init loadContacts() should finish within 5s\",\r\n+            initLoadDone.await(5, TimeUnit.SECONDS)\r\n+        )\r\n     }\r\n \r\n     @After",
+    "evidence":  [
+                     {
+                         "detail":  "Exact PR head and full exact one-file diff fetched from GitHub.",
+                         "source":  "gh api pulls/639 and gh pr diff 639",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "All 32 jobs listed; five required contexts and Android JVM Unit Tests successful; 6 non-required jobs skipped; zero fail/pending.",
+                         "source":  "gh pr checks 639 --json name,state,bucket",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "loadContacts clears _error before listContacts. In success path later writes are contacts/nearby peers; error write after the call is only in catch.",
+                         "source":  "git show origin/main:android/app/src/main/java/com/scmessenger/android/ui/viewmodels/ContactsViewModel.kt",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Three discussion comments reviewed, newest ID 6486849131; no submitted reviews or inline comments.",
+                         "source":  "gh issue view 639 --json comments; gh api pulls/639/reviews; gh api pulls/639/comments",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "Current main five required contexts are successful.",
+                         "source":  "gh api current main check-runs at 43a3cdbdc709b2a376f4e5d30b9980463c70dfef",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "Explicit assignment to canonical helper review, Rule-8 comment review, and landing; branch refresh for assigned queue PRs is authorized.",
+                         "source":  "current user steering 2026-11-03",
+                         "id":  "E6"
+                     }
+                 ],
+    "gate_call_nonce":  "53c97f92-4492-45a0-913c-3bddd05d03fe",
+    "wp":  "PR639-CANONICAL-REVIEW-RETRY-2026-11-03",
+    "evidence_map":  {
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6"
+                                                             ],
+                         "testplan.named_test":  [
+                                                     "E1",
+                                                     "E2"
+                                                 ],
+                         "concurrency.shared_state_safe":  [
+                                                               "E1",
+                                                               "E3"
+                                                           ]
+                     },
+    "files":  [
+                  "android/app/src/test/java/com/scmessenger/android/ui/viewmodels/ContactsViewModelTest.kt"
+              ],
+    "na_justifications":  {
+
+                          }
+}
