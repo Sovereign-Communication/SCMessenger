@@ -96,3 +96,24 @@ STEERING REQUEST on PR #653: oversight activates the CircleCI project
 (`gh/Treystu/SCMessenger`, id `033e97e6`) and posts the first pipeline read.
 The branch-protection required-context switch stays a merge-time governance
 item and is not performed by the lane.
+
+## Addendum (same session): the lane's pre-existing hygiene red, cured and CI-verified
+
+The first push of the port exposed that `Repository Hygiene Checks` had been
+red since `91917dab0` / `72719a008` (check-run `127320201813` on `a85ebea8`,
+`Process completed with exit code 1`, step 4 `Check for trailing whitespace`).
+That red was not caused by the port but it would have made wave 1 impossible to
+call green, so it was cured in a second commit (`31f698e27`):
+
+- `docs/audit/C2_C5_WAVE_VERDICTS_2026-11-05.md` - one trailing space in a
+  wrapped `runs-on` quotation removed (content unchanged).
+- `docs/audit/LANE_FLUSH_2026-11-05.md` - one blank line at EOF removed.
+- `*.patch` excluded from the changed-file list in BOTH `hygiene.yml` and the
+  CircleCI job. A unified diff renders the context line for a blank target line
+  as a single space, so the check was reporting diff FORMAT as trailing
+  whitespace in `docs/audit/red_head_remediation/*.patch`; those bytes must
+  survive intact because `git apply` depends on them.
+
+Verified by CI on `31f698e27`: `Repository Hygiene Checks` -> `success`,
+`Lint` -> `success`, `Rust Linting` -> `success`, `Handoff ownership scope` ->
+`success`, `Test (ubuntu-latest)` -> running at the read.
