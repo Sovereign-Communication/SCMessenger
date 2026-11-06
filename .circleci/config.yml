@@ -26,12 +26,18 @@
 # and the release lanes are WAVE 2 or out of scope. No secrets are used here.
 #
 # STATUS NAMES: branch protection currently requires the ACTIONS names above.
-# CircleCI publishes "<workflow>/<job display name>", so this config yields
-#   ci/Repository Hygiene Checks, ci/Lint, ci/Rust Linting,
-#   ci/Test (ubuntu-latest), ci/Handoff ownership scope
-# Updating the required-context list to those five strings is the merge-time
-# governance item already named on PR #653; this file does not change
-# protection.
+# CircleCI does NOT publish a job status under that bare name, and the exact
+# string depends on how the project is connected:
+#   - GitHub OAuth connection, regular job: commit status `ci/circleci: <job name>`
+#   - GitHub App connection: statuses/checks are posted per WORKFLOW, so the job
+#     granularity protection needs is not what arrives (CircleCI docs, "Status
+#     updates overview", read 2026-11-06).
+# The job `name:` overrides below are what make <job name> read as the context
+# text; the authoritative statement of the five published strings is the FIRST
+# PIPELINE READ, which is why this file does not guess at them any harder than
+# this. Updating the required-context list to whatever that read shows is the
+# merge-time governance item already named on PR #653; this file does not change
+# protection, and no protection change should be made from this comment alone.
 #
 # PARITY NOTES (deliberate, each one is a place CircleCI differs from Actions)
 # ---------------------------------------------------------------------------

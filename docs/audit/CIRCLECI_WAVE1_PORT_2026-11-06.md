@@ -52,22 +52,30 @@ image tag cannot silently change the lint set under a green repository (the
    branched: it prints that the gate is SKIPPED as a wave-1 gap instead of
    passing quietly. Wave 2 enables the enforcing branch.
 
-## Status names this rail publishes
+## Status names this rail publishes - CORRECTION
 
-CircleCI publishes `<workflow>/<job display name>`:
+An earlier revision of this record (and the matching PR comment) claimed
+CircleCI publishes `<workflow>/<job display name>`. That was written before the
+read and is wrong in form. CircleCI's own documentation ("Status updates
+overview", read 2026-11-06) says:
 
-```
-ci/Repository Hygiene Checks
-ci/Lint
-ci/Rust Linting
-ci/Test (ubuntu-latest)
-ci/Handoff ownership scope
-```
+- GitHub OAuth connection, regular job: commit status `ci/circleci: <job name>`.
+  Only approval, no-op and release jobs carry the `<workflow_name>/<job_name>`
+  form this record previously generalised from.
+- GitHub App connection: statuses/checks are posted per workflow, so the
+  per-job granularity branch protection needs is not what arrives.
+
+The job `name:` overrides in the workflow are what make `<job name>` read as
+`Repository Hygiene Checks`, `Lint`, `Rust Linting`, `Test (ubuntu-latest)` and
+`Handoff ownership scope`. The authoritative statement of the five published
+strings is the first pipeline read plus the connection type oversight
+activates with - not a prediction in this file.
 
 Branch protection currently requires the Actions names. Updating the
-required-context list to those five strings is the merge-time governance item
-already named on PR #653 (oversight/owner); this port does not change
-protection.
+required-context list to the strings the first pipeline actually publishes is
+the merge-time governance item already named on PR #653 (oversight/owner); this
+port does not change protection, and no protection change should be made from
+this record alone.
 
 ## Local verification (this session)
 
@@ -116,4 +124,10 @@ call green, so it was cured in a second commit (`31f698e27`):
 
 Verified by CI on `31f698e27`: `Repository Hygiene Checks` -> `success`,
 `Lint` -> `success`, `Rust Linting` -> `success`, `Handoff ownership scope` ->
-`success`, `Test (ubuntu-latest)` -> running at the read.
+`success`. `Test (ubuntu-latest)` on that head (`128166639873`) ended
+`cancelled`, not failed: the next push started a newer run in the same
+concurrency group. On the current head `47266ed093` the read is
+`Repository Hygiene Checks` success, `Rust Linting` success, `Handoff ownership
+scope` success, with `Lint` and `Test (ubuntu-latest)` queued on the two-slot
+pool. Cancellations are recorded as they read - they are neither passes nor
+blocks (clause 8).
