@@ -235,9 +235,16 @@ jobs:
             # Narrow on purpose: --ignore-cr-at-eol reports any difference other than
             # the line terminator itself. The exemption is PER FILE, and the range
             # is the PR base here, so it selects exactly the lines this change adds.
+            #
+            # Patch artifacts are excluded as well: a unified diff renders the
+            # context line for a blank target line as a single space, so the check
+            # would report the FORMAT as trailing whitespace. Those `.patch` files
+            # are reviewed artifacts whose bytes must survive intact (`git apply`
+            # depends on exactly those lines). Same exclusion as hygiene.yml.
             mapfile -t CHANGED < <(git diff --name-only --ignore-cr-at-eol "$GATE_BASE" HEAD -- . \
               ':(exclude)iOS/SCMessenger/SCMessenger/Generated/**' \
-              ':(exclude)iOS/SCMessengerCore.xcframework/**/Headers/**')
+              ':(exclude)iOS/SCMessengerCore.xcframework/**/Headers/**' \
+              ':(exclude)*.patch')
 
             if [ "${#CHANGED[@]}" -eq 0 ]; then
               echo "[OK] only line-ending changes in range; check not applicable"

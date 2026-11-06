@@ -90,7 +90,7 @@ still queued at that read; a terminal read follows in the slice's final state.
 
 ```
 runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.changes.outputs.rust_relevant == 'true'
-  && (github.event_name == 'push' || (github.event_name == 'pull_request' && ...)) 
+  && (github.event_name == 'push' || (github.event_name == 'pull_request' && ...))
   && vars.CI_RUNNER == 'oci' && fromJSON('["self-hosted","oci"]') || matrix.os }}
 ```
 

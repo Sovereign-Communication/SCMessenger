@@ -194,4 +194,3 @@ failure; each wave re-reads the exact head before any action.
 7. PR side: 20 wave cars classified,
    18 dependabot bumps parked under the recorded class,
    3 lane-standing PRs.
-
