@@ -21,9 +21,29 @@
 #   4. Test (ubuntu-latest)        <- .github/workflows/ci.yml (job: test, ubuntu leg)
 #   5. Handoff ownership scope     <- .github/workflows/ci.yml (job: handoff-scope)
 #
-# Everything else in ci.yml (orchestration, docs, ffi-surface, naming-policy,
-# windows-cli-artifact), every macOS/Windows leg, docker-test-suite, security
-# and the release lanes are WAVE 2 or out of scope. No secrets are used here.
+# WAVE 2 (2026-11-07) adds the six non-required gates the burndown needs on an
+# admissible rail, again copied from the Actions originals:
+#
+#   6. Orchestration control plane          <- .github/workflows/ci.yml (job: orchestration)
+#   7. Docs                                 <- .github/workflows/ci.yml (job: docs)
+#   8. FFI Surface Contract                 <- .github/workflows/ci.yml (job: ffi-surface)
+#   9. Forgery/Negative Security Regression <- .github/workflows/security-regression-tests.yml
+#  10. Kotlin Linting                       <- .github/workflows/lint.yml (job: kotlin)
+#  11. JavaScript Linting                   <- .github/workflows/lint.yml (job: javascript)
+#
+# Two of those carry an ENFORCEMENT CAVEAT, printed by the job itself on every
+# run so the context is never read as asserting more than it does:
+#   - Kotlin Linting runs the real `ktlintCheck` task, but android/app/build.gradle
+#     sets `ktlint { ignoreFailures = true }`, so the task cannot fail the build.
+#     The context proves ktlint RUNS; it does not prove ktlint passes.
+#   - JavaScript Linting has no target in this repository: wasm/package.json
+#     does not exist. The job prints [NON-ENFORCING] and skips, and enforces
+#     automatically once that file appears.
+# Neither caveat may be resolved by adding these contexts to branch protection.
+#
+# Still not ported (wave 3 candidates): naming-policy, windows-cli-artifact,
+# every macOS/Windows leg, mobile/docker-test-suite, and the release lanes.
+# No secrets are used anywhere in this config.
 #
 # STATUS NAMES: branch protection currently requires the ACTIONS names above.
 # CircleCI does NOT publish a job status under that bare name, and the exact
@@ -73,6 +93,25 @@ executors:
     docker:
       - image: cimg/python:3.11
     resource_class: small
+  node-linux:
+    description: >-
+      Node 20 LTS for the wasm JavaScript lint gate, pinned to the same major
+      the Actions job uses (`node-version: '20'`). The point release is pinned
+      so a moved tag cannot change the lint rules underneath a green
+      repository.
+    docker:
+      - image: cimg/node:20.20.2
+    resource_class: small
+  android-linux:
+    description: >-
+      Android SDK image for the Kotlin lint gate. compileSdk 35 and
+      build-tools 35.0.0 are preinstalled (read: cimg-android 2026.10
+      Dockerfile), and the image defaults to JDK 21, which the project's Gradle
+      8.13 wrapper supports. The point release is pinned for the same reason as
+      every other executor here.
+    docker:
+      - image: cimg/android:2026.10.1
+    resource_class: large
 
 commands:
   fetch_full_history:
@@ -612,6 +651,221 @@ jobs:
           shell: /bin/bash
           command: python scripts/validate_handoff_scope.py --repo-root . --self-test
 
+  # ---------------------------------------------------------------------------
+  # 6. Orchestration control plane  <- .github/workflows/ci.yml job `orchestration`
+  # ---------------------------------------------------------------------------
+  orchestration_control_plane:
+    executor: python-linux
+    steps:
+      - checkout
+      # The contract and its evals are stdlib-only by design (the manifest is
+      # JSON-compatible YAML, parsed without PyYAML), so nothing is installed
+      # here - and nothing is assumed either: the import is proved first.
+      - run:
+          name: Prove the contract modules import
+          command: |
+            set -euo pipefail
+            cd scripts
+            python3 -c "import orchestration_contract, orchestrate_strict, jev_canonical_check; print('[OK] orchestration modules import')"
+      - run:
+          name: Validate orchestration contract
+          command: |
+            set -euo pipefail
+            python3 scripts/orchestration_contract.py
+      - run:
+          name: Run deterministic orchestration tests
+          command: |
+            set -euo pipefail
+            python3 scripts/test_orchestration_v2.py
+
+  # ---------------------------------------------------------------------------
+  # 7. Docs  <- .github/workflows/ci.yml job `docs`
+  # ---------------------------------------------------------------------------
+  # The Actions original is path-filtered on `rust_relevant`. This job is NOT:
+  # a path filter is how a context silently skips, and the hygiene job in this
+  # same config already refuses path-filtered required contexts. Running always
+  # costs a few minutes and can never report a gate that did not run.
+  docs_build:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: cargo doc
+          no_output_timeout: 20m
+          command: cargo doc --workspace --no-deps
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 8. FFI Surface Contract  <- .github/workflows/ci.yml job `ffi-surface`
+  # ---------------------------------------------------------------------------
+  ffi_surface_contract:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: Build the core crate with the bindings generator
+          no_output_timeout: 30m
+          command: cargo build -p scmessenger-core --features gen-bindings
+      - run:
+          name: Generate Kotlin bindings
+          no_output_timeout: 20m
+          command: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
+      - run:
+          name: Generate Swift bindings
+          no_output_timeout: 20m
+          command: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
+      # scripts/ffi_surface.sh fails closed when a binding file is missing or
+      # extracts zero symbols, so a generation failure cannot read as a pass.
+      - run:
+          name: Diff the FFI surface against the checked-in snapshot
+          command: scripts/ffi_surface.sh
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 9. Forgery/Negative Security Regression Tests
+  #    <- .github/workflows/security-regression-tests.yml job `forgery-regression`
+  # ---------------------------------------------------------------------------
+  forgery_regression:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: Run forgery/negative-security regression tests
+          no_output_timeout: 60m
+          command: |
+            set -euo pipefail
+            OUTPUT_FILE=forgery_test_output.txt
+
+            # `forg`, not `forgery`: must match both "..._downgrade_forgery" and
+            # "..._legacy_forged_unsigned_envelope_is_rejected". Scoped to
+            # -p scmessenger-core (not --workspace): every crypto/transport/
+            # routing/privacy source path and every current forg* test live in
+            # that one package.
+            cargo test -p scmessenger-core --no-fail-fast forg 2>&1 | tee "$OUTPUT_FILE"
+
+            # cargo's harness prints one "test result: ok. N passed; M failed;"
+            # line per binary it runs; passed+failed = tests actually selected
+            # and executed. "filtered out" is excluded on purpose: those did not
+            # match `forg`.
+            #
+            # `|| true` inside the substitution is load-bearing and is the same
+            # pipefail interaction wave 1 documents: when NOTHING matches, grep
+            # exits 1 and a bare MATCHED=$(...) would kill the script before the
+            # zero-match diagnostic could print. The gate still fails closed;
+            # it just says why.
+            MATCHED=$(grep -oE '[0-9]+ passed; [0-9]+ failed' "$OUTPUT_FILE" \
+              | awk -F'[^0-9]+' '{sum += $1 + $2} END {print sum+0}' || true)
+            MATCHED=${MATCHED:-0}
+            echo "Selected+ran test count: $MATCHED"
+
+            if [ "$MATCHED" -eq 0 ]; then
+              echo "[FAIL] the 'forg' filter selected ZERO tests in scmessenger-core."
+              echo "       This must never report green: either the forgery tests have"
+              echo "       not landed on this branch, or every test matching 'forg' was"
+              echo "       deleted or renamed away from that pattern."
+              exit 1
+            fi
+
+            echo "[OK] $MATCHED forgery/negative-security regression test(s) selected and passed"
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 10. Kotlin Linting  <- .github/workflows/lint.yml job `kotlin`
+  # ---------------------------------------------------------------------------
+  kotlin_linting:
+    executor: android-linux
+    steps:
+      - checkout
+      - run:
+          name: Assert the Gradle wrapper matches the project's pin
+          command: |
+            set -euo pipefail
+            java -version
+            grep -E '^distributionUrl' android/gradle/wrapper/gradle-wrapper.properties
+            grep -q 'gradle-8\.13-bin\.zip' android/gradle/wrapper/gradle-wrapper.properties \
+              || { echo "[FAIL] android wrapper is not gradle 8.13; refusing to run the lint task on a different Gradle" >&2; exit 1; }
+      - run:
+          name: Run ktlint
+          no_output_timeout: 25m
+          command: |
+            set -euo pipefail
+            cd android
+            ./gradlew ktlintCheck --stacktrace
+      # ignoreFailures=true means this task CANNOT fail the build. Saying so on
+      # every run is the difference between a context that is read honestly and
+      # one that is mistaken for a passing lint gate.
+      - run:
+          name: Report what this context actually asserts
+          command: |
+            set -euo pipefail
+            echo "[WARNING] android/app/build.gradle sets ktlint { ignoreFailures = true }."
+            echo "[NON-ENFORCING] A green Kotlin Linting context proves ktlint RAN on this"
+            echo "               commit. It does not prove ktlint passed. Do not add this"
+            echo "               context to branch protection while ignoreFailures is true."
+            reports=$(find android -path '*reports/ktlint*' -type f 2>/dev/null || true)
+            if [ -z "$reports" ]; then
+              echo "[WARNING] no ktlint report file was produced under android/**/reports/ktlint"
+            else
+              echo "[INFO] ktlint report files produced:"
+              echo "$reports"
+            fi
+
+  # ---------------------------------------------------------------------------
+  # 11. JavaScript Linting  <- .github/workflows/lint.yml job `javascript`
+  # ---------------------------------------------------------------------------
+  # The Actions original lints wasm/ and skips when wasm/package.json is absent.
+  # It is absent on this repository (read 2026-11-07: no package.json anywhere
+  # under wasm/), so the port keeps the same behaviour AND prints that it is
+  # non-enforcing, instead of turning a missing target into a green lint claim.
+  # The moment wasm/package.json appears this job enforces with no change here.
+  javascript_linting:
+    executor: node-linux
+    steps:
+      - checkout
+      - run:
+          name: Detect the lint target
+          command: |
+            set -euo pipefail
+            node --version
+            npm --version
+            if [ -f wasm/package.json ]; then
+              echo "[OK] lint target present: wasm/package.json"
+              echo 'export JS_LINT_TARGET=present' >> "$BASH_ENV"
+            else
+              echo "[WARNING] no JavaScript lint target on this commit: wasm/package.json is absent."
+              echo "[NON-ENFORCING] This context asserts nothing while the target is absent."
+              echo 'export JS_LINT_TARGET=absent' >> "$BASH_ENV"
+            fi
+      - run:
+          name: Install dependencies
+          command: |
+            set -euo pipefail
+            if [ "${JS_LINT_TARGET:-absent}" = "present" ]; then
+              cd wasm
+              npm install
+            else
+              echo "[SKIPPED] npm install: no package.json in wasm/ (not a pass, a documented gap)"
+            fi
+      - run:
+          name: Run eslint
+          command: |
+            set -euo pipefail
+            if [ "${JS_LINT_TARGET:-absent}" = "present" ]; then
+              cd wasm
+              npm run lint
+            else
+              echo "[SKIPPED] eslint: no package.json in wasm/ (not a pass, a documented gap)"
+            fi
+
 workflows:
   ci:
     jobs:
@@ -625,3 +879,19 @@ workflows:
           name: Test (ubuntu-latest)
       - handoff_ownership_scope:
           name: Handoff ownership scope
+      # --- wave 2 (2026-11-07) -------------------------------------------------
+      # None of the six is a branch-protection context. Two of them print
+      # [NON-ENFORCING] on every run (Kotlin's ignoreFailures=true, and
+      # JavaScript's absent target); read their job output, not just the badge.
+      - orchestration_control_plane:
+          name: Orchestration control plane
+      - docs_build:
+          name: Docs
+      - ffi_surface_contract:
+          name: FFI Surface Contract
+      - forgery_regression:
+          name: Forgery/Negative Security Regression Tests
+      - kotlin_linting:
+          name: Kotlin Linting
+      - javascript_linting:
+          name: JavaScript Linting
