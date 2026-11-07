@@ -112,3 +112,40 @@ One of: "switch to Option A", "switch to Option B", or "hold" with the reason. T
 perform the change under its own authority in any case, and will not stall the burndown on it:
 until the switch is made, landings proceed under the standing policy on CircleCI evidence at the
 exact head, with the mismatch recorded on every landing note.
+
+## Addendum (2026-11-07, wave 2) - the ordering contradiction, stated plainly
+
+The mission's MERGES clause carries two rules that cannot both be satisfied in the current
+repository state, and the second one is the reason this addendum exists:
+
+- "every PR merges when its CircleCI battery is green at its head", and
+- "#653 lands last".
+
+Read today: **#653 is the only branch that carries `.circleci/config.yml`.** On all seventeen open
+car heads the count of `ci/circleci:*` contexts is 0 and `git cat-file -e <head>:.circleci/config.yml`
+returns absent (read in `docs/audit/CLUSTER_DISPOSITIONS_2026-11-07.md`, section 0). CircleCI
+builds the config from the branch being built, so a car branch cannot produce a battery until the
+port exists on the branch it is based on. "Last" and "only after" cannot both hold: holding the
+port to the end guarantees no car can satisfy its own merge rule in the meantime.
+
+Recommended resolution, stated as a decision rather than taken: **land the port first**, as the
+first landing of the train, and let the cars follow it. That also supplies precondition 2 above
+(the rail running on `main` itself), which no other landing can supply.
+
+Two facts that keep this from being urgent in the wrong way:
+
+1. The required Actions contexts are not permanently red. On `b3453a188` the self-hosted pool
+   carried them to `Lint` success and `Test (ubuntu-latest)` success, and on `d1d6c1025` the read
+   shows `Repository Hygiene Checks` in progress with two `Detect changed areas` jobs queued
+   behind it. So a landing under the CURRENT setting is mechanically possible; it is simply slow
+   (a two-slot pool) and it makes the merge gate's source of truth a rail the protocol does not
+   accept as evidence.
+2. Clause (f) is satisfied for this head on fresh annotations, not on the earlier shorthand: the
+   four failing non-required Actions check-runs on `d1d6c1025` (`Kotlin Linting`,
+   `JavaScript Linting`, `WASM`, `label`) all carry
+   "The job was not started because your account is locked due to a billing issue"
+   (read: `check-runs/<id>/annotations`, 2026-11-07). A job that never started is not a defect in
+   the change.
+
+Nothing in this addendum changes section 3: the lane still performs no protection change, no
+force-push and no admin merge.

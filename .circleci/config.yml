@@ -799,7 +799,20 @@ jobs:
           command: |
             set -euo pipefail
             cd android
-            ./gradlew ktlintCheck --stacktrace
+            ./gradlew ktlintCheck --console=plain --stacktrace 2>&1 | tee ktlint-output.txt
+            # A green badge must not be the only evidence the task ran. This host
+            # cannot read CircleCI job output (the API returns 401 without a
+            # token), so the job proves it in its own exit status: if Gradle did
+            # not actually execute a ktlint task, this step fails instead of
+            # letting a no-op pass for a lint run.
+            if ! grep -qE '^> Task :[a-zA-Z0-9:_-]*ktlint' ktlint-output.txt; then
+              echo "[FAIL] Gradle executed no ktlint task on this run."
+              echo "       A 'Kotlin Linting' context that ran no ktlint task is not a"
+              echo "       lint verdict; refusing to report one."
+              exit 1
+            fi
+            echo "[OK] ktlint tasks executed:"
+            grep -E '^> Task :[a-zA-Z0-9:_-]*ktlint' ktlint-output.txt
       # ignoreFailures=true means this task CANNOT fail the build. Saying so on
       # every run is the difference between a context that is read honestly and
       # one that is mistaken for a passing lint gate.
