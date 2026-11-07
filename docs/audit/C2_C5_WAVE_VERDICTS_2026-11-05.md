@@ -1,5 +1,14 @@
 # Waves C2 and C5 - definitions, repairs and refusals (2026-11-05)
 
+> **EVIDENCE CORRECTED 2026-11-07.** The independent re-review returned CHANGES on the
+> evidence base, not on the definitions: this record still treated GitHub Actions check-runs
+> and Actions job logs as CI evidence for #611's GREEN and its 2,292-test count. The standing
+> exclusion covers Actions logs too. Those claims are **withdrawn**; every C2/C5 car head reads
+> `ci/circleci:*` total=0 with `.circleci/config.yml` absent at the commit, so their CI state is
+> **UNREAD** on the admissible rail. Section 8 now carries the replaced citation rule, and
+> `C2_611_VERDICT_2026-11-05.md` carries the matching correction. The cluster definitions and
+> the five refusals rest on tree reads and are unaffected.
+
 Fourth slice of the 2026-11-05 lane session. Waves C2 and C5 are defined here from the
 plan of record's own PR census rather than from the lane's shorthand, then discharged:
 one car repaired and pushed, five refused with the evidence that establishes each.
@@ -199,15 +208,37 @@ Not touched, per the standing boundaries: #506, #507, #508 (no runs dispatched),
 #208, #510, #489, #594, #620, #622, #365, and C1. No merge was performed on any PR. No
 run was dispatched except the one automatic run that #611's own push triggered.
 
-## 8. Citation rule for this record
+## 8. Citation rule for this record (REPLACED 2026-11-07 - the old rule admitted inadmissible evidence)
 
-An **Actions check-run is not, by itself, CI evidence** in this record. A check-run carries a
-name and a conclusion; it does not show what ran or whether anything ran at all - a
-billing-locked job and a passing job are both just "Test (ubuntu-latest)" to the check-runs
-API, distinguishable only by `steps`, `runner_name` and the annotation.
+**SUPERSEDED.** The rule that stood here said an Actions check-run becomes CI evidence when it
+is paired with the workflow run or job it resolves to, and it named #611's 2,292-test summary as
+a log read that established a real green. The independent re-review
+(Treystu/slow-lane-ledger `scmessenger/reviews/C2-C5_REVIEW_2026-11-06.md`, verdict CHANGES)
+rejected that: **the standing exclusion covers Actions job logs as well as Actions
+conclusions.** Pairing an inadmissible check-run with an inadmissible job log produces two
+inadmissible readings, not one admissible claim. The correction is accepted in full.
 
-So every CI claim above is cited as a pair: the exact-head check-run set **and** the workflow
-run or job it resolves to (`actions/jobs/<id>`, its `steps`, its log summary), plus the read
-timestamp. Where a job log was needed to establish that a green result was real, the log is
-named explicitly (as for #611's 2292-test summary). Where a check-run is cited alone, it is
-because the claim is only about which context reported what - never about the work behind it.
+The rule that governs this record from 2026-11-07:
+
+1. **CircleCI is the only admissible CI evidence.** A CI claim cites the exact head and its
+   `ci/circleci:*` context set (or the CircleCI job output for a test count), with the read
+   timestamp. Nothing else is a CI verdict.
+2. **Actions readings may be recorded as provenance, never as evidence.** A billing-lock
+   annotation explains WHY a pool produced nothing; it never proves what a change does. Where
+   such a reading appears above, it is labelled as provenance and cannot be cited as a verdict.
+3. **Absence of an admissible read is `UNREAD`, not green.** On 2026-11-07 every C2/C5 car head
+   read `ci/circleci:*` total=0, and `.circleci/config.yml` is absent at those commits, so the
+   rail could not have reported on them. Their CI state is therefore UNREAD across the board.
+4. **A test count needs a non-vacuity read from the admissible rail.** No Actions log
+   substitutes, and a green battery with no test summary is not a pass.
+
+Consequences applied in this record on 2026-11-07: #611's terminal-green claim and its
+2,292-test count are **withdrawn** (see the correction banner at the top of
+`C2_611_VERDICT_2026-11-05.md`); the #521 and #599 CI statements are `UNREAD`; the refusals
+that rest on file content (#643's missing `USE_OCI_RUNNER` term, #609's stranded runner label,
+#599's stacked base) are **unaffected**, because they were read from the trees and not from CI.
+
+## 8a. Correction banner (2026-11-07)
+
+Everything in sections 1-7 about CI state is provenance under rule 2 above. The definitions and
+the refusals stand on their tree reads; the green and test-count claims do not stand at all.
