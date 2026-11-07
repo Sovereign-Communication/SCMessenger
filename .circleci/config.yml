@@ -1,0 +1,920 @@
+# SCMessenger - CircleCI rail, WAVE 1 of the port (2026-11-06)
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The repository's five branch-protection contexts are produced by GitHub
+# Actions workflows whose hosted jobs are refused by an account billing lock,
+# and whose self-hosted pool is two slots. There has never been a second rail,
+# so main has no verifier that can return a verdict at all. This config is the
+# first real CircleCI pipeline for the repo; until it runs, main is
+# UNVERIFIABLE and no green claim about it is admissible.
+#
+# SCOPE (determined spec, PR #653 comment 6675798232)
+# --------------------------------------------------
+# WAVE 1 is exactly the five branch-protection contexts, with the job display
+# names copied from the protection list and the commands copied from the
+# Actions originals:
+#
+#   1. Repository Hygiene Checks   <- .github/workflows/hygiene.yml
+#   2. Lint                        <- .github/workflows/ci.yml (job: lint)
+#   3. Rust Linting                <- .github/workflows/lint.yml (job: rust)
+#   4. Test (ubuntu-latest)        <- .github/workflows/ci.yml (job: test, ubuntu leg)
+#   5. Handoff ownership scope     <- .github/workflows/ci.yml (job: handoff-scope)
+#
+# WAVE 2 (2026-11-07) adds the six non-required gates the burndown needs on an
+# admissible rail, again copied from the Actions originals:
+#
+#   6. Orchestration control plane          <- .github/workflows/ci.yml (job: orchestration)
+#   7. Docs                                 <- .github/workflows/ci.yml (job: docs)
+#   8. FFI Surface Contract                 <- .github/workflows/ci.yml (job: ffi-surface)
+#   9. Forgery/Negative Security Regression <- .github/workflows/security-regression-tests.yml
+#  10. Kotlin Linting                       <- .github/workflows/lint.yml (job: kotlin)
+#  11. JavaScript Linting                   <- .github/workflows/lint.yml (job: javascript)
+#
+# Two of those carry an ENFORCEMENT CAVEAT, printed by the job itself on every
+# run so the context is never read as asserting more than it does:
+#   - Kotlin Linting runs the real `ktlintCheck` task, but android/app/build.gradle
+#     sets `ktlint { ignoreFailures = true }`, so the task cannot fail the build.
+#     The context proves ktlint RUNS; it does not prove ktlint passes.
+#   - JavaScript Linting has no target in this repository: wasm/package.json
+#     does not exist. The job prints [NON-ENFORCING] and skips, and enforces
+#     automatically once that file appears.
+# Neither caveat may be resolved by adding these contexts to branch protection.
+#
+# Still not ported (wave 3 candidates): naming-policy, windows-cli-artifact,
+# every macOS/Windows leg, mobile/docker-test-suite, and the release lanes.
+# No secrets are used anywhere in this config.
+#
+# STATUS NAMES: branch protection currently requires the ACTIONS names above.
+# CircleCI does NOT publish a job status under that bare name, and the exact
+# string depends on how the project is connected:
+#   - GitHub OAuth connection, regular job: commit status `ci/circleci: <job name>`
+#   - GitHub App connection: statuses/checks are posted per WORKFLOW, so the job
+#     granularity protection needs is not what arrives (CircleCI docs, "Status
+#     updates overview", read 2026-11-06).
+# The job `name:` overrides below are what make <job name> read as the context
+# text; the authoritative statement of the five published strings is the FIRST
+# PIPELINE READ, which is why this file does not guess at them any harder than
+# this. Updating the required-context list to whatever that read shows is the
+# merge-time governance item already named on PR #653; this file does not change
+# protection, and no protection change should be made from this comment alone.
+#
+# PARITY NOTES (deliberate, each one is a place CircleCI differs from Actions)
+# ---------------------------------------------------------------------------
+# - CircleCI runs every step under `bash -eo pipefail`; Actions runs it under
+#   `bash -e` only. One copied step (trailing whitespace) READS the exit status
+#   of a pipeline whose last member is `grep -v`, and under pipefail that step
+#   would red a clean tree. It disables pipefail explicitly rather than
+#   silently changing the check.
+# - Actions checks out a synthetic merge commit on pull_request, which makes
+#   `HEAD^..HEAD` the whole PR diff. CircleCI checks out the branch tip, so the
+#   copied range is the merge-base with main (`GATE_BASE`), which is the same
+#   set of changed lines and never smaller. Both events therefore fail closed
+#   when a base cannot be computed.
+# - `linux-build-deps` on GitHub-hosted runners also gets libssl-dev from the
+#   image; cimg/rust does not, so it is installed here for parity.
+# - One gate cannot be enforced on this rail yet and says so out loud instead
+#   of passing quietly: check_queue_status.py needs the `gh` CLI and a token,
+#   neither of which wave 1 has.
+version: 2.1
+
+executors:
+  rust-linux:
+    description: >-
+      Rust 1.99.0, the toolchain the repository is pinned and verified on
+      (rust-toolchain.toml). A preflight step re-reads `rustc --version` and
+      fails on any other version, so a moved image tag cannot silently change
+      the lint set underneath a green repository.
+    docker:
+      - image: cimg/rust:1.99.0
+    resource_class: large
+  python-linux:
+    description: Python 3.11 for the git/python-only gates (hygiene, handoff scope).
+    docker:
+      - image: cimg/python:3.11
+    resource_class: small
+  node-linux:
+    description: >-
+      Node 20 LTS for the wasm JavaScript lint gate, pinned to the same major
+      the Actions job uses (`node-version: '20'`). The point release is pinned
+      so a moved tag cannot change the lint rules underneath a green
+      repository.
+    docker:
+      - image: cimg/node:20.20.2
+    resource_class: small
+  android-linux:
+    description: >-
+      Android SDK image for the Kotlin lint gate. compileSdk 35 and
+      build-tools 35.0.0 are preinstalled (read: cimg-android 2026.10
+      Dockerfile), and the image defaults to JDK 21, which the project's Gradle
+      8.13 wrapper supports. The point release is pinned for the same reason as
+      every other executor here.
+    docker:
+      - image: cimg/android:2026.10.1
+    resource_class: large
+
+commands:
+  fetch_full_history:
+    description: >-
+      Full clone history plus origin/main. Several gates diff against a base
+      commit, and a shallow clone makes that range unavailable rather than
+      empty, so the fetch is explicit and failure here is a job failure.
+    steps:
+      - run:
+          name: Fetch full history and origin/main
+          command: |
+            set -euo pipefail
+            if [ -d .git/shallow ]; then
+              git fetch --unshallow origin
+            else
+              git fetch --all --tags
+            fi
+            git fetch origin +refs/heads/main:refs/remotes/origin/main
+
+  compute_gate_base:
+    description: >-
+      Export GATE_BASE - the commit the change gates diff against. A main build
+      compares against its own parent (the merged change); any other branch
+      compares against the merge-base with main (the PR's changed lines).
+      Refuses to continue with no base rather than skipping a gate.
+    steps:
+      - run:
+          name: Compute comparison base
+          command: |
+            set -euo pipefail
+            if [ "${CIRCLE_BRANCH:-}" = "main" ]; then
+              base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+            else
+              base="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+            fi
+            if [ -z "$base" ]; then
+              echo "[FAIL] no comparison base for this build; refusing to skip the gates" >&2
+              exit 2
+            fi
+            echo "export GATE_BASE=$base" >> "$BASH_ENV"
+            echo "[INFO] comparison base $base"
+
+  install_build_deps:
+    description: >-
+      The Linux system packages the Rust workspace needs. Mirrors
+      .github/actions/linux-build-deps (hosted branch): libdbus-1-dev,
+      pkg-config, protobuf-compiler, plus libssl-dev for image parity.
+    steps:
+      - run:
+          name: Install Linux build dependencies
+          command: |
+            set -euo pipefail
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libdbus-1-dev pkg-config protobuf-compiler libssl-dev
+            pkg-config --exists dbus-1 || { echo "[FAIL] libdbus-1-dev not visible to pkg-config" >&2; exit 1; }
+            command -v protoc >/dev/null 2>&1 || { echo "[FAIL] protoc missing" >&2; exit 1; }
+
+  install_python_gate_deps:
+    description: >-
+      The python gates in the hygiene job parse YAML with PyYAML, and
+      check_workflow_yaml.py fails closed (exit 2) when it cannot import it:
+      "PyYAML is not installed; cannot check workflow YAML." Pipeline #1 on
+      41fed8ac failed exactly there. cimg/python does not ship PyYAML, and the
+      Actions original only had it because GitHub's ubuntu images preinstall it,
+      so the dependency is installed explicitly here. Installing it is the cure;
+      removing or skipping the step would leave the duplicate-key gate
+      unexecuted, which is not a pass. The version is pinned so a new PyYAML
+      release cannot change the parse underneath a green repository, and it is
+      imported back and echoed so the log proves the gate HAS a parser before it
+      runs rather than reporting a skip that looks like a pass.
+    steps:
+      - run:
+          name: Install python gate dependencies (PyYAML)
+          command: |
+            set -euo pipefail
+            python3 -m pip install --quiet --disable-pip-version-check "pyyaml==6.0.2"
+            python3 -c "import yaml; print('[OK] PyYAML ' + yaml.__version__ + ' importable; the duplicate-key gate can run')"
+
+  assert_pinned_toolchain:
+    description: >-
+      The pin is the reason the repository's red/green state is a function of
+      its own source (see rust-toolchain.toml). Any other rustc version is a
+      configuration failure, not a lint failure to triage.
+    steps:
+      - run:
+          name: Assert the pinned Rust toolchain
+          command: |
+            set -euo pipefail
+            rustc --version
+            case "$(rustc --version)" in
+              "rustc 1.99.0 "*) echo "[OK] rustc 1.99.0 (the pinned toolchain)" ;;
+              *)
+                echo "[FAIL] rustc is not the pinned 1.99.0; refusing to run a gate on a different lint set" >&2
+                exit 1
+                ;;
+            esac
+
+  restore_cargo_cache:
+    steps:
+      - restore_cache:
+          keys:
+            - cargo-registry-{{ checksum "Cargo.lock" }}
+            - cargo-registry-
+
+  save_cargo_cache:
+    steps:
+      - save_cache:
+          key: cargo-registry-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - ~/.cargo/bin
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Repository Hygiene Checks  <- .github/workflows/hygiene.yml
+  # ---------------------------------------------------------------------------
+  repository_hygiene_checks:
+    executor: python-linux
+    steps:
+      - checkout
+      - install_python_gate_deps
+      - fetch_full_history
+      - compute_gate_base
+
+      - run:
+          name: Check for tracked files matching .gitignore patterns
+          command: |
+            echo "Checking for tracked files that should be ignored..."
+
+            # Check for keystore files
+            if git ls-files | grep -E '\.(keystore|jks|p12|mobileprovision)$'; then
+              echo "[ERROR] ERROR: Keystore or certificate files found in repository"
+              echo "These files should never be committed:"
+              git ls-files | grep -E '\.(keystore|jks|p12|mobileprovision)$'
+              exit 1
+            fi
+
+            # Check for base64 encoded secrets
+            if git ls-files | grep -E '(keystore|certificate|profile)_base64\.txt$'; then
+              echo "[ERROR] ERROR: Base64-encoded secret files found in repository"
+              git ls-files | grep -E '(keystore|certificate|profile)_base64\.txt$'
+              exit 1
+            fi
+
+            # Check for backup instruction files (contain sensitive info)
+            if git ls-files | grep -E 'BACKUP_INSTRUCTIONS\.md$'; then
+              echo "[ERROR] ERROR: Backup instruction files found in repository"
+              git ls-files | grep -E 'BACKUP_INSTRUCTIONS\.md$'
+              exit 1
+            fi
+
+            # Check for build artifacts
+            if git ls-files | grep -E '^target/|^build/|^\.gradle/|^DerivedData/'; then
+              echo "[ERROR] ERROR: Build artifacts found in repository"
+              git ls-files | grep -E '^target/|^build/|^\.gradle/|^DerivedData/'
+              exit 1
+            fi
+
+            # Check for IDE files
+            if git ls-files | grep -E '\.(swp|swo|DS_Store)$|^\.idea/|^\.vscode/'; then
+              echo "[ERROR] ERROR: IDE or OS files found in repository"
+              git ls-files | grep -E '\.(swp|swo|DS_Store)$|^\.idea/|^\.vscode/'
+              exit 1
+            fi
+
+            echo "[OK] No ignored files found in repository"
+
+      - run:
+          name: Check for trailing whitespace
+          command: |
+            echo "Checking for trailing whitespace..."
+
+            # Actions' shell has no pipefail; CircleCI's does, and this block
+            # reads the exit status of `git diff | grep -v` (a clean tree makes
+            # grep exit 1). Restore the semantics the check was written for
+            # instead of letting the shell invert the result.
+            set +o pipefail
+
+            # A pure line-ending renormalisation is exempt. `git add --renormalize .`
+            # turns CRLF into LF across already-committed files, so a line that was
+            # "<text><space><CR><LF>" becomes "<text><space><LF>" and git reports it
+            # as newly-added trailing whitespace -- while not one byte of content
+            # changed. 291 of those lines in this repo are legitimate Markdown hard
+            # line breaks (two trailing spaces) which MUST NOT be stripped.
+            #
+            # Narrow on purpose: --ignore-cr-at-eol reports any difference other than
+            # the line terminator itself. The exemption is PER FILE, and the range
+            # is the PR base here, so it selects exactly the lines this change adds.
+            #
+            # Patch artifacts are excluded as well: a unified diff renders the
+            # context line for a blank target line as a single space, so the check
+            # would report the FORMAT as trailing whitespace. Those `.patch` files
+            # are reviewed artifacts whose bytes must survive intact (`git apply`
+            # depends on exactly those lines). Same exclusion as hygiene.yml.
+            mapfile -t CHANGED < <(git diff --name-only --ignore-cr-at-eol "$GATE_BASE" HEAD -- . \
+              ':(exclude)iOS/SCMessenger/SCMessenger/Generated/**' \
+              ':(exclude)iOS/SCMessengerCore.xcframework/**/Headers/**' \
+              ':(exclude)*.patch')
+
+            if [ "${#CHANGED[@]}" -eq 0 ]; then
+              echo "[OK] only line-ending changes in range; check not applicable"
+              exit 0
+            fi
+
+            if git diff --check "$GATE_BASE" HEAD -- "${CHANGED[@]}" \
+              2>&1 | grep -v "warning: CRLF will be replaced"; then
+              echo "[ERROR] ERROR: Trailing whitespace found"
+              echo "Run: git diff --check to see details"
+              exit 1
+            fi
+
+            echo "[OK] No trailing whitespace found"
+
+      - run:
+          name: Check for case-colliding paths
+          command: |
+            echo "Checking for case-colliding paths..."
+
+            files=$(git ls-files)
+
+            duplicates=$(echo "$files" | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+
+            if [ -n "$duplicates" ]; then
+              echo "[ERROR] ERROR: Case-colliding paths found"
+              echo "These paths differ only in case:"
+              echo "$duplicates"
+              echo ""
+              echo "This causes issues on case-insensitive filesystems (macOS, Windows)"
+              exit 1
+            fi
+
+            echo "[OK] No case-colliding paths found"
+
+      - run:
+          name: Check for nested .git directories
+          command: |
+            echo "Checking for nested .git directories..."
+
+            nested_git=$(find . -mindepth 2 -name .git -type d)
+
+            if [ -n "$nested_git" ]; then
+              echo "[ERROR] ERROR: Nested .git directories found"
+              echo "$nested_git"
+              echo ""
+              echo "These should be proper submodules or removed"
+              exit 1
+            fi
+
+            echo "[OK] No nested .git directories found"
+
+      - run:
+          name: Check for hardcoded secrets (basic patterns)
+          command: |
+            echo "Checking for potential hardcoded secrets..."
+
+            patterns=(
+              "password\s*=\s*['\"][^'\"]{8,}"
+              "api[_-]?key\s*=\s*['\"][^'\"]{16,}"
+              "secret\s*=\s*['\"][^'\"]{16,}"
+              "token\s*=\s*['\"][^'\"]{16,}"
+              "-----BEGIN (RSA |DSA |EC )?PRIVATE KEY-----"
+            )
+
+            found_secrets=0
+
+            for pattern in "${patterns[@]}"; do
+              if git grep -iE "$pattern" -- '*.rs' '*.kt' '*.swift' '*.js' '*.ts' '*.toml' '*.yaml' '*.yml' 2>/dev/null; then
+                echo "[WARNING]  WARNING: Potential secret pattern found: $pattern"
+                found_secrets=1
+              fi
+            done
+
+            if [ $found_secrets -eq 1 ]; then
+              echo ""
+              echo "[WARNING]  WARNING: Potential secrets detected"
+              echo "Review the matches above to ensure no real secrets are committed"
+              echo "For comprehensive secret scanning, use gitleaks in the security workflow"
+            else
+              echo "[OK] No obvious secret patterns found"
+            fi
+
+      - run:
+          name: Check for consistent line endings
+          command: |
+            echo "Checking for consistent line endings..."
+
+            if [ ! -f .gitattributes ]; then
+              echo "[WARNING]  WARNING: .gitattributes not found"
+              echo "Consider adding .gitattributes to enforce consistent line endings"
+            else
+              echo "[OK] .gitattributes found"
+            fi
+
+            mixed_endings=$(git ls-files -z '*.rs' '*.kt' '*.swift' '*.js' '*.ts' '*.md' '*.toml' '*.yaml' '*.yml' | \
+              xargs -0 file | grep -E 'CRLF.*LF|LF.*CRLF' || true)
+
+            if [ -n "$mixed_endings" ]; then
+              echo "[WARNING]  WARNING: Files with mixed line endings found"
+              echo "$mixed_endings"
+              echo ""
+              echo "Consider normalizing line endings"
+            else
+              echo "[OK] No mixed line endings detected"
+            fi
+
+      - run:
+          name: Verify path governance rules
+          command: |
+            echo "Checking path governance rules..."
+
+            if git ls-files | grep -E '^ios/'; then
+              echo "[ERROR] ERROR: Lowercase 'ios/' directory found"
+              echo "Should be 'iOS/' for consistency"
+              git ls-files | grep -E '^ios/'
+              exit 1
+            fi
+
+            if git ls-files | grep -iE '^(android|ios|wasm)/' | grep -vE '^(android|iOS|wasm)/'; then
+              echo "[ERROR] ERROR: Inconsistent platform directory casing"
+              git ls-files | grep -iE '^(android|ios|wasm)/' | grep -vE '^(android|iOS|wasm)/'
+              exit 1
+            fi
+
+            echo "[OK] Path governance rules satisfied"
+
+      - run:
+          name: Verify root directory layout
+          command: |
+            echo "Checking root directory layout rules..."
+            fail=0
+
+            root_py=$(git ls-files '*.py' | grep -v '/' || true)
+            if [ -n "$root_py" ]; then
+              echo "[ERROR] Python scripts found at repo root (move them to scripts/):"
+              echo "$root_py"
+              fail=1
+            fi
+
+            artifacts=$(git ls-files '*.log' '*.pid' '*.logcat' || true)
+            if [ -n "$artifacts" ]; then
+              echo "[ERROR] Build artifacts are tracked in git:"
+              echo "$artifacts"
+              fail=1
+            fi
+
+            if [ "$fail" -eq 1 ]; then
+              exit 1
+            fi
+            echo "[OK] Root directory layout rules satisfied"
+
+      - run:
+          name: Check tracked file sizes (2 MB limit)
+          command: |
+            echo "Checking for oversized tracked files (2 MB limit)..."
+
+            oversized=$(git ls-files -z | xargs -0 du -b 2>/dev/null | \
+              awk -v limit=2097152 '$1 > limit {print $0}' | \
+              grep -v -E '(Cargo.lock|\.lock$|Generated/|xcframework)' || true)
+
+            if [ -n "$oversized" ]; then
+              echo "[WARNING] WARNING: Tracked files exceed 2 MB threshold:"
+              echo "$oversized"
+              echo ""
+              echo "If these are essential (documentation, source, or generated bindings),"
+              echo "add a documented exclusion above. Otherwise, regenerate or remove."
+            else
+              echo "[OK] No oversized tracked files detected"
+            fi
+
+      - run:
+          name: Verify required status contexts cannot be path-filtered
+          command: |
+            echo "Checking that branch-protection required contexts always report..."
+            python3 scripts/check_required_contexts.py
+
+      - run:
+          name: Verify the Rust toolchain is pinned and agrees across all sources
+          command: |
+            echo "Checking that every declared Rust toolchain is pinned and agrees..."
+            python3 scripts/check_toolchain_pin.py --repo-root .
+
+      - run:
+          name: Prove the toolchain-pin check can still fail
+          command: python3 scripts/check_toolchain_pin.py --self-test
+
+      - run:
+          name: Verify workflow YAML has no duplicate mapping keys
+          command: |
+            echo "Checking that no workflow or composite action repeats a key..."
+            python3 scripts/check_workflow_yaml.py
+
+      - run:
+          name: Prove the duplicate-key check can still fail
+          command: python3 scripts/check_workflow_yaml.py --self-test
+
+      # WAVE-1 GAP, STATED OUT LOUD. The Actions form of this check runs with
+      # GH_TOKEN. This rail carries no secrets and the python image has no `gh`
+      # CLI, and scripts/check_queue_status.py fails OPEN on infrastructure by
+      # design (warnings, exit 0) -- so running it here would print nothing and
+      # look like a pass. It is branched explicitly instead: skipped and
+      # reported as a gap until wave 2 supplies `gh` and a token, at which
+      # point the enforcing branch runs the push-event form.
+      - run:
+          name: Check queue ticket status lines against GitHub
+          command: |
+            if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}" ]; then
+              python3 scripts/check_queue_status.py --changed-only --base-ref "$GATE_BASE"
+            else
+              echo "[WARNING] queue-status gate SKIPPED: no gh CLI and no GH_TOKEN on this rail"
+              echo "[WARNING] wave-1 gap, NOT a pass; enable in wave 2"
+            fi
+
+      - run:
+          name: Summary
+          when: always
+          command: |
+            echo ""
+            echo "------------------------------------------------------------------"
+            echo "Repository Hygiene Check Complete"
+            echo "------------------------------------------------------------------"
+            echo ""
+            echo "For comprehensive security scanning, see the 'Security Scan' workflow"
+            echo "For code quality checks, see the 'Lint' workflow"
+            echo ""
+
+  # ---------------------------------------------------------------------------
+  # 2. Lint  <- .github/workflows/ci.yml job `lint`
+  # ---------------------------------------------------------------------------
+  lint:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - run:
+          name: Install clippy component
+          command: |
+            set -euo pipefail
+            rustup component add clippy
+            cargo clippy --version
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: cargo clippy
+          no_output_timeout: 30m
+          command: cargo clippy --workspace --all-features -- -D warnings -A clippy::empty_line_after_doc_comments
+      # Pin version + lockfile: an unpinned install re-resolves transitive deps
+      # against the live index, and tinyvec 1.13.0 fails to compile on the
+      # runner toolchain (0.20.2's shipped Cargo.lock has known-good 1.11.0).
+      - run:
+          name: Install cargo-deny 0.20.2
+          command: |
+            set -euo pipefail
+            if cargo deny --version 2>/dev/null | grep -q '0\.20\.2'; then
+              echo "[OK] cargo-deny 0.20.2 already installed"
+            else
+              cargo install cargo-deny --version 0.20.2 --locked
+            fi
+      - run:
+          name: cargo deny check
+          no_output_timeout: 15m
+          command: cargo deny check
+      - run:
+          name: Check lockfile is up to date
+          command: cargo update --workspace --locked --dry-run
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 3. Rust Linting  <- .github/workflows/lint.yml job `rust`
+  # ---------------------------------------------------------------------------
+  rust_linting:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - run:
+          name: Install rustfmt and python3
+          command: |
+            set -euo pipefail
+            rustup component add rustfmt
+            cargo fmt --version
+            if ! command -v python3 >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends python3
+            fi
+            python3 --version
+      - run:
+          name: Check Rust formatting
+          command: cargo fmt --all -- --check
+      # Blocking, not informational: catches the class of bug behind the
+      # historical sender-impersonation hole (an input discarded via `_name`).
+      - run:
+          name: Check for ignored parameters in the merge-blocked perimeter
+          command: python3 scripts/check_perimeter_underscore_params.py
+      - run:
+          name: Check for unwrap() and println! in production library code
+          command: |
+            set -euo pipefail
+            command -v python3 >/dev/null 2>&1 || { echo "[FAIL] python3 missing; cannot run unwrap/println gate"; exit 1; }
+            python3 -m unittest scripts/test_check_prod_unwrap_println.py
+            python3 scripts/check_prod_unwrap_println.py
+
+  # ---------------------------------------------------------------------------
+  # 4. Test (ubuntu-latest)  <- .github/workflows/ci.yml job `test`, ubuntu leg
+  # ---------------------------------------------------------------------------
+  test_ubuntu:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: Run workspace tests
+          no_output_timeout: 30m
+          command: cargo test --workspace --features test-utils
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 5. Handoff ownership scope  <- .github/workflows/ci.yml job `handoff-scope`
+  # ---------------------------------------------------------------------------
+  handoff_ownership_scope:
+    executor: python-linux
+    steps:
+      - checkout
+      - fetch_full_history
+      - compute_gate_base
+      - run:
+          name: Validate changed handoffs
+          shell: /bin/bash
+          command: |
+            set -euo pipefail
+            python scripts/validate_handoff_scope.py --repo-root . --changed-from "$GATE_BASE"
+      - run:
+          name: Classify the gate itself
+          shell: /bin/bash
+          command: python scripts/validate_handoff_scope.py --repo-root . --self-test
+
+  # ---------------------------------------------------------------------------
+  # 6. Orchestration control plane  <- .github/workflows/ci.yml job `orchestration`
+  # ---------------------------------------------------------------------------
+  orchestration_control_plane:
+    executor: python-linux
+    steps:
+      - checkout
+      # The contract and its evals are stdlib-only by design (the manifest is
+      # JSON-compatible YAML, parsed without PyYAML), so nothing is installed
+      # here - and nothing is assumed either: the import is proved first.
+      - run:
+          name: Prove the contract modules import
+          command: |
+            set -euo pipefail
+            cd scripts
+            python3 -c "import orchestration_contract, orchestrate_strict, jev_canonical_check; print('[OK] orchestration modules import')"
+      - run:
+          name: Validate orchestration contract
+          command: |
+            set -euo pipefail
+            python3 scripts/orchestration_contract.py
+      - run:
+          name: Run deterministic orchestration tests
+          command: |
+            set -euo pipefail
+            python3 scripts/test_orchestration_v2.py
+
+  # ---------------------------------------------------------------------------
+  # 7. Docs  <- .github/workflows/ci.yml job `docs`
+  # ---------------------------------------------------------------------------
+  # The Actions original is path-filtered on `rust_relevant`. This job is NOT:
+  # a path filter is how a context silently skips, and the hygiene job in this
+  # same config already refuses path-filtered required contexts. Running always
+  # costs a few minutes and can never report a gate that did not run.
+  docs_build:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: cargo doc
+          no_output_timeout: 20m
+          command: cargo doc --workspace --no-deps
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 8. FFI Surface Contract  <- .github/workflows/ci.yml job `ffi-surface`
+  # ---------------------------------------------------------------------------
+  ffi_surface_contract:
+    executor: rust-linux
+    # Locale pinned deliberately. scripts/ffi_surface.sh sorts the extracted
+    # symbols and compares the result byte-for-byte with the checked-in
+    # snapshots, and those snapshots are only reproducible under C collation:
+    # LC_ALL=C sort reproduces scripts/ffi-snapshots/kotlin-symbols.txt exactly
+    # while an en_US.UTF-8 sort of the same file reorders 68 lines (286 of the
+    # file's 462 lines begin with a backticked identifier). An unpinned locale
+    # therefore lets a container fail - or pass - this gate with no code change.
+    environment:
+      LC_ALL: C
+      LANG: C
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: Build the core crate with the bindings generator
+          no_output_timeout: 30m
+          command: cargo build -p scmessenger-core --features gen-bindings
+      - run:
+          name: Generate Kotlin bindings
+          no_output_timeout: 20m
+          command: cargo run -p scmessenger-core --bin gen_kotlin --features gen-bindings
+      - run:
+          name: Generate Swift bindings
+          no_output_timeout: 20m
+          command: cargo run -p scmessenger-core --bin gen_swift --features gen-bindings
+      # scripts/ffi_surface.sh fails closed when a binding file is missing or
+      # extracts zero symbols, so a generation failure cannot read as a pass.
+      - run:
+          name: Diff the FFI surface against the checked-in snapshot
+          command: scripts/ffi_surface.sh
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 9. Forgery/Negative Security Regression Tests
+  #    <- .github/workflows/security-regression-tests.yml job `forgery-regression`
+  # ---------------------------------------------------------------------------
+  forgery_regression:
+    executor: rust-linux
+    steps:
+      - checkout
+      - assert_pinned_toolchain
+      - restore_cargo_cache
+      - install_build_deps
+      - run:
+          name: Run forgery/negative-security regression tests
+          no_output_timeout: 60m
+          command: |
+            set -euo pipefail
+            OUTPUT_FILE=forgery_test_output.txt
+
+            # `forg`, not `forgery`: must match both "..._downgrade_forgery" and
+            # "..._legacy_forged_unsigned_envelope_is_rejected". Scoped to
+            # -p scmessenger-core (not --workspace): every crypto/transport/
+            # routing/privacy source path and every current forg* test live in
+            # that one package.
+            cargo test -p scmessenger-core --no-fail-fast forg 2>&1 | tee "$OUTPUT_FILE"
+
+            # cargo's harness prints one "test result: ok. N passed; M failed;"
+            # line per binary it runs; passed+failed = tests actually selected
+            # and executed. "filtered out" is excluded on purpose: those did not
+            # match `forg`.
+            #
+            # `|| true` inside the substitution is load-bearing and is the same
+            # pipefail interaction wave 1 documents: when NOTHING matches, grep
+            # exits 1 and a bare MATCHED=$(...) would kill the script before the
+            # zero-match diagnostic could print. The gate still fails closed;
+            # it just says why.
+            MATCHED=$(grep -oE '[0-9]+ passed; [0-9]+ failed' "$OUTPUT_FILE" \
+              | awk -F'[^0-9]+' '{sum += $1 + $2} END {print sum+0}' || true)
+            MATCHED=${MATCHED:-0}
+            echo "Selected+ran test count: $MATCHED"
+
+            if [ "$MATCHED" -eq 0 ]; then
+              echo "[FAIL] the 'forg' filter selected ZERO tests in scmessenger-core."
+              echo "       This must never report green: either the forgery tests have"
+              echo "       not landed on this branch, or every test matching 'forg' was"
+              echo "       deleted or renamed away from that pattern."
+              exit 1
+            fi
+
+            echo "[OK] $MATCHED forgery/negative-security regression test(s) selected and passed"
+      - save_cargo_cache
+
+  # ---------------------------------------------------------------------------
+  # 10. Kotlin Linting  <- .github/workflows/lint.yml job `kotlin`
+  # ---------------------------------------------------------------------------
+  kotlin_linting:
+    executor: android-linux
+    steps:
+      - checkout
+      - run:
+          name: Assert the Gradle wrapper matches the project's pin
+          command: |
+            set -euo pipefail
+            java -version
+            grep -E '^distributionUrl' android/gradle/wrapper/gradle-wrapper.properties
+            grep -q 'gradle-8\.13-bin\.zip' android/gradle/wrapper/gradle-wrapper.properties \
+              || { echo "[FAIL] android wrapper is not gradle 8.13; refusing to run the lint task on a different Gradle" >&2; exit 1; }
+      - run:
+          name: Run ktlint
+          no_output_timeout: 25m
+          command: |
+            set -euo pipefail
+            cd android
+            ./gradlew ktlintCheck --console=plain --stacktrace 2>&1 | tee ktlint-output.txt
+            # A green badge must not be the only evidence the task ran. This host
+            # cannot read CircleCI job output (the API returns 401 without a
+            # token), so the job proves it in its own exit status: if Gradle did
+            # not actually execute a ktlint task, this step fails instead of
+            # letting a no-op pass for a lint run.
+            if ! grep -qE '^> Task :[a-zA-Z0-9:_-]*ktlint' ktlint-output.txt; then
+              echo "[FAIL] Gradle executed no ktlint task on this run."
+              echo "       A 'Kotlin Linting' context that ran no ktlint task is not a"
+              echo "       lint verdict; refusing to report one."
+              exit 1
+            fi
+            echo "[OK] ktlint tasks executed:"
+            grep -E '^> Task :[a-zA-Z0-9:_-]*ktlint' ktlint-output.txt
+      # ignoreFailures=true means this task CANNOT fail the build. Saying so on
+      # every run is the difference between a context that is read honestly and
+      # one that is mistaken for a passing lint gate.
+      - run:
+          name: Report what this context actually asserts
+          command: |
+            set -euo pipefail
+            echo "[WARNING] android/app/build.gradle sets ktlint { ignoreFailures = true }."
+            echo "[NON-ENFORCING] A green Kotlin Linting context proves ktlint RAN on this"
+            echo "               commit. It does not prove ktlint passed. Do not add this"
+            echo "               context to branch protection while ignoreFailures is true."
+            reports=$(find android -path '*reports/ktlint*' -type f 2>/dev/null || true)
+            if [ -z "$reports" ]; then
+              echo "[WARNING] no ktlint report file was produced under android/**/reports/ktlint"
+            else
+              echo "[INFO] ktlint report files produced:"
+              echo "$reports"
+            fi
+
+  # ---------------------------------------------------------------------------
+  # 11. JavaScript Linting  <- .github/workflows/lint.yml job `javascript`
+  # ---------------------------------------------------------------------------
+  # The Actions original lints wasm/ and skips when wasm/package.json is absent.
+  # It is absent on this repository (read 2026-11-07: no package.json anywhere
+  # under wasm/), so the port keeps the same behaviour AND prints that it is
+  # non-enforcing, instead of turning a missing target into a green lint claim.
+  # The moment wasm/package.json appears this job enforces with no change here.
+  javascript_linting:
+    executor: node-linux
+    steps:
+      - checkout
+      - run:
+          name: Detect the lint target
+          command: |
+            set -euo pipefail
+            node --version
+            npm --version
+            if [ -f wasm/package.json ]; then
+              echo "[OK] lint target present: wasm/package.json"
+              echo 'export JS_LINT_TARGET=present' >> "$BASH_ENV"
+            else
+              echo "[WARNING] no JavaScript lint target on this commit: wasm/package.json is absent."
+              echo "[NON-ENFORCING] This context asserts nothing while the target is absent."
+              echo 'export JS_LINT_TARGET=absent' >> "$BASH_ENV"
+            fi
+      - run:
+          name: Install dependencies
+          command: |
+            set -euo pipefail
+            if [ "${JS_LINT_TARGET:-absent}" = "present" ]; then
+              cd wasm
+              npm install
+            else
+              echo "[SKIPPED] npm install: no package.json in wasm/ (not a pass, a documented gap)"
+            fi
+      - run:
+          name: Run eslint
+          command: |
+            set -euo pipefail
+            if [ "${JS_LINT_TARGET:-absent}" = "present" ]; then
+              cd wasm
+              npm run lint
+            else
+              echo "[SKIPPED] eslint: no package.json in wasm/ (not a pass, a documented gap)"
+            fi
+
+workflows:
+  ci:
+    jobs:
+      - repository_hygiene_checks:
+          name: Repository Hygiene Checks
+      - lint:
+          name: Lint
+      - rust_linting:
+          name: Rust Linting
+      - test_ubuntu:
+          name: Test (ubuntu-latest)
+      - handoff_ownership_scope:
+          name: Handoff ownership scope
+      # --- wave 2 (2026-11-07) -------------------------------------------------
+      # None of the six is a branch-protection context. Two of them print
+      # [NON-ENFORCING] on every run (Kotlin's ignoreFailures=true, and
+      # JavaScript's absent target); read their job output, not just the badge.
+      - orchestration_control_plane:
+          name: Orchestration control plane
+      - docs_build:
+          name: Docs
+      - ffi_surface_contract:
+          name: FFI Surface Contract
+      - forgery_regression:
+          name: Forgery/Negative Security Regression Tests
+      - kotlin_linting:
+          name: Kotlin Linting
+      - javascript_linting:
+          name: JavaScript Linting

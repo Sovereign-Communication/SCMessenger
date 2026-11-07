@@ -1,0 +1,25 @@
+--- a/iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift
++++ b/iOS/SCMessenger/SCMessenger/Data/MeshRepository.swift
+@@ -4407,22 +4407,6 @@
+         }
+         if !accepted {
+             logger.warning("sendBlePacket: no BLE transport accepted payload for requested \(peerId)")
+-        }
+-    }
+-
+-    @discardableResult
+-    func sendMultipeerPacket(peerId: String, data: Data) -> Bool {
+-        guard let multipeerTransport else {
+-            logger.warning("sendMultipeerPacket: Multipeer transport unavailable for \(peerId)")
+-            return false
+-        }
+-
+-        do {
+-            try multipeerTransport.sendData(toPeerId: peerId, data: data)
+-            return true
+-        } catch {
+-            logger.warning("sendMultipeerPacket failed for \(peerId): \(error.localizedDescription)")
+-            return false
+         }
+     }
+ 

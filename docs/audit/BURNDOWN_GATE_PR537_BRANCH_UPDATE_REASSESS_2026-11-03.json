@@ -1,0 +1,82 @@
+{
+    "acceptance":  [
+                       "Exact current PR head 7a040170263d09431d6dadfa37e68be7c9d0ebc4 is behind main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef; expected-head guard protects against concurrent change.",
+                       "The complete diff is one docker/metadata-action@v5 to @v6 substitution; the workflow has no changed Dockerfile, image, tag inputs or check semantics.",
+                       "All 23 checks are SUCCESS on the exact PR head; five required contexts on current main are SUCCESS.",
+                       "Official v6.0.0 metadata reports Node 24 requiring runner v2.327.1+, plus ESM/dependency updates and hash-in-list handling; workflow uses ubuntu-latest and its tag input contains no # values.",
+                       "The Docker Publish workflow is not triggered for pull_request; a PR branch update does not publish. Main push triggers Docker Publish and pushes image tags after merge; this is the expected effect of the user-directed landing.",
+                       "No job in the current PR CI run executes the Docker Publish workflow itself; the latest main Docker Publish success at 297e9e6 used the pre-change main workflow. Do not treat it as a v6 execution."
+                   ],
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/pull/537",
+    "instruction":  "Update the assigned PR #537 from current main using GitHub expected_head_sha=7a040170263d09431d6dadfa37e68be7c9d0ebc4. Do not merge in this step. The update must only trigger PR validation; do not manually dispatch Docker Publish. The later explicitly directed merge will trigger the main-push image publication, which must be checked after landing.",
+    "diff":  "diff --git a/.github/workflows/docker-publish.yml b/.github/workflows/docker-publish.yml\n--- a/.github/workflows/docker-publish.yml\n+++ b/.github/workflows/docker-publish.yml\n@@ -36,7 +36,7 @@\n-        uses: docker/metadata-action@v5\n+        uses: docker/metadata-action@v6\n",
+    "evidence":  [
+                     {
+                         "detail":  "Exact current head and complete one-line diff.",
+                         "source":  "gh api pulls/537 and gh pr diff 537",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "All 23 checks SUCCESS on exact head, including all five required contexts.",
+                         "source":  "gh pr checks 537 --json name,state,workflow,bucket,link",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "Main-push and workflow_dispatch triggers; non-PR jobs log in and push image tags; PR events do not trigger.",
+                         "source":  "git show origin/main:.github/workflows/docker-publish.yml",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Official release note and action metadata: Node 24 runtime with minimum runner version v2.327.1; ESM and dependency updates; hash handling change.",
+                         "source":  "gh api repos/docker/metadata-action/releases/tags/v6.0.0 and contents/action.yml?ref=v6.0.0",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "All five required main contexts success; 23 total check-runs success.",
+                         "source":  "gh api required_status_checks and check-runs for main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "Latest Docker Publish run 41353398815 succeeded on 297e9e6179eb29f0cbe58006368c5718a33e3a76 using the pre-v6 main workflow; it is not a v6 execution.",
+                         "source":  "gh run list --workflow Docker Publish --branch main --limit 10",
+                         "id":  "E6"
+                     },
+                     {
+                         "detail":  "Seven issue comments were reviewed; no PR reviews or inline comments. Latest prior note is 2026-11-01; current user steering supersedes its parked status.",
+                         "source":  "gh api issue comments and PR review endpoints for 537",
+                         "id":  "E7"
+                     }
+                 ],
+    "gate_call_nonce":  "bb071d6f-3c0d-4789-9bb4-46b1c7290421",
+    "wp":  "PR537-BRANCH-UPDATE-REASSESS-2026-11-03",
+    "evidence_map":  {
+                         "infra.ci_run_evidence":  [
+                                                       "E2",
+                                                       "E6"
+                                                   ],
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6",
+                                                                 "E7"
+                                                             ],
+                         "infra.checks_not_weakened":  [
+                                                           "E1",
+                                                           "E2"
+                                                       ],
+                         "infra.bounded_behaviour":  [
+                                                         "E1",
+                                                         "E3",
+                                                         "E4"
+                                                     ]
+                     },
+    "files":  [
+                  ".github/workflows/docker-publish.yml"
+              ],
+    "na_justifications":  {
+
+                          }
+}

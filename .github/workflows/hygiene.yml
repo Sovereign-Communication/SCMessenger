@@ -91,9 +91,18 @@ jobs:
           #
           # Generated UniFFI sources preserve upstream generator formatting.
           # Check authored files while excluding deterministic generated output.
+          #
+          # Patch artifacts are excluded as well. A unified diff renders the
+          # context line for a blank target line as a single space, so
+          # `git diff --check` reports the FORMAT as trailing whitespace and
+          # `new blank line at EOF`. Those `.patch` files are reviewed
+          # artifacts whose bytes must survive intact -- `git apply` depends on
+          # exactly those lines -- so the check stays pointed at source, where
+          # the rule is about content.
           mapfile -t CHANGED < <(git diff --name-only --ignore-cr-at-eol HEAD^ HEAD -- . \
             ':(exclude)iOS/SCMessenger/SCMessenger/Generated/**' \
-            ':(exclude)iOS/SCMessengerCore.xcframework/**/Headers/**')
+            ':(exclude)iOS/SCMessengerCore.xcframework/**/Headers/**' \
+            ':(exclude)*.patch')
 
           if [ "${#CHANGED[@]}" -eq 0 ]; then
             echo "[OK] only line-ending changes in range; check not applicable"

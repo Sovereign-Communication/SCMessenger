@@ -1,0 +1,525 @@
+{
+  "answers": {
+    "concurrency.shared_state_safe": {
+      "choice": "no",
+      "confidence": 0.2,
+      "probabilities": {
+        "na": 0.32,
+        "no": 0.47,
+        "yes": 0.21
+      },
+      "type": "choice"
+    },
+    "dead_code.no_live_callers": {
+      "choice": "yes",
+      "confidence": 0.96,
+      "probabilities": {
+        "na": 0.01,
+        "no": 0.02,
+        "yes": 0.97
+      },
+      "type": "choice"
+    },
+    "ffi_boundary.ffi_contract": {
+      "choice": "yes",
+      "confidence": 0.82,
+      "probabilities": {
+        "na": 0.08,
+        "no": 0.04,
+        "yes": 0.88
+      },
+      "type": "choice"
+    },
+    "identity.canon_identity": {
+      "choice": "yes",
+      "confidence": 0.3,
+      "probabilities": {
+        "na": 0.34,
+        "no": 0.13,
+        "yes": 0.53
+      },
+      "type": "choice"
+    },
+    "identity.recipient_parse_safe": {
+      "choice": "yes",
+      "confidence": 0.76,
+      "probabilities": {
+        "na": 0.1,
+        "no": 0.06,
+        "yes": 0.84
+      },
+      "type": "choice"
+    },
+    "instruction.instruction_matches": {
+      "noul": 0.54,
+      "type": "noul"
+    },
+    "lifecycle.resources_closed": {
+      "choice": "na",
+      "confidence": 0.89,
+      "probabilities": {
+        "na": 0.93,
+        "no": 0.01,
+        "yes": 0.06
+      },
+      "type": "choice"
+    },
+    "routing.callbacks_validated": {
+      "choice": "yes",
+      "confidence": 0.16,
+      "probabilities": {
+        "na": 0.39,
+        "no": 0.17,
+        "yes": 0.44
+      },
+      "type": "choice"
+    },
+    "routing.canon_routing_feed": {
+      "choice": "yes",
+      "confidence": 0.61,
+      "probabilities": {
+        "na": 0.04,
+        "no": 0.22,
+        "yes": 0.74
+      },
+      "type": "choice"
+    },
+    "security_input.failure_handled": {
+      "choice": "yes",
+      "confidence": 0.53,
+      "probabilities": {
+        "na": 0.17,
+        "no": 0.14,
+        "yes": 0.69
+      },
+      "type": "choice"
+    },
+    "security_input.validates_input": {
+      "choice": "yes",
+      "confidence": 0.2,
+      "probabilities": {
+        "na": 0.09,
+        "no": 0.44,
+        "yes": 0.47
+      },
+      "type": "choice"
+    },
+    "testplan.named_test": {
+      "choice": "yes",
+      "confidence": 0.97,
+      "probabilities": {
+        "na": 0.01,
+        "no": 0.01,
+        "yes": 0.98
+      },
+      "type": "choice"
+    }
+  },
+  "applicable_count": 11,
+  "bucket_threshold": 0.8,
+  "buckets": {
+    "concurrency": {
+      "answers": {
+        "shared_state_safe": {
+          "confidence": 0.2,
+          "score": 0.3088235294117647,
+          "verdict": "no"
+        }
+      },
+      "score": 0.3088235294117647,
+      "verdict": "fail"
+    },
+    "dead_code": {
+      "answers": {
+        "no_live_callers": {
+          "confidence": 0.96,
+          "score": 0.9797979797979798,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.9797979797979798,
+      "verdict": "pass"
+    },
+    "ffi_boundary": {
+      "answers": {
+        "ffi_contract": {
+          "confidence": 0.82,
+          "score": 0.9565217391304347,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.9565217391304347,
+      "verdict": "pass"
+    },
+    "identity": {
+      "answers": {
+        "canon_identity": {
+          "confidence": 0.3,
+          "score": 0.803030303030303,
+          "verdict": "yes"
+        },
+        "recipient_parse_safe": {
+          "confidence": 0.76,
+          "score": 0.9333333333333333,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.803030303030303,
+      "verdict": "pass"
+    },
+    "infra": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "instruction": {
+      "answers": {
+        "instruction_matches": {
+          "score": 0.54,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.54,
+      "verdict": "fail"
+    },
+    "lifecycle": {
+      "answers": {
+        "resources_closed": {
+          "score": null,
+          "verdict": "na"
+        }
+      },
+      "score": null,
+      "verdict": "na"
+    },
+    "routing": {
+      "answers": {
+        "callbacks_validated": {
+          "confidence": 0.16,
+          "score": 0.7213114754098361,
+          "verdict": "yes"
+        },
+        "canon_routing_feed": {
+          "confidence": 0.61,
+          "score": 0.7708333333333334,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.7213114754098361,
+      "verdict": "fail"
+    },
+    "security_crypto": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "security_input": {
+      "answers": {
+        "failure_handled": {
+          "confidence": 0.53,
+          "score": 0.8313253012048193,
+          "verdict": "yes"
+        },
+        "validates_input": {
+          "confidence": 0.2,
+          "score": 0.5164835164835165,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.5164835164835165,
+      "verdict": "fail"
+    },
+    "testplan": {
+      "answers": {
+        "named_test": {
+          "confidence": 0.97,
+          "score": 0.98989898989899,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.98989898989899,
+      "verdict": "pass"
+    }
+  },
+  "buckets_na": [
+    "security_crypto",
+    "lifecycle",
+    "infra"
+  ],
+  "buckets_selected": [
+    "identity",
+    "routing",
+    "security_input",
+    "ffi_boundary",
+    "concurrency",
+    "lifecycle",
+    "testplan",
+    "dead_code",
+    "instruction"
+  ],
+  "calls": [
+    {
+      "bucket": "identity",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 4696,
+      "is_fallback": false,
+      "state_chars": 12798,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "routing",
+      "chunk": "1/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 9259,
+      "is_fallback": false,
+      "state_chars": 31597,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "routing",
+      "chunk": "2/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 8725,
+      "is_fallback": false,
+      "state_chars": 31883,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "routing",
+      "chunk": "3/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 13891,
+      "is_fallback": false,
+      "state_chars": 45958,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "routing",
+      "chunk": "4/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 6674,
+      "is_fallback": false,
+      "state_chars": 21288,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "security_input",
+      "chunk": "1/3",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 8694,
+      "is_fallback": false,
+      "state_chars": 31897,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "security_input",
+      "chunk": "2/3",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 13860,
+      "is_fallback": false,
+      "state_chars": 45972,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "security_input",
+      "chunk": "3/3",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 6643,
+      "is_fallback": false,
+      "state_chars": 21302,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "ffi_boundary",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 8551,
+      "is_fallback": false,
+      "state_chars": 31893,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "concurrency",
+      "chunk": "1/2",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 9084,
+      "is_fallback": false,
+      "state_chars": 31605,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "concurrency",
+      "chunk": "2/2",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 10942,
+      "is_fallback": false,
+      "state_chars": 41682,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "lifecycle",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 4098,
+      "is_fallback": false,
+      "state_chars": 11544,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "testplan",
+      "chunk": "1/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 9458,
+      "is_fallback": false,
+      "state_chars": 32898,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "testplan",
+      "chunk": "2/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 8518,
+      "is_fallback": false,
+      "state_chars": 31885,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "testplan",
+      "chunk": "3/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 13684,
+      "is_fallback": false,
+      "state_chars": 45960,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "testplan",
+      "chunk": "4/4",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 6467,
+      "is_fallback": false,
+      "state_chars": 21290,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "dead_code",
+      "chunk": "1/2",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 13122,
+      "is_fallback": false,
+      "state_chars": 43902,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "dead_code",
+      "chunk": "2/2",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 6483,
+      "is_fallback": false,
+      "state_chars": 21292,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    },
+    {
+      "bucket": "instruction",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 4125,
+      "is_fallback": false,
+      "state_chars": 11823,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    }
+  ],
+  "confidence": 0.0,
+  "cost": 7.0129079999999995,
+  "endpoint": "typesafe",
+  "fallback_reason": null,
+  "fallback_used": false,
+  "gate_failures": [
+    "routing: score 0.72 < 0.80",
+    "security_input: score 0.52 < 0.80",
+    "concurrency: score 0.31 < 0.80",
+    "instruction: score 0.54 < 0.70"
+  ],
+  "input_tokens": 166974,
+  "is_fallback": false,
+  "is_passing": false,
+  "keyed": true,
+  "max_state_chars": 48000,
+  "min_confidence": 0.7,
+  "model": "jev-1.14.0",
+  "na_overrides": [],
+  "output_tokens": 1107,
+  "overall_score": 0.7099962958121359,
+  "reasons": [
+    "identity.canon_identity (choice): yes (conf: 0.3)",
+    "identity.recipient_parse_safe (choice): yes (conf: 0.76)",
+    "routing.canon_routing_feed (choice): yes (conf: 0.73)",
+    "routing.callbacks_validated (choice): yes (conf: 0.16)",
+    "routing.canon_routing_feed (choice): yes (conf: 0.7)",
+    "routing.callbacks_validated (choice): na (conf: 0.26)",
+    "routing.canon_routing_feed (choice): yes (conf: 0.77)",
+    "routing.callbacks_validated (choice): yes (conf: 0.19)",
+    "routing.canon_routing_feed (choice): yes (conf: 0.61)",
+    "routing.callbacks_validated (choice): yes (conf: 0.2)",
+    "security_input.validates_input (choice): yes (conf: 0.2)",
+    "security_input.failure_handled (choice): yes (conf: 0.53)",
+    "security_input.validates_input (choice): yes (conf: 0.56)",
+    "security_input.failure_handled (choice): yes (conf: 0.64)",
+    "security_input.validates_input (choice): yes (conf: 0.6)",
+    "security_input.failure_handled (choice): yes (conf: 0.76)",
+    "ffi_boundary.ffi_contract (choice): yes (conf: 0.82)",
+    "concurrency.shared_state_safe (choice): yes (conf: 0.25)",
+    "concurrency.shared_state_safe (choice): no (conf: 0.2)",
+    "lifecycle.resources_closed (choice): na (conf: 0.89)",
+    "testplan.named_test (choice): yes (conf: 1.0)",
+    "testplan.named_test (choice): yes (conf: 0.97)",
+    "testplan.named_test (choice): yes (conf: 0.98)",
+    "testplan.named_test (choice): yes (conf: 1.0)",
+    "dead_code.no_live_callers (choice): yes (conf: 0.96)",
+    "dead_code.no_live_callers (choice): yes (conf: 0.96)",
+    "instruction.instruction_matches (noul): 0.54"
+  ],
+  "schema_version": "1.1.0",
+  "scoped": true,
+  "supported": 0.54,
+  "wp": "BATCH-D-COMBINED-HEAD-DISPOSITION-2026-11-04-V2"
+}

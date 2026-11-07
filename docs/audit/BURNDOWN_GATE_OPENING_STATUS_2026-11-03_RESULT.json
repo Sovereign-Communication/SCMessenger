@@ -1,0 +1,125 @@
+{
+  "answers": {
+    "instruction.instruction_matches": {
+      "noul": 0.28,
+      "type": "noul"
+    }
+  },
+  "applicable_count": 1,
+  "bucket_threshold": 0.8,
+  "buckets": {
+    "concurrency": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "dead_code": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "ffi_boundary": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "identity": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "infra": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "instruction": {
+      "answers": {
+        "instruction_matches": {
+          "score": 0.28,
+          "verdict": "no"
+        }
+      },
+      "score": 0.28,
+      "verdict": "fail"
+    },
+    "lifecycle": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "routing": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "security_crypto": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "security_input": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "testplan": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    }
+  },
+  "buckets_na": [
+    "identity",
+    "routing",
+    "security_input",
+    "security_crypto",
+    "ffi_boundary",
+    "concurrency",
+    "lifecycle",
+    "testplan",
+    "infra",
+    "dead_code"
+  ],
+  "buckets_selected": [
+    "instruction"
+  ],
+  "calls": [
+    {
+      "bucket": "*",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 2902,
+      "is_fallback": false,
+      "state_chars": 7108,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    }
+  ],
+  "confidence": 0.0,
+  "cost": 0.121884,
+  "endpoint": "typesafe",
+  "fallback_reason": null,
+  "fallback_used": false,
+  "gate_failures": [
+    "instruction: score 0.28 < 0.70"
+  ],
+  "input_tokens": 2902,
+  "is_fallback": false,
+  "is_passing": false,
+  "keyed": true,
+  "max_state_chars": 48000,
+  "min_confidence": 0.7,
+  "model": "jev-1.14.0",
+  "na_overrides": [],
+  "output_tokens": 25,
+  "overall_score": 0.28,
+  "reasons": [
+    "instruction.instruction_matches (noul): 0.28"
+  ],
+  "schema_version": "1.1.0",
+  "scoped": false,
+  "supported": 0.28,
+  "wp": "LANE-OPENING-STATUS-2026-11-03"
+}

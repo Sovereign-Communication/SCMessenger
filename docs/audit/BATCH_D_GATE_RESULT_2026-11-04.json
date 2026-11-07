@@ -1,0 +1,320 @@
+{
+  "answers": {
+    "concurrency.shared_state_safe": {
+      "choice": "no",
+      "confidence": 0.1,
+      "probabilities": {
+        "na": 0.32,
+        "no": 0.4,
+        "yes": 0.28
+      },
+      "type": "choice"
+    },
+    "dead_code.no_live_callers": {
+      "choice": "yes",
+      "confidence": 0.85,
+      "probabilities": {
+        "na": 0.02,
+        "no": 0.08,
+        "yes": 0.9
+      },
+      "type": "choice"
+    },
+    "ffi_boundary.ffi_contract": {
+      "choice": "no",
+      "confidence": 0.22,
+      "probabilities": {
+        "na": 0.44,
+        "no": 0.48,
+        "yes": 0.08
+      },
+      "type": "choice"
+    },
+    "identity.canon_identity": {
+      "choice": "na",
+      "confidence": 0.6,
+      "probabilities": {
+        "na": 0.73,
+        "no": 0.12,
+        "yes": 0.15
+      },
+      "type": "choice"
+    },
+    "identity.recipient_parse_safe": {
+      "choice": "no",
+      "confidence": 0.14,
+      "probabilities": {
+        "na": 0.37,
+        "no": 0.43,
+        "yes": 0.2
+      },
+      "type": "choice"
+    },
+    "instruction.instruction_matches": {
+      "noul": 0.53,
+      "type": "noul"
+    },
+    "lifecycle.resources_closed": {
+      "choice": "na",
+      "confidence": 0.79,
+      "probabilities": {
+        "na": 0.86,
+        "no": 0.11,
+        "yes": 0.03
+      },
+      "type": "choice"
+    },
+    "routing.callbacks_validated": {
+      "choice": "yes",
+      "confidence": 0.3,
+      "probabilities": {
+        "na": 0.24,
+        "no": 0.23,
+        "yes": 0.53
+      },
+      "type": "choice"
+    },
+    "routing.canon_routing_feed": {
+      "choice": "yes",
+      "confidence": 0.79,
+      "probabilities": {
+        "na": 0.04,
+        "no": 0.1,
+        "yes": 0.86
+      },
+      "type": "choice"
+    },
+    "security_input.failure_handled": {
+      "choice": "yes",
+      "confidence": 0.88,
+      "probabilities": {
+        "na": 0.05,
+        "no": 0.03,
+        "yes": 0.92
+      },
+      "type": "choice"
+    },
+    "security_input.validates_input": {
+      "choice": "yes",
+      "confidence": 0.43,
+      "probabilities": {
+        "na": 0.05,
+        "no": 0.33,
+        "yes": 0.62
+      },
+      "type": "choice"
+    },
+    "testplan.named_test": {
+      "choice": "yes",
+      "confidence": 0.94,
+      "probabilities": {
+        "na": 0.01,
+        "no": 0.03,
+        "yes": 0.96
+      },
+      "type": "choice"
+    }
+  },
+  "applicable_count": 11,
+  "bucket_threshold": 0.8,
+  "buckets": {
+    "concurrency": {
+      "answers": {
+        "shared_state_safe": {
+          "confidence": 0.1,
+          "score": 0.411764705882353,
+          "verdict": "no"
+        }
+      },
+      "score": 0.411764705882353,
+      "verdict": "fail"
+    },
+    "dead_code": {
+      "answers": {
+        "no_live_callers": {
+          "confidence": 0.85,
+          "reason": "uncited: no evidence_map entry for this question",
+          "score": 0.0,
+          "verdict": "no"
+        }
+      },
+      "score": 0.0,
+      "verdict": "fail"
+    },
+    "ffi_boundary": {
+      "answers": {
+        "ffi_contract": {
+          "confidence": 0.22,
+          "score": 0.14285714285714288,
+          "verdict": "no"
+        }
+      },
+      "score": 0.14285714285714288,
+      "verdict": "hard_fail"
+    },
+    "identity": {
+      "answers": {
+        "canon_identity": {
+          "reason": "protected primary question answered na (no na_justifications entry); treated as no",
+          "score": 0.0,
+          "verdict": "no"
+        },
+        "recipient_parse_safe": {
+          "confidence": 0.14,
+          "score": 0.3174603174603175,
+          "verdict": "no"
+        }
+      },
+      "score": 0.0,
+      "verdict": "hard_fail"
+    },
+    "infra": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "instruction": {
+      "answers": {
+        "instruction_matches": {
+          "score": 0.53,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.53,
+      "verdict": "fail"
+    },
+    "lifecycle": {
+      "answers": {
+        "resources_closed": {
+          "score": null,
+          "verdict": "na"
+        }
+      },
+      "score": null,
+      "verdict": "na"
+    },
+    "routing": {
+      "answers": {
+        "callbacks_validated": {
+          "confidence": 0.3,
+          "reason": "uncited: no evidence_map entry for this question",
+          "score": 0.0,
+          "verdict": "no"
+        },
+        "canon_routing_feed": {
+          "confidence": 0.79,
+          "reason": "uncited: no evidence_map entry for this question",
+          "score": 0.0,
+          "verdict": "no"
+        }
+      },
+      "score": 0.0,
+      "verdict": "hard_fail"
+    },
+    "security_crypto": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "security_input": {
+      "answers": {
+        "failure_handled": {
+          "confidence": 0.88,
+          "reason": "uncited: no evidence_map entry for this question",
+          "score": 0.0,
+          "verdict": "no"
+        },
+        "validates_input": {
+          "confidence": 0.43,
+          "reason": "uncited: no evidence_map entry for this question",
+          "score": 0.0,
+          "verdict": "no"
+        }
+      },
+      "score": 0.0,
+      "verdict": "hard_fail"
+    },
+    "testplan": {
+      "answers": {
+        "named_test": {
+          "confidence": 0.94,
+          "score": 0.9696969696969697,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.9696969696969697,
+      "verdict": "pass"
+    }
+  },
+  "buckets_na": [
+    "security_crypto",
+    "lifecycle",
+    "infra"
+  ],
+  "buckets_selected": [
+    "identity",
+    "routing",
+    "security_input",
+    "ffi_boundary",
+    "concurrency",
+    "lifecycle",
+    "testplan",
+    "dead_code",
+    "instruction"
+  ],
+  "calls": [
+    {
+      "bucket": "*",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 4901,
+      "is_fallback": false,
+      "state_chars": 8144,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    }
+  ],
+  "confidence": 0.1,
+  "cost": 0.205842,
+  "endpoint": "typesafe",
+  "fallback_reason": null,
+  "fallback_used": false,
+  "gate_failures": [
+    "identity: protected bucket answered no",
+    "routing: protected bucket answered no",
+    "security_input: protected bucket answered no",
+    "ffi_boundary: protected bucket answered no",
+    "concurrency: score 0.41 < 0.80",
+    "dead_code: score 0.00 < 0.80",
+    "instruction: score 0.53 < 0.70"
+  ],
+  "input_tokens": 4901,
+  "is_fallback": false,
+  "is_passing": false,
+  "keyed": true,
+  "max_state_chars": 48000,
+  "min_confidence": 0.7,
+  "model": "jev-1.14.0",
+  "na_overrides": [],
+  "output_tokens": 459,
+  "overall_score": 0.21245979118920297,
+  "reasons": [
+    "identity.canon_identity (choice): na (conf: 0.6)",
+    "identity.recipient_parse_safe (choice): no (conf: 0.14)",
+    "routing.canon_routing_feed (choice): yes (conf: 0.79)",
+    "routing.callbacks_validated (choice): yes (conf: 0.3)",
+    "security_input.validates_input (choice): yes (conf: 0.43)",
+    "security_input.failure_handled (choice): yes (conf: 0.88)",
+    "ffi_boundary.ffi_contract (choice): no (conf: 0.22)",
+    "concurrency.shared_state_safe (choice): no (conf: 0.1)",
+    "lifecycle.resources_closed (choice): na (conf: 0.79)",
+    "testplan.named_test (choice): yes (conf: 0.94)",
+    "dead_code.no_live_callers (choice): yes (conf: 0.85)",
+    "instruction.instruction_matches (noul): 0.53"
+  ],
+  "schema_version": "1.1.0",
+  "scoped": false,
+  "supported": 0.53,
+  "wp": "BATCH-D-COMBINED-HEAD-DISPOSITION-2026-11-04"
+}

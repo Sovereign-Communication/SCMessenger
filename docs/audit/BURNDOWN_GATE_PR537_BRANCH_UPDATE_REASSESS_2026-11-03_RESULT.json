@@ -1,0 +1,173 @@
+{
+  "answers": {
+    "infra.bounded_behaviour": {
+      "choice": "na",
+      "confidence": 0.43,
+      "probabilities": {
+        "na": 0.62,
+        "no": 0.3,
+        "yes": 0.08
+      },
+      "type": "choice"
+    },
+    "infra.checks_not_weakened": {
+      "choice": "yes",
+      "confidence": 0.35,
+      "probabilities": {
+        "na": 0.36,
+        "no": 0.07,
+        "yes": 0.57
+      },
+      "type": "choice"
+    },
+    "infra.ci_run_evidence": {
+      "choice": "no",
+      "confidence": 0.79,
+      "probabilities": {
+        "na": 0.0,
+        "no": 0.86,
+        "yes": 0.14
+      },
+      "type": "choice"
+    },
+    "instruction.instruction_matches": {
+      "noul": 0.84,
+      "type": "noul"
+    }
+  },
+  "applicable_count": 3,
+  "bucket_threshold": 0.8,
+  "buckets": {
+    "concurrency": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "dead_code": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "ffi_boundary": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "identity": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "infra": {
+      "answers": {
+        "bounded_behaviour": {
+          "score": null,
+          "verdict": "na"
+        },
+        "checks_not_weakened": {
+          "confidence": 0.35,
+          "score": 0.8906250000000001,
+          "verdict": "yes"
+        },
+        "ci_run_evidence": {
+          "confidence": 0.79,
+          "score": 0.14,
+          "verdict": "no"
+        }
+      },
+      "score": 0.14,
+      "verdict": "fail"
+    },
+    "instruction": {
+      "answers": {
+        "instruction_matches": {
+          "score": 0.84,
+          "verdict": "yes"
+        }
+      },
+      "score": 0.84,
+      "verdict": "pass"
+    },
+    "lifecycle": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "routing": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "security_crypto": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "security_input": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    },
+    "testplan": {
+      "answers": {},
+      "score": null,
+      "verdict": "na"
+    }
+  },
+  "buckets_na": [
+    "identity",
+    "routing",
+    "security_input",
+    "security_crypto",
+    "ffi_boundary",
+    "concurrency",
+    "lifecycle",
+    "testplan",
+    "dead_code"
+  ],
+  "buckets_selected": [
+    "infra",
+    "instruction"
+  ],
+  "calls": [
+    {
+      "bucket": "*",
+      "chunk": "1/1",
+      "endpoint": "typesafe",
+      "fallback_reason": null,
+      "input_tokens": 2205,
+      "is_fallback": false,
+      "state_chars": 3843,
+      "typesafe_error_type": null,
+      "typesafe_http": 200
+    }
+  ],
+  "confidence": 0.35,
+  "cost": 0.09261,
+  "endpoint": "typesafe",
+  "fallback_reason": null,
+  "fallback_used": false,
+  "gate_failures": [
+    "infra: score 0.14 < 0.80"
+  ],
+  "input_tokens": 2205,
+  "is_fallback": false,
+  "is_passing": false,
+  "keyed": true,
+  "max_state_chars": 48000,
+  "min_confidence": 0.7,
+  "model": "jev-1.14.0",
+  "na_overrides": [],
+  "output_tokens": 148,
+  "overall_score": 0.6066666666666666,
+  "reasons": [
+    "infra.bounded_behaviour (choice): na (conf: 0.43)",
+    "infra.checks_not_weakened (choice): yes (conf: 0.35)",
+    "infra.ci_run_evidence (choice): no (conf: 0.79)",
+    "instruction.instruction_matches (noul): 0.84"
+  ],
+  "schema_version": "1.1.0",
+  "scoped": false,
+  "supported": 0.84,
+  "wp": "PR537-BRANCH-UPDATE-REASSESS-2026-11-03"
+}

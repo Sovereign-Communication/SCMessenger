@@ -1,0 +1,70 @@
+{
+    "wp":  "Opening lane status for comprehensive burndown",
+    "ticket":  "https://github.com/Sovereign-Communication/SCMessenger/issues/602",
+    "instruction":  "Gate the exact proposed opening status for factual accuracy and evidence coverage before posting it to #653 and mirroring it to #602. The status is a verification record only; it authorizes no merge, closure, branch update, or deletion.",
+    "files":  [
+                  "docs/audit/BURNDOWN_GATE_OPENING_STATUS_2026-11-03.json"
+              ],
+    "proposed_comment":  "## STATUS — Comprehensive burndown session (2026-11-03, FreeBuff)\n\nTIME: 0 complete paid-hour blocks (~22:37Z–23:00Z; first block in progress).\nLane: `lane/burndown` / #653; tracker #602.\nSHAs: main `43a3cdbdc709b2a376f4e5d30b9980463c70dfef`; lane and #653 `74d13d335040cc4e8a3ed845aac0da76390efe89`.\n\nSTOP: Read #653 through Treystu comment 6617251896 (22:37Z) and #602 through 6617252501 (22:37Z). No standalone Treystu STOP directive found.\n\nDONE since prior status: `git fetch origin lane/burndown` and `git rev-list --left-right --count origin/lane/burndown...HEAD` show 0/0; no tracked diff. `Get-PSDrive C` reports 13,634,232,320 free bytes. Five pre-existing untracked paths remain untouched; this turn created local canonical-gate input/result files under `docs/audit/`. Fresh main check-runs show 23 jobs on the current main SHA, all successful; the five required contexts are Repository Hygiene Checks, Lint, Rust Linting, Test (ubuntu-latest), and Handoff ownership scope, all success.\n\nCanonical-gate setup friction: the first helper attempt returned `[FAIL] Harness checkout missing: C:\\Users\\SCM\\Documents\\GitHub\\SCMessenger\\vendor\\sovereign-harness`. The repository bootstrap admitted the manifest-pinned production Harness v0.4.1 at SHA `ad4a30052955e1f574c90f426edfc7a274e16ebf`; its probes passed. The C1 gate call used direct TypeSafe, `typesafe_key=True`, `fallback_used=False`, model `jev-1.14.0`, `verdict=pass`, `supported=0.82`, `confidence=0.88` (telemetry).\n\nC1 WIP: #609 head `4ed8168bbf1febfc677979990344d5c9f00ab072` has all five required contexts success and no non-success jobs. #630 head `08af5fa64924130bdf5840a69f306307de684d8e` has all required contexts success; non-required iOS Build job 120404146215 and Swift Linting job 120404049436 are cancelled. #632 head `50c1a661823d219f96b2bfc48fbc02a7508ac636` has all required contexts success; non-required Swift Linting job 120412592156 and Forgery/Negative Security Regression Tests job 120400206789 are cancelled. These raw job conclusions explain why `gh pr checks` renders them as failures.\n\nWave 4: #634 head `e9cb31d880b42a0dc10bf3139b74a6ad0cf1ccb8` and #635 head `de27304f982caf122dcfacc730bafc0bfe99a936` each have a cancelled Test (ubuntu-latest) job on that exact SHA (jobs 120407991951 and 120416933135). No run is currently queued or in progress on either head. Their verdict comments and targeted reruns are not yet posted/launched.\n\nNEXT: Post the three settled C1 verdicts with gate notes; rerun only the Test (ubuntu-latest) job for #634 and #635, at most two concurrent C1 runs; after C1 is terminal, take #537 first, update its assigned branch as ruled, reverify, and land only if the base remains green.\n\nBLOCKERS: The first opening-status gate call returned `instruction_matches=0.57`, below the helper\u0027s 0.70 floor (`confidence=0.79`, telemetry; TypeSafe response, no fallback). I am investigating that low score by adding the exact proposed status and claim-level evidence before a fresh gate call; no status has been posted yet. No landing has been attempted.\n\nDIRECTIVES acknowledged: #653 comments 6617045928 (friction audit + ledger), 6617050924 (updated queue), 6617141504 (canonical-key correction), and 6617251896 (comprehensive burndown). I will record the helper\u0027s own `typesafe_key` line and each verdict; I will not use an environment listing as gate evidence.\n\nOWNER-RESERVED, with next act, not decided by the lane: #510 operator/lease/hash-manifest; #603 literal Jev question/method, threshold wording, release go/no-go, tag and publish rulings; alert #17 final disposition; #623–#625 release inclusion; preserved-WIP disposition including backup/orphan-* (never delete); backup approval plus Overseer acknowledgement; removal-readiness owner-confirmation flag or owner-chosen archive location for `scratch-classify-archive/`, `zai-orphans/`, `claude-config-archive/`, `.cloud-attachments/`; v0.5.2 opening. #594, #620, #622\u0027s subject matter beyond the directed #657 verification set, and #489 remain fenced.",
+    "acceptance":  [
+                       "Every numeric and SHA claim in proposed_comment is tied to a command or current GitHub API response listed in evidence.",
+                       "C1 required/non-required job conclusions are reported from exact-head check summaries and raw run/job records; cancelled is not called failed.",
+                       "The canonical Helper setup error and its pinned-source recovery, both gate attempts, and the current gate blocker are reported without exposing key material.",
+                       "The owner-reserved list is copied from the newest steering with each act named; fences remain untouched."
+                   ],
+    "evidence":  [
+                     {
+                         "detail":  "Read all current lane comments; latest Treystu comments are 6617251896 and 6617252501 at 22:37Z; no standalone STOP.",
+                         "source":  "gh api issue comments #653/#602",
+                         "id":  "E1"
+                     },
+                     {
+                         "detail":  "Branch lane/burndown matches origin at 74d13d335040cc4e8a3ed845aac0da76390efe89, 0 ahead/behind; no tracked diff; five initial untracked entries plus docs/audit created this turn.",
+                         "source":  "git fetch origin lane/burndown; git status --short --branch; git rev-list --left-right --count origin/lane/burndown...HEAD",
+                         "id":  "E2"
+                     },
+                     {
+                         "detail":  "Free=13634232320 bytes.",
+                         "source":  "Get-PSDrive C",
+                         "id":  "E3"
+                     },
+                     {
+                         "detail":  "Main 43a3cdbdc709b2a376f4e5d30b9980463c70dfef, 23 check runs, all successful; required contexts read exactly as in proposed_comment.",
+                         "source":  "gh api commits/main/check-runs?per_page=100; gh api branch protection",
+                         "id":  "E4"
+                     },
+                     {
+                         "detail":  "Pinned production v0.4.1 at ad4a30052955e1f574c90f426edfc7a274e16ebf admitted; probes passed.",
+                         "source":  "python scripts/update_local_harness.py --mode bootstrap",
+                         "id":  "E5"
+                     },
+                     {
+                         "detail":  "typesafe_key=True; direct TypeSafe jev-1.14.0; pass supported=0.82 confidence=0.88; no fallback.",
+                         "source":  "canonical helper C1 call, nonce a6d46fdb-e2b6-42ca-b85d-74f8e79f0ad4",
+                         "id":  "E6"
+                     },
+                     {
+                         "detail":  "Direct TypeSafe jev-1.14.0; instruction_matches=0.57; helper returned [FAIL] because 0.57 \u003c 0.70; confidence=0.79 telemetry; investigation required.",
+                         "source":  "canonical helper opening-status attempt, nonce a696ed3b-95b7-43b7-9cee-27445cef7673",
+                         "id":  "E7"
+                     },
+                     {
+                         "detail":  "Exact current heads and raw job IDs/conclusions are included in proposed_comment.",
+                         "source":  "gh pr view/checks and gh run view for #609 #630 #632 #634 #635",
+                         "id":  "E8"
+                     }
+                 ],
+    "evidence_map":  {
+                         "instruction.instruction_matches":  [
+                                                                 "E1",
+                                                                 "E2",
+                                                                 "E3",
+                                                                 "E4",
+                                                                 "E5",
+                                                                 "E6",
+                                                                 "E7",
+                                                                 "E8"
+                                                             ]
+                     },
+    "gate_call_nonce":  "30404487-e045-4f3f-be55-4401f5987ea3"
+}
