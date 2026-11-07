@@ -131,3 +131,42 @@ concurrency group. On the current head `47266ed093` the read is
 scope` success, with `Lint` and `Test (ubuntu-latest)` queued on the two-slot
 pool. Cancellations are recorded as they read - they are neither passes nor
 blocks (clause 8).
+
+## Addendum (2026-11-07): pipeline #1's only red - the PyYAML environment gap, cured
+
+Pipeline #1 on `41fed8ac7` produced the rail's first verdict and it was a real
+finding, not a port defect: four of the five contexts read `success` and
+`Repository Hygiene Checks` read `failure` at the step `Verify workflow YAML has
+no duplicate mapping keys`, with
+
+    [ERROR] PyYAML is not installed; cannot check workflow YAML.
+            Install it rather than skipping the check.
+
+The cause is an environment gap the Actions original never had to state:
+`check_workflow_yaml.py` imports `yaml` and exits **2** when the import fails,
+and GitHub's `ubuntu-latest` image happens to preinstall PyYAML while
+`cimg/python:3.11` does not. The gate therefore did not run at all on this rail
+- and a gate that cannot run is not a gate with nothing to check.
+
+Cure: a named command `install_python_gate_deps` in `.circleci/config.yml`,
+invoked in the hygiene job directly after `checkout`, which
+
+- installs `pyyaml==6.0.2` pinned (a moved dependency cannot silently change the
+  parse underneath a green repository), and
+- imports it back and echoes the version, so the log shows the gate HAS a
+  parser before the gate runs.
+
+Skipping the step was explicitly rejected: it would leave the duplicate-key
+check unexecuted while the job read green, which is exactly the shape
+`check_workflow_yaml.py --self-test` exists to prevent. The remaining four
+hygiene gates (`check_required_contexts.py`) did pass on pipeline #1 through
+their documented `yq` fallback, which is why the failure surfaced at this step
+and not earlier; with PyYAML importable that script now selects PyYAML and names
+it in its output.
+
+Local verification before push: `.circleci/config.yml` parses under the
+repository's duplicate-key loader (the same loader the gate uses), all
+top-level keys intact, hygiene step order `checkout` ->
+`install_python_gate_deps` -> `fetch_full_history` -> `compute_gate_base` ->
+the 13 checks. The fresh exact-head pipeline is the authoritative check and is
+read, not predicted, on the pushed head.

@@ -131,6 +131,27 @@ commands:
             pkg-config --exists dbus-1 || { echo "[FAIL] libdbus-1-dev not visible to pkg-config" >&2; exit 1; }
             command -v protoc >/dev/null 2>&1 || { echo "[FAIL] protoc missing" >&2; exit 1; }
 
+  install_python_gate_deps:
+    description: >-
+      The python gates in the hygiene job parse YAML with PyYAML, and
+      check_workflow_yaml.py fails closed (exit 2) when it cannot import it:
+      "PyYAML is not installed; cannot check workflow YAML." Pipeline #1 on
+      41fed8ac failed exactly there. cimg/python does not ship PyYAML, and the
+      Actions original only had it because GitHub's ubuntu images preinstall it,
+      so the dependency is installed explicitly here. Installing it is the cure;
+      removing or skipping the step would leave the duplicate-key gate
+      unexecuted, which is not a pass. The version is pinned so a new PyYAML
+      release cannot change the parse underneath a green repository, and it is
+      imported back and echoed so the log proves the gate HAS a parser before it
+      runs rather than reporting a skip that looks like a pass.
+    steps:
+      - run:
+          name: Install python gate dependencies (PyYAML)
+          command: |
+            set -euo pipefail
+            python3 -m pip install --quiet --disable-pip-version-check "pyyaml==6.0.2"
+            python3 -c "import yaml; print('[OK] PyYAML ' + yaml.__version__ + ' importable; the duplicate-key gate can run')"
+
   assert_pinned_toolchain:
     description: >-
       The pin is the reason the repository's red/green state is a function of
@@ -174,6 +195,7 @@ jobs:
     executor: python-linux
     steps:
       - checkout
+      - install_python_gate_deps
       - fetch_full_history
       - compute_gate_base
 
