@@ -164,3 +164,44 @@ without a machine executor), `mobile` (the Android APK jobs), `docker-test-suite
 Push and read the first pipeline on the new head. Every context is reported as
 it reads; the two `[NON-ENFORCING]` jobs are reported as non-enforcing even when
 green, and a `Kotlin Linting` success is never cited as a Kotlin lint pass.
+
+## Addendum (2026-11-07, after the first wave-2 battery) - the FFI red, and the one mechanism I could prove
+
+The first wave-2 battery on `1b1308545` read **10 success + 1 failure**. The failure was
+`ci/circleci: FFI Surface Contract` (job 45, 06:39:55Z). At the **same commit**, the Actions
+`FFI Surface Contract` job - running the same four commands - completed **success** (06:41:20Z),
+so the checked-in snapshots agree with the generated surface on that commit and the red is
+environmental to the container, not a content disagreement.
+
+**The failing step's own output is not readable from this host.** CircleCI API v2 returns 401
+without a token, and the job page redirects to a CircleCI login in the shared browser (verified by
+opening `circleci.com/gh/Treystu/SCMessenger/45` and being sent to `/login`). The failing step, the
+error text, and the cause are therefore **not asserted anywhere in this record**.
+
+What *is* proven, locally and reproducibly, is that this gate is **locale-dependent**, which is one
+of the ways a clean container can disagree with a warm runner:
+
+    LC_ALL=C sort scripts/ffi-snapshots/kotlin-symbols.txt   -> byte-identical to the snapshot
+    LC_ALL=en_US.UTF-8 sort scripts/ffi-snapshots/kotlin-symbols.txt -> differs in 68 lines
+
+The reordering is exactly the class of difference that turns into
+"ERROR: Kotlin FFI surface changed without snapshot update": a line beginning
+``fun `blockPeer` `` sorts before ``fun clear`` under C and after it under a locale that folds
+backticks into collation, and **286 of this file's 462 lines** begin with ``fun ` ``
+(read: `grep -c '^fun `' scripts/ffi-snapshots/kotlin-symbols.txt` -> 286,
+`wc -l` -> 462), so a large fraction of the snapshot is exposed to the difference.
+
+So the snapshot is only reproducible under C/POSIX collation. Any runner whose locale does not
+resolve `LC_COLLATE` to C - and which does not pin it - can fail this gate with no change to the
+code, and can equally pass it while the surface genuinely drifted, if the drift happens to sort
+away. That is a defect in the gate itself, and it exists on the Actions rail too; this port only
+made it visible.
+
+Cure applied here: `ffi_surface_contract` now sets `LC_ALL=C` and `LANG=C` at job level, so every
+step - the extractors' `sort` included - is collation-stable regardless of the image default. The
+snapshot was produced under C collation, so C is the setting that makes the comparison meaningful.
+
+Stated honestly: pinning the locale is **not** claimed to be the cause of job 45. It removes one
+proven class of nondeterminism. If the next battery still reads red, the locale hypothesis is
+falsified and the remaining candidates (a missing system library for UniFFI library-mode metadata
+extraction, or container disk pressure on a cold build) need the job log to separate.

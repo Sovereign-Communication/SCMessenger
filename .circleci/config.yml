@@ -703,6 +703,16 @@ jobs:
   # ---------------------------------------------------------------------------
   ffi_surface_contract:
     executor: rust-linux
+    # Locale pinned deliberately. scripts/ffi_surface.sh sorts the extracted
+    # symbols and compares the result byte-for-byte with the checked-in
+    # snapshots, and those snapshots are only reproducible under C collation:
+    # LC_ALL=C sort reproduces scripts/ffi-snapshots/kotlin-symbols.txt exactly
+    # while an en_US.UTF-8 sort of the same file reorders 68 lines (286 of the
+    # file's 462 lines begin with a backticked identifier). An unpinned locale
+    # therefore lets a container fail - or pass - this gate with no code change.
+    environment:
+      LC_ALL: C
+      LANG: C
     steps:
       - checkout
       - assert_pinned_toolchain
