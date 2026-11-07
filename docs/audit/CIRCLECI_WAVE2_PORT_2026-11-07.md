@@ -205,3 +205,26 @@ Stated honestly: pinning the locale is **not** claimed to be the cause of job 45
 proven class of nondeterminism. If the next battery still reads red, the locale hypothesis is
 falsified and the remaining candidates (a missing system library for UniFFI library-mode metadata
 extraction, or container disk pressure on a cold build) need the job log to separate.
+
+### The experiment came back, and it falsifies my caution rather than my mechanism
+
+`2dffad301` is the same job with exactly one functional change - `LC_ALL` and `LANG` set to `C`
+at job level; the only other edit in that commit is this document. The read after it:
+
+| head | `ci/circleci: FFI Surface Contract` |
+|---|---|
+| `1b1308545` (before the pin) | **failure**, 06:39:55Z, job 45 |
+| `2dffad301` (after the pin) | **success**, 07:13:20Z |
+
+(read: `commits/1b1308545.../status` and `commits/2dffad301.../status`, 2026-11-07T07:13Z)
+
+Single variable, opposite verdict, plus a mechanism that reproduces locally at 68 reordered lines.
+That is enough to record the cause as **locale-dependent collation in the symbol extractors**, and
+to record the corollary the record above would otherwise have been too cautious to state: the
+CircleCI container's default collation is NOT C, and an unpinned locale was silently deciding
+whether this gate passed.
+
+The Actions job still does not pin the locale. It passes today on its runner's default, which means
+the same gate on that rail is one image change away from failing without a code change - and,
+worse in principle, could pass while the surface genuinely drifted. That is a finding for the CI
+owner, not a lane repair, because `.github/workflows/ci.yml` is shared with the required contexts.
